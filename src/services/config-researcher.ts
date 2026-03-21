@@ -40,7 +40,7 @@ export class ConfigResearcherService {
         parser: baseParams.toolCallParser,
       },
       reasoning: {
-        supported: modelCard ? this.detectReasoning(modelId, modelCard) : false,
+        supported: modelCard ? this.detectReasoning(modelId) : false,
         method: 'native' as const,
       },
       parallelToolCalls: baseParams.toolCallParser != null,
@@ -63,20 +63,25 @@ export class ConfigResearcherService {
       name: modelId,
       credentials: this.huggingfaceToken ? { accessToken: this.huggingfaceToken } : undefined,
     });
-    const paramCountB = info.safetensors?.total
-      ? info.safetensors.total / 1_000_000_000
+
+    // Note: ModelEntry doesn't have safetensors/config/cardData by default
+    // Using 'any' for now as the expand feature types aren't fully exposed
+    const infoAny = info as any;
+
+    const paramCountB = infoAny.safetensors?.total
+      ? infoAny.safetensors.total / 1_000_000_000
       : null;
 
     return {
       id: info.id,
-      architecture: info.config?.architectures?.[0] || 'unknown',
-      parameterCountB,
-      contextWindow: info.config?.max_position_embeddings || 8192,
-      modelCard: info.cardData,
+      architecture: infoAny.config?.architectures?.[0] || 'unknown',
+      parameterCountB: paramCountB,
+      contextWindow: infoAny.config?.max_position_embeddings || 8192,
+      modelCard: infoAny.cardData,
     };
   }
 
-  private detectReasoning(modelId: string, modelCard: any): boolean {
+  private detectReasoning(modelId: string): boolean {
     const lower = modelId.toLowerCase();
     const keywords = ['reasoning', 'r1', 'o1', 'deepseek-r', 'qwq'];
     return keywords.some(kw => lower.includes(kw));

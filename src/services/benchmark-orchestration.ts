@@ -1,4 +1,9 @@
 // src/services/benchmark-orchestration.ts
+// TODO: This service needs refactoring to match actual service APIs
+// - BenchmarkRunnerService uses different constructor and method signatures
+// - ToolCallBenchmarkService.runBenchmark() returns different type
+// - Integration pending until service APIs are aligned
+
 import type { SSHConfig, VMHardwareProfile, BenchmarkThresholds } from '../types/config.js';
 import type { ModelInfo, BenchmarkResult } from '../types/benchmark.js';
 import type { VllmEngine } from '../engines/vllm-engine.js';
