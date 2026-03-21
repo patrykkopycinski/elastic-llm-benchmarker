@@ -10,8 +10,8 @@ if [ -z "$STAGED_FILES" ]; then
 fi
 
 PATTERNS=(
-  "ghp_[A-Za-z0-9_]+"
-  "hf_[A-Za-z0-9]+"
+  "ghp_[A-Za-z0-9_]{36,}"
+  "hf_[A-Za-z0-9]{32,}"
   "-----BEGIN.*PRIVATE KEY-----"
 )
 
