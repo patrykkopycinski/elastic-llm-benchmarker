@@ -71,12 +71,17 @@ export class GitHubPublisher {
   }
 
   private async publishViaApi(markdown: string): Promise<void> {
-    const [owner, repo, _, issueNumber] = new URL(this.issueUrl).pathname.split('/').filter(Boolean);
+    const parts = new URL(this.issueUrl).pathname.split('/').filter(Boolean);
+    const [owner, repo, _, issueNumber] = parts;
+
+    if (!owner || !repo || !issueNumber) {
+      throw new Error(`Invalid GitHub issue URL: ${this.issueUrl}`);
+    }
 
     await this.octokit!.rest.issues.createComment({
       owner,
       repo,
-      issue_number: parseInt(issueNumber),
+      issue_number: parseInt(issueNumber, 10),
       body: markdown,
     });
 

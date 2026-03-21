@@ -35,7 +35,6 @@ import { ToolCallBenchmarkService } from './services/tool-call-benchmark.js';
 import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js';
 import { ConfigResearcherService } from './services/config-researcher.js';
 import { VMResourceManagerService } from './services/vm-resource-manager.js';
-import { InteractiveOrchestrator } from './agent/interactive-orchestrator.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -843,13 +842,13 @@ program
 
     const queueService = new QueueService(esClient);
     const configResearcher = new ConfigResearcherService({
-      gpusAvailable: config.hardwareProfile.gpuCount || 2,
-      huggingfaceToken: config.huggingface?.token,
+      gpusAvailable: config.vmHardwareProfile.gpuCount || 2,
+      huggingfaceToken: config.huggingfaceToken,
     });
 
     try {
       console.log('🔍 Researching optimal configuration...');
-      const researchedConfig = await configResearcher.research(modelId);
+      await configResearcher.research(modelId);
 
       console.log('📝 Adding to priority queue...');
       const queueEntry = await queueService.enqueue(
@@ -1003,7 +1002,8 @@ program
         host: config.ssh.host,
         port: config.ssh.port,
         username: config.ssh.username,
-        gpus: `${config.hardwareProfile.gpuCount}x${config.hardwareProfile.gpuType}`,
+        useSudo: config.ssh.useSudo,
+        gpus: `${config.vmHardwareProfile.gpuCount}x${config.vmHardwareProfile.gpuType}`,
       }]);
 
       const status = vmManager.getVMStatus();

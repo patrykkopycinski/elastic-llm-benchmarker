@@ -1064,41 +1064,41 @@ export async function discoverPromisingModelsNode(
   const { listModels } = await import('@huggingface/hub');
 
   try {
-    // Fetch recent models from HuggingFace
+    // Fetch recent text-generation models from HuggingFace
     const models = [];
     for await (const model of listModels({
+      search: { task: 'text-generation' },
       sort: 'likes',
       limit: 100,
-      filter: 'text-generation',
       credentials: cfg.huggingfaceToken ? { accessToken: cfg.huggingfaceToken } : undefined,
     })) {
       models.push(model);
     }
 
     const promising = [];
+    const capDetection = new CapabilityDetectionService();
+    const configResearcher = new ConfigResearcherService({
+      gpusAvailable: cfg.hardwareProfile?.gpuCount || 2,
+      huggingfaceToken: cfg.huggingfaceToken,
+    });
 
     for (const model of models.slice(0, 20)) { // Limit to top 20 for performance
-      // Skip if already benchmarked
+      // Skip if already benchmarked (check by querying results)
       if (resultsStore) {
-        const exists = await resultsStore.exists(model.id);
-        if (exists) continue;
+        try {
+          const existing = await resultsStore.getModelSummary(model.id);
+          if (existing) continue;
+        } catch {
+          // Model not found, continue with evaluation
+        }
       }
 
-      // Check capabilities using CapabilityDetectionService
-      const capDetection = new CapabilityDetectionService({
-        huggingfaceToken: cfg.huggingfaceToken,
-      });
+      // Check capabilities
       const caps = await capDetection.detect(model.id);
-
       if (!caps.toolCalling.supported && !caps.reasoning.supported) continue;
 
       // Check if fits hardware
-      const configResearcher = new ConfigResearcherService({
-        gpusAvailable: cfg.hardwareProfile?.gpuCount || 2,
-        huggingfaceToken: cfg.huggingfaceToken,
-      });
       const modelConfig = await configResearcher.research(model.id);
-
       if (modelConfig.tensorParallelSize > (cfg.hardwareProfile?.gpuCount || 2)) continue;
 
       // Score model
