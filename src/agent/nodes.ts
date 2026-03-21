@@ -1148,6 +1148,17 @@ export async function discoverPromisingModelsNode(
 }
 
 /**
+ * Routes from idle to choose discovery strategy.
+ * Uses autonomous discovery (discover_promising_models) by default,
+ * or manual discovery (discover_models) if explicitly configured.
+ */
+export function routeFromIdle(_state: GraphState): string {
+  // For now, default to autonomous discovery
+  // This can be made configurable via state or config in the future
+  return 'discover_promising_models';
+}
+
+/**
  * Routes from the error handler based on error count and recovery decision.
  */
 export function routeAfterError(state: GraphState): string {

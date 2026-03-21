@@ -10,6 +10,7 @@ import {
   exposeApiNode,
   runKibanaEvalNode,
   handleErrorNode,
+  routeFromIdle,
   routeAfterEvaluation,
   routeAfterBenchmark,
   routeAfterError,
@@ -26,7 +27,10 @@ const workflow = new StateGraph(AgentAnnotation)
   .addNode('run_kibana_eval', runKibanaEvalNode)
   .addNode('handle_error', handleErrorNode)
   .addEdge(START, 'idle')
-  .addEdge('idle', 'discover_models')
+  .addConditionalEdges('idle', routeFromIdle, {
+    discover_models: 'discover_models',
+    discover_promising_models: 'discover_promising_models',
+  })
   .addEdge('discover_models', 'evaluate_model')
   .addEdge('discover_promising_models', 'evaluate_model')
   .addConditionalEdges('evaluate_model', routeAfterEvaluation, {
