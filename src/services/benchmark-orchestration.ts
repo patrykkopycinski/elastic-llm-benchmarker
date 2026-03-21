@@ -1,16 +1,12 @@
 // src/services/benchmark-orchestration.ts
-// TODO: This service needs refactoring to match actual service APIs
-// - BenchmarkRunnerService uses different constructor and method signatures
-// - ToolCallBenchmarkService.runBenchmark() returns different type
-// - Integration pending until service APIs are aligned
-
 import type { SSHConfig, VMHardwareProfile, BenchmarkThresholds } from '../types/config.js';
 import type { ModelInfo, BenchmarkResult } from '../types/benchmark.js';
-import type { VllmEngine } from '../engines/vllm-engine.js';
-import type { BenchmarkRunnerService } from './benchmark-runner.js';
-import type { ToolCallBenchmarkService } from './tool-call-benchmark.js';
-import type { ReasoningBenchmarkService } from './reasoning-benchmark.js';
-import type { ConfigResearcherService } from './config-researcher.js';
+import type { InferenceEngine } from '../engines/engine-types.js';
+import { BenchmarkRunnerService } from './benchmark-runner.js';
+import { ToolCallBenchmarkService } from './tool-call-benchmark.js';
+import { ReasoningBenchmarkService } from './reasoning-benchmark.js';
+import { ConfigResearcherService } from './config-researcher.js';
+import { SSHClientPool } from './ssh-client.js';
 import { createLogger } from '../utils/logger.js';
 
 export interface OrchestrationOptions {
@@ -23,16 +19,16 @@ export interface OrchestrationOptions {
 
 export class BenchmarkOrchestrationService {
   private logger;
+  private sshPool: SSHClientPool;
 
   constructor(
     private configResearcher: ConfigResearcherService,
-    private vllmEngine: VllmEngine,
-    private benchmarkRunner: BenchmarkRunnerService,
-    private toolCallBenchmark: ToolCallBenchmarkService,
-    private reasoningBenchmark: ReasoningBenchmarkService,
+    private engine: InferenceEngine,
+    sshPool: SSHClientPool,
     logLevel: string = 'info'
   ) {
     this.logger = createLogger(logLevel);
+    this.sshPool = sshPool;
   }
 
   async orchestrate(
@@ -53,34 +49,72 @@ export class BenchmarkOrchestrationService {
     while (attemptNumber < 2) {
       try {
         // Deploy
-        const deployment = await this.vllmEngine.deploy(sshConfig, model, hardwareProfile);
+        const deployment = await this.engine.deploy(sshConfig, model, hardwareProfile);
 
-        // Run benchmarks
-        const hardwareMetrics = await this.benchmarkRunner.run(
+        // Run hardware benchmarks
+        const benchmarkRunner = new BenchmarkRunnerService(this.sshPool, 'info');
+        const paramCountB = model.parameterCount ? model.parameterCount / 1e9 : null;
+
+        const engineResult = await benchmarkRunner.runBenchmarks(
           sshConfig,
           model.id,
-          [1, 4, 16],
+          thresholds.concurrencyLevels,
           thresholds,
-          deployment.deploymentName
+          deployment.deploymentName,
+          paramCountB
         );
 
-        const toolCallResults = await this.toolCallBenchmark.run({
-          baseUrl: deployment.apiEndpoint,
-          model: model.id,
-        });
+        // Run tool calling benchmark
+        let toolCallResults = null;
+        if (this.engine.supportsToolCalling(model)) {
+          const toolCallBenchmark = new ToolCallBenchmarkService({
+            baseUrl: deployment.apiEndpoint,
+            model: model.id,
+            logLevel: 'info',
+          });
+          const toolReport = await toolCallBenchmark.runBenchmark();
+          toolCallResults = toolReport.toolCallResult;
+        }
 
+        // Run reasoning benchmark
         let reasoningResults = null;
         if (!options.skipReasoning && config.capabilities.reasoning.supported) {
-          reasoningResults = await this.reasoningBenchmark.run();
+          const reasoningBenchmark = new ReasoningBenchmarkService({
+            baseUrl: deployment.apiEndpoint,
+            model: model.id,
+          });
+          reasoningResults = await reasoningBenchmark.run();
         }
 
         // Stop deployment
-        await this.vllmEngine.stop(sshConfig, deployment.deploymentName);
+        await this.engine.stop(sshConfig, deployment.deploymentName);
 
+        // Build complete result
         return {
-          ...hardwareMetrics,
+          modelId: model.id,
+          timestamp: deployment.timestamp,
+          vllmVersion: deployment.engineImage,
+          dockerCommand: deployment.deploymentCommand,
+          hardwareConfig: {
+            gpuType: hardwareProfile.gpuType,
+            gpuCount: hardwareProfile.gpuCount,
+            ramGb: hardwareProfile.ramGb,
+            cpuCores: hardwareProfile.cpuCores,
+            diskGb: hardwareProfile.diskGb,
+            machineType: hardwareProfile.machineType,
+            hardwareProfileId: null,
+          },
+          benchmarkMetrics: engineResult.runs
+            .filter((r) => r.success)
+            .map((r) => r.metrics),
           toolCallResults,
           reasoningResults,
+          passed: engineResult.passed,
+          rejectionReasons: engineResult.rejectionReasons,
+          tensorParallelSize: deployment.parallelismConfig,
+          toolCallParser: deployment.toolCallParser,
+          rawOutput: engineResult.combinedRawOutput,
+          gpuUtilization: deployment.gpuUtilization ?? null,
         };
 
       } catch (error: any) {
