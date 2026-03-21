@@ -48,3 +48,16 @@ playwright-report/
 # LangGraph
 .langgraph_api/
 .worktrees/
+
+# Additional Credentials
+*.pem
+*.key
+id_rsa*
+
+# Benchmark Reports
+reports/
+fallback-results/
+failed-reports/
+
+# Additional Logs
+*.jsonl
