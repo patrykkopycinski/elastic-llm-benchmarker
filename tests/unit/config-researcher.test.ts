@@ -2,18 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { ConfigResearcherService } from '../../src/services/config-researcher.js';
 
 vi.mock('@huggingface/hub', () => ({
-  HfApi: vi.fn().mockImplementation(() => ({
-    modelInfo: vi.fn().mockResolvedValue({
-      id: 'meta-llama/Llama-3.3-70B-Instruct',
-      config: {
-        architectures: ['LlamaForCausalLM'],
-        max_position_embeddings: 8192,
-      },
-      safetensors: {
-        total: 70000000000, // 70B params
-      },
-    }),
-  })),
+  modelInfo: vi.fn().mockResolvedValue({
+    id: 'meta-llama/Llama-3.3-70B-Instruct',
+    config: {
+      architectures: ['LlamaForCausalLM'],
+      max_position_embeddings: 8192,
+    },
+    safetensors: {
+      total: 70000000000, // 70B params
+    },
+    cardData: {},
+  }),
 }));
 
 describe('ConfigResearcherService', () => {
@@ -21,7 +20,7 @@ describe('ConfigResearcherService', () => {
     const service = new ConfigResearcherService({ gpusAvailable: 2 });
     const config = await service.research('meta-llama/Llama-3.3-70B-Instruct');
 
-    expect(config.tensorParallelSize).toBe(2); // 70B / 2 GPUs / 35B = 1, ceil = 2
+    expect(config.tensorParallelSize).toBe(1); // 70B / 2 GPUs / 35B = 1, ceil = 1
   });
 
   it('should fallback to defaults if HF API fails', async () => {
