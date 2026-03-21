@@ -53,18 +53,32 @@ export class GitHubPublisher {
   }
 
   private async publishViaGhCli(markdown: string): Promise<void> {
-    const issueNumber = this.issueUrl.split('/').pop();
-    const tempFile = `/tmp/benchmark-report-${Date.now()}.md`;
+    // Parse and validate URL
+    const parts = new URL(this.issueUrl).pathname.split('/').filter(Boolean);
+    const [owner, repo, _, issueNumberStr] = parts;
+
+    if (!owner || !repo || !issueNumberStr) {
+      throw new Error(`Invalid GitHub issue URL: ${this.issueUrl}`);
+    }
+
+    // Validate issueNumber is numeric (prevent command injection)
+    const issueNumber = parseInt(issueNumberStr, 10);
+    if (isNaN(issueNumber) || issueNumber <= 0) {
+      throw new Error(`Invalid issue number: ${issueNumberStr}`);
+    }
+
+    // Create temp file with collision-resistant name
+    const tempFile = `/tmp/benchmark-report-${Date.now()}-${Math.random().toString(36).slice(2, 9)}.md`;
 
     await writeFile(tempFile, markdown);
 
     try {
       await execAsync(
         `gh issue comment ${issueNumber} ` +
-        `--repo elastic/security-team ` +
+        `--repo ${owner}/${repo} ` +  // Extract from URL, not hardcoded
         `--body-file ${tempFile}`
       );
-      this.logger.info('Posted via gh CLI', { issueNumber });
+      this.logger.info('Posted via gh CLI', { owner, repo, issueNumber });
     } finally {
       await unlink(tempFile).catch(() => {});
     }

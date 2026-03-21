@@ -14,6 +14,8 @@ import { ToolCallBenchmarkService } from '../services/tool-call-benchmark.js';
 import { CapabilityDetectionService } from '../services/capability-detection.js';
 import { ConfigResearcherService } from '../services/config-researcher.js';
 import { createLogger } from '../utils/logger.js';
+import { MAX_MODELS_TO_EVALUATE, TOP_MODELS_TO_QUEUE, SCORING_WEIGHTS, DISCOVERY_CONCURRENCY } from './discovery-constants.js';
+import pLimit from 'p-limit';
 
 const logger = createLogger('info');
 
@@ -1075,47 +1077,98 @@ export async function discoverPromisingModelsNode(
       models.push(model);
     }
 
-    const promising = [];
+    // Parallel evaluation with concurrency limit
+    const limit = pLimit(DISCOVERY_CONCURRENCY.MAX_CONCURRENT_EVALUATIONS);
     const capDetection = new CapabilityDetectionService();
     const configResearcher = new ConfigResearcherService({
       gpusAvailable: cfg.hardwareProfile?.gpuCount || 2,
       huggingfaceToken: cfg.huggingfaceToken,
     });
 
-    for (const model of models.slice(0, 20)) { // Limit to top 20 for performance
-      // Skip if already benchmarked (check by querying results)
-      if (resultsStore) {
-        try {
-          const existing = await resultsStore.getModelSummary(model.id);
-          if (existing) continue;
-        } catch {
-          // Model not found, continue with evaluation
-        }
-      }
+    const candidateModels = models.slice(0, MAX_MODELS_TO_EVALUATE);
 
-      // Check capabilities
-      const caps = await capDetection.detect(model.id);
-      if (!caps.toolCalling.supported && !caps.reasoning.supported) continue;
+    logger.info(`[discover_promising_models] Evaluating ${candidateModels.length} models in parallel`, {
+      concurrency: DISCOVERY_CONCURRENCY.MAX_CONCURRENT_EVALUATIONS,
+    });
 
-      // Check if fits hardware
-      const modelConfig = await configResearcher.research(model.id);
-      if (modelConfig.tensorParallelSize > (cfg.hardwareProfile?.gpuCount || 2)) continue;
+    const evalResults = await Promise.all(
+      candidateModels.map(model =>
+        limit(async () => {
+          try {
+            // Skip if already benchmarked
+            if (resultsStore) {
+              try {
+                const existing = await resultsStore.getModelSummary(model.id);
+                if (existing) {
+                  logger.debug(`[discover_promising_models] Skipping ${model.id} - already benchmarked`);
+                  return null;
+                }
+              } catch {
+                // Model not found, continue with evaluation
+              }
+            }
 
-      // Score model
-      const score =
-        (caps.toolCalling.supported ? 30 : 0) +
-        (caps.reasoning.supported ? 40 : 0) +
-        ((model.likes || 0) / 1000) +
-        ((model.downloads || 0) / 10000);
+            // Parallel capability and config checks
+            const [caps, modelConfig] = await Promise.all([
+              capDetection.detect(model.id),
+              configResearcher.research(model.id),
+            ]);
 
-      promising.push({ model, score });
-    }
+            // Filter by capabilities
+            if (!caps.toolCalling.supported && !caps.reasoning.supported) {
+              logger.debug(`[discover_promising_models] Skipping ${model.id} - no tool calling or reasoning`);
+              return null;
+            }
 
-    // Add top 5 to queue
+            // Filter by hardware fit
+            if (modelConfig.tensorParallelSize > (cfg.hardwareProfile?.gpuCount || 2)) {
+              logger.debug(`[discover_promising_models] Skipping ${model.id} - requires ${modelConfig.tensorParallelSize} GPUs`);
+              return null;
+            }
+
+            // Score model using weighted criteria
+            const score =
+              (caps.toolCalling.supported ? SCORING_WEIGHTS.TOOL_CALLING : 0) +
+              (caps.reasoning.supported ? SCORING_WEIGHTS.REASONING : 0) +
+              ((model.likes || 0) / SCORING_WEIGHTS.LIKES_DIVISOR) +
+              ((model.downloads || 0) / SCORING_WEIGHTS.DOWNLOADS_DIVISOR);
+
+            logger.debug(`[discover_promising_models] ${model.id} scored ${score.toFixed(1)}`, {
+              toolCalling: caps.toolCalling.supported,
+              reasoning: caps.reasoning.supported,
+              likes: model.likes,
+            });
+
+            return { model, score };
+          } catch (error) {
+            logger.warn(`[discover_promising_models] Failed to evaluate ${model.id}`, {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return null;
+          }
+        })
+      )
+    );
+
+    // Filter out nulls and sort by score
+    const promising = evalResults.filter((r): r is { model: any; score: number } => r !== null);
+
+    // Add top models to queue (with deduplication)
     if (queueService) {
+      // Check what's already in queue to avoid duplicates
+      const currentQueue = await queueService.getQueue({ status: 'pending' });
+      const queuedModelIds = new Set(currentQueue.map(e => e.modelId));
+
       const topModels = promising
         .sort((a, b) => b.score - a.score)
-        .slice(0, 5);
+        .filter(({ model }) => {
+          if (queuedModelIds.has(model.id)) {
+            logger.debug(`[discover_promising_models] Skipping ${model.id} - already in queue`);
+            return false;
+          }
+          return true;
+        })
+        .slice(0, TOP_MODELS_TO_QUEUE);
 
       for (const { model } of topModels) {
         await queueService.enqueue(
