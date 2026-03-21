@@ -1,0 +1,77 @@
+{
+  "name": "elastic-llm-benchmarker",
+  "version": "0.1.0",
+  "description": "Automated LLM discovery, deployment, and benchmarking agent using LangGraph.js",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "elastic-llm-benchmarker": "dist/cli.js",
+    "elbench": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "npx @langchain/langgraph-cli dev",
+    "up": "npx @langchain/langgraph-cli up",
+    "build": "npx @langchain/langgraph-cli build -t langgraph-elastic-llm-benchmarker:latest",
+    "build:ts": "tsup",
+    "start": "node dist/index.js",
+    "cli": "tsx src/cli.ts",
+    "api": "tsx src/api/queue-server.ts",
+    "lint": "eslint src/ tests/",
+    "lint:fix": "eslint src/ tests/ --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.ts\" \"config/**/*.{ts,json}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.ts\" \"config/**/*.{ts,json}\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "clean": "rm -rf dist",
+    "import-mock": "tsx src/scripts/import-mock-benchmarks.ts",
+    "prepublishOnly": "npm run build:ts",
+    "infra:up": "docker compose --env-file .env.docker up -d elasticsearch kibana",
+    "infra:down": "docker compose --env-file .env.docker down",
+    "infra:reset": "docker compose --env-file .env.docker down -v",
+    "infra:fleet": "docker compose --env-file .env.docker --profile fleet up -d"
+  },
+  "keywords": [
+    "llm",
+    "benchmark",
+    "vllm",
+    "langgraph",
+    "elastic",
+    "ai"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@elastic/elasticsearch": "^8.17.0",
+    "@huggingface/hub": "^2.11.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "@langchain/openai": "^0.3.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.0",
+    "express": "^5.2.1",
+    "ssh2": "^1.16.0",
+    "winston": "^3.17.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@langchain/langgraph-cli": "^0.0.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "@types/ssh2": "^1.15.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-import": "^2.31.0",
+    "prettier": "^3.4.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  }
+}
