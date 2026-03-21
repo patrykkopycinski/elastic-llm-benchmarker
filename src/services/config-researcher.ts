@@ -2,6 +2,28 @@ import { modelInfo } from '@huggingface/hub';
 import { getVllmParamsForModel } from './vllm-model-params.js';
 import type { EnhancedVllmConfig } from '../types/reasoning.js';
 import { createLogger } from '../utils/logger.js';
+import { GB_PER_GPU_FOR_TENSOR_PARALLEL, DEFAULT_CONTEXT_WINDOW, REASONING_KEYWORDS } from './config-researcher-constants.js';
+import { LRUCache } from 'lru-cache';
+
+/**
+ * Extended HuggingFace model info structure.
+ * The @huggingface/hub package doesn't fully type expanded fields,
+ * so we define our own interface.
+ */
+interface HFModelInfo {
+  id: string;
+  safetensors?: {
+    total: number;
+    parameters?: Record<string, number>;
+  };
+  config?: {
+    architectures?: string[];
+    max_position_embeddings?: number;
+    hidden_size?: number;
+    num_attention_heads?: number;
+  };
+  cardData?: Record<string, any>;
+}
 
 interface ConfigResearcherOptions {
   gpusAvailable: number;
@@ -13,14 +35,35 @@ export class ConfigResearcherService {
   private huggingfaceToken?: string;
   private logger;
   private gpusAvailable: number;
+  private cache: LRUCache<string, EnhancedVllmConfig>;
 
   constructor(options: ConfigResearcherOptions) {
     this.gpusAvailable = options.gpusAvailable;
     this.logger = createLogger(options.logLevel || 'info');
     this.huggingfaceToken = options.huggingfaceToken;
+
+    // Cache config research results (1 hour TTL, max 100 entries)
+    this.cache = new LRUCache({
+      max: 100,
+      ttl: 1000 * 60 * 60,
+    });
   }
 
   async research(modelId: string): Promise<EnhancedVllmConfig> {
+    // Check cache first
+    const cached = this.cache.get(modelId);
+    if (cached) {
+      this.logger.debug('Using cached config', { modelId });
+      return cached;
+    }
+
+    // Research and cache
+    const config = await this.doResearch(modelId);
+    this.cache.set(modelId, config);
+    return config;
+  }
+
+  private async doResearch(modelId: string): Promise<EnhancedVllmConfig> {
     const baseParams = getVllmParamsForModel(modelId);
 
     let modelCard = null;
@@ -31,7 +74,7 @@ export class ConfigResearcherService {
     }
 
     const tensorParallel = modelCard?.parameterCountB
-      ? Math.ceil(modelCard.parameterCountB / this.gpusAvailable / 35)
+      ? Math.ceil(modelCard.parameterCountB / this.gpusAvailable / GB_PER_GPU_FOR_TENSOR_PARALLEL)
       : 1;
 
     const capabilities = {
@@ -49,7 +92,7 @@ export class ConfigResearcherService {
     return {
       ...baseParams,
       tensorParallelSize: tensorParallel,
-      maxModelLen: modelCard?.contextWindow || 8192,
+      maxModelLen: modelCard?.contextWindow || DEFAULT_CONTEXT_WINDOW,
       capabilities,
       reasoning: modelCard
         ? 'Based on HF card + vLLM docs'
@@ -58,32 +101,37 @@ export class ConfigResearcherService {
     };
   }
 
-  private async fetchHFModelCard(modelId: string) {
+  private async fetchHFModelCard(modelId: string): Promise<{
+    id: string;
+    architecture: string;
+    parameterCountB: number | null;
+    contextWindow: number;
+    modelCard: Record<string, any> | undefined;
+  }> {
     const info = await modelInfo({
       name: modelId,
       credentials: this.huggingfaceToken ? { accessToken: this.huggingfaceToken } : undefined,
     });
 
-    // Note: ModelEntry doesn't have safetensors/config/cardData by default
-    // Using 'any' for now as the expand feature types aren't fully exposed
-    const infoAny = info as any;
+    // Cast to extended interface (HF API returns these fields but types don't expose them)
+    // This is safer than 'as any' because we define the expected structure
+    const extendedInfo = info as unknown as HFModelInfo;
 
-    const paramCountB = infoAny.safetensors?.total
-      ? infoAny.safetensors.total / 1_000_000_000
+    const paramCountB = extendedInfo.safetensors?.total
+      ? extendedInfo.safetensors.total / 1_000_000_000
       : null;
 
     return {
       id: info.id,
-      architecture: infoAny.config?.architectures?.[0] || 'unknown',
+      architecture: extendedInfo.config?.architectures?.[0] || 'unknown',
       parameterCountB: paramCountB,
-      contextWindow: infoAny.config?.max_position_embeddings || 8192,
-      modelCard: infoAny.cardData,
+      contextWindow: extendedInfo.config?.max_position_embeddings || DEFAULT_CONTEXT_WINDOW,
+      modelCard: extendedInfo.cardData,
     };
   }
 
   private detectReasoning(modelId: string): boolean {
-    const lower = modelId.toLowerCase();
-    const keywords = ['reasoning', 'r1', 'o1', 'deepseek-r', 'qwq'];
-    return keywords.some(kw => lower.includes(kw));
+    // Use regex patterns to avoid false positives
+    return REASONING_KEYWORDS.patterns.some(pattern => pattern.test(modelId));
   }
 }

@@ -881,20 +881,25 @@ program
 async function pollUntilComplete(queueService: QueueService, queueId: string) {
   const POLL_INTERVAL = 5000;
   const MAX_ITERATIONS = 720; // 1 hour max
+  let lastStatus: string | null = null;
 
   for (let i = 0; i < MAX_ITERATIONS; i++) {
-    const allEntries = await queueService.getQueue();
-    const entry = allEntries.find(e => e.id === queueId);
+    // Efficient: Get single entry by ID instead of fetching entire queue
+    const entry = await queueService.getById(queueId);
 
     if (!entry) {
       console.error('❌ Queue entry not found');
       process.exit(1);
     }
 
-    if (entry.status === 'deploying') {
-      console.log('🚀 Deploying model...');
-    } else if (entry.status === 'benchmarking') {
-      console.log('📊 Running benchmarks...');
+    // Only log status on change (reduce spam)
+    if (entry.status !== lastStatus) {
+      if (entry.status === 'deploying') {
+        console.log('🚀 Deploying model...');
+      } else if (entry.status === 'benchmarking') {
+        console.log('📊 Running benchmarks...');
+      }
+      lastStatus = entry.status;
     }
 
     if (entry.status === 'completed') {
