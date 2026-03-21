@@ -1,4 +1,4 @@
-import { HfApi } from '@huggingface/hub';
+import { modelInfo } from '@huggingface/hub';
 import { getVllmParamsForModel } from './vllm-model-params.js';
 import type { EnhancedVllmConfig } from '../types/reasoning.js';
 import { createLogger } from '../utils/logger.js';
@@ -10,16 +10,14 @@ interface ConfigResearcherOptions {
 }
 
 export class ConfigResearcherService {
-  private hfApi: HfApi;
+  private huggingfaceToken?: string;
   private logger;
   private gpusAvailable: number;
 
   constructor(options: ConfigResearcherOptions) {
     this.gpusAvailable = options.gpusAvailable;
     this.logger = createLogger(options.logLevel || 'info');
-    this.hfApi = new HfApi({
-      credentials: { accessToken: options.huggingfaceToken },
-    });
+    this.huggingfaceToken = options.huggingfaceToken;
   }
 
   async research(modelId: string): Promise<EnhancedVllmConfig> {
@@ -61,7 +59,10 @@ export class ConfigResearcherService {
   }
 
   private async fetchHFModelCard(modelId: string) {
-    const info = await this.hfApi.modelInfo({ name: modelId });
+    const info = await modelInfo({
+      name: modelId,
+      credentials: this.huggingfaceToken ? { accessToken: this.huggingfaceToken } : undefined,
+    });
     const paramCountB = info.safetensors?.total
       ? info.safetensors.total / 1_000_000_000
       : null;
