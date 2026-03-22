@@ -14,6 +14,13 @@ export interface QueueEntry {
   completedAt: string | null;
   errorMessage: string | null;
   requestedBy: string | null;
+  metadata?: {
+    configOverrides?: {
+      tensorParallelSize?: number;
+      maxModelLen?: number;
+    };
+    skipReasoning?: boolean;
+  };
 }
 
 type EsSource = {
@@ -26,6 +33,13 @@ type EsSource = {
   completed_at: string | null;
   error_message: string | null;
   requested_by: string | null;
+  metadata?: {
+    config_overrides?: {
+      tensor_parallel_size?: number;
+      max_model_len?: number;
+    };
+    skip_reasoning?: boolean;
+  };
 };
 
 function toEntry(id: string, src: EsSource): QueueEntry {
@@ -40,6 +54,13 @@ function toEntry(id: string, src: EsSource): QueueEntry {
     completedAt: src.completed_at ?? null,
     errorMessage: src.error_message ?? null,
     requestedBy: src.requested_by ?? null,
+    metadata: src.metadata ? {
+      configOverrides: src.metadata.config_overrides ? {
+        tensorParallelSize: src.metadata.config_overrides.tensor_parallel_size,
+        maxModelLen: src.metadata.config_overrides.max_model_len,
+      } : undefined,
+      skipReasoning: src.metadata.skip_reasoning,
+    } : undefined,
   };
 }
 
@@ -51,6 +72,7 @@ export class QueueService {
     source: 'user' | 'discovery',
     priority?: number,
     requestedBy?: string,
+    metadata?: QueueEntry['metadata'],
   ): Promise<QueueEntry> {
     const p = priority ?? (source === 'user' ? 100 : 10);
     const now = new Date().toISOString();
@@ -64,6 +86,13 @@ export class QueueService {
       completed_at: null,
       error_message: null,
       requested_by: requestedBy ?? null,
+      metadata: metadata ? {
+        config_overrides: metadata.configOverrides ? {
+          tensor_parallel_size: metadata.configOverrides.tensorParallelSize,
+          max_model_len: metadata.configOverrides.maxModelLen,
+        } : undefined,
+        skip_reasoning: metadata.skipReasoning,
+      } : undefined,
     };
     const res = await this.esClient.index({
       index: INDEX,

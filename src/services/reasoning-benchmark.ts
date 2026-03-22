@@ -97,6 +97,7 @@ export class ReasoningBenchmarkService {
   private client: OpenAI;
   private model: string;
   private logger;
+  private correlationId: string;
 
   constructor(options: { baseUrl: string; model: string; apiClient?: any; logLevel?: string }) {
     this.client = options.apiClient || new OpenAI({
@@ -106,6 +107,7 @@ export class ReasoningBenchmarkService {
     });
     this.model = options.model;
     this.logger = createLogger(options.logLevel || 'info');
+    this.correlationId = crypto.randomUUID();
   }
 
   async run(): Promise<ReasoningBenchmarkResult> {
@@ -114,40 +116,51 @@ export class ReasoningBenchmarkService {
     const errors: Array<{ testCase: string; error: string }> = [];
 
     this.logger.info('Starting reasoning benchmark', {
+      correlationId: this.correlationId,
       model: this.model,
       totalTests: TEST_CASES.length * 2,
     });
 
-    // Run all tests with error handling
-    for (const testCase of TEST_CASES) {
-      // Test without reasoning
-      try {
-        resultsOff.push(await this.runTest(testCase, false));
-      } catch (error) {
-        this.logger.warn(`Test failed (reasoning=false): ${testCase.prompt.slice(0, 50)}...`, {
-          category: testCase.category,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        errors.push({ testCase: testCase.prompt, error: String(error) });
+    // Run all tests in parallel for maximum performance
+    // Both modes (reasoning off/on) run concurrently
+    const [resultsOffRaw, resultsOnRaw] = await Promise.all([
+      // Mode 1: Reasoning OFF
+      Promise.all(
+        TEST_CASES.map(async (testCase) => {
+          try {
+            return await this.runTest(testCase, false);
+          } catch (error) {
+            this.logger.warn(`Test failed (reasoning=false): ${testCase.prompt.slice(0, 50)}...`, {
+              correlationId: this.correlationId,
+              category: testCase.category,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            errors.push({ testCase: testCase.prompt, error: String(error) });
+            return this.createErrorResult(testCase, false);
+          }
+        })
+      ),
 
-        // Add placeholder result
-        resultsOff.push(this.createErrorResult(testCase, false));
-      }
+      // Mode 2: Reasoning ON
+      Promise.all(
+        TEST_CASES.map(async (testCase) => {
+          try {
+            return await this.runTest(testCase, true);
+          } catch (error) {
+            this.logger.warn(`Test failed (reasoning=true): ${testCase.prompt.slice(0, 50)}...`, {
+              correlationId: this.correlationId,
+              category: testCase.category,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            errors.push({ testCase: testCase.prompt, error: String(error) });
+            return this.createErrorResult(testCase, true);
+          }
+        })
+      ),
+    ]);
 
-      // Test with reasoning
-      try {
-        resultsOn.push(await this.runTest(testCase, true));
-      } catch (error) {
-        this.logger.warn(`Test failed (reasoning=true): ${testCase.prompt.slice(0, 50)}...`, {
-          category: testCase.category,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        errors.push({ testCase: testCase.prompt, error: String(error) });
-
-        // Add placeholder result
-        resultsOn.push(this.createErrorResult(testCase, true));
-      }
-    }
+    resultsOff.push(...resultsOffRaw);
+    resultsOn.push(...resultsOnRaw);
 
     // Filter successful tests (non-error results)
     // Error results have latencyMs: 0, successful tests have latencyMs > 0 OR totalTokens > 0
