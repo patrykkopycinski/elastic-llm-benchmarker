@@ -4,6 +4,39 @@ import type { EnhancedVllmConfig } from '../types/reasoning.js';
 import { createLogger } from '../utils/logger.js';
 import { GB_PER_GPU_FOR_TENSOR_PARALLEL, DEFAULT_CONTEXT_WINDOW, REASONING_KEYWORDS } from './config-researcher-constants.js';
 import { LRUCache } from 'lru-cache';
+import CircuitBreaker from 'opossum';
+import { metricsCollector } from './metrics-collector.js';
+
+const logger = createLogger('info');
+
+// Circuit breaker for HuggingFace API calls
+// Prevents cascading failures when HF API is down or rate-limited
+const hfApiBreaker = new CircuitBreaker(
+  async (params: Parameters<typeof modelInfo>[0]) => await modelInfo(params),
+  {
+    timeout: 10000, // 10s timeout
+    errorThresholdPercentage: 50, // Open after 50% errors
+    resetTimeout: 30000, // Try again after 30s
+    name: 'huggingface-api',
+  }
+);
+
+hfApiBreaker.fallback(() => {
+  logger.warn('HuggingFace API circuit breaker OPEN - using fallback config');
+  return null;
+});
+
+hfApiBreaker.on('open', () => {
+  logger.error('HuggingFace API circuit breaker OPENED - too many failures');
+});
+
+hfApiBreaker.on('halfOpen', () => {
+  logger.info('HuggingFace API circuit breaker HALF-OPEN - testing recovery');
+});
+
+hfApiBreaker.on('close', () => {
+  logger.info('HuggingFace API circuit breaker CLOSED - service recovered');
+});
 
 /**
  * Extended HuggingFace model info structure.
@@ -50,17 +83,26 @@ export class ConfigResearcherService {
   }
 
   async research(modelId: string): Promise<EnhancedVllmConfig> {
-    // Check cache first
-    const cached = this.cache.get(modelId);
-    if (cached) {
-      this.logger.debug('Using cached config', { modelId });
-      return cached;
-    }
+    const opId = metricsCollector.startOperation('ConfigResearcher', 'research');
 
-    // Research and cache
-    const config = await this.doResearch(modelId);
-    this.cache.set(modelId, config);
-    return config;
+    try {
+      // Check cache first
+      const cached = this.cache.get(modelId);
+      if (cached) {
+        this.logger.debug('Using cached config', { modelId });
+        metricsCollector.endOperation(opId, true);
+        return cached;
+      }
+
+      // Research and cache
+      const config = await this.doResearch(modelId);
+      this.cache.set(modelId, config);
+      metricsCollector.endOperation(opId, true);
+      return config;
+    } catch (error) {
+      metricsCollector.endOperation(opId, false, error as Error);
+      throw error;
+    }
   }
 
   private async doResearch(modelId: string): Promise<EnhancedVllmConfig> {
@@ -108,10 +150,16 @@ export class ConfigResearcherService {
     contextWindow: number;
     modelCard: Record<string, any> | undefined;
   }> {
-    const info = await modelInfo({
+    // Call HF API through circuit breaker
+    const info = await hfApiBreaker.fire({
       name: modelId,
       credentials: this.huggingfaceToken ? { accessToken: this.huggingfaceToken } : undefined,
     });
+
+    // Circuit breaker returns null on fallback
+    if (!info) {
+      throw new Error('HuggingFace API unavailable (circuit breaker open)');
+    }
 
     // Cast to extended interface (HF API returns these fields but types don't expose them)
     // This is safer than 'as any' because we define the expected structure

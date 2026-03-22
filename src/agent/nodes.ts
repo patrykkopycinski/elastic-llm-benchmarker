@@ -1062,10 +1062,45 @@ export async function discoverPromisingModelsNode(
 
   logger.info('[discover_promising_models] Searching for new models...');
 
+  // Pre-flight health checks
+  if (!cfg.huggingfaceToken) {
+    logger.warn('[discover_promising_models] No HF token - discovery will be rate-limited');
+  }
+
+  if (!resultsStore) {
+    logger.error('[discover_promising_models] No results store configured');
+    return {
+      currentState: 'error',
+      error: 'Results store required for discovery',
+      errorCount: state.errorCount + 1,
+      lastErrorCategory: 'unknown',
+    };
+  }
+
+  if (!queueService) {
+    logger.error('[discover_promising_models] No queue service configured');
+    return {
+      currentState: 'error',
+      error: 'Queue service required for discovery',
+      errorCount: state.errorCount + 1,
+      lastErrorCategory: 'unknown',
+    };
+  }
+
   // Import HuggingFace API
   const { listModels } = await import('@huggingface/hub');
 
   try {
+    // Test HF API connectivity with timeout
+    logger.info('[discover_promising_models] Testing HF API connectivity...');
+    await Promise.race([
+      listModels({ limit: 1, credentials: cfg.huggingfaceToken ? { accessToken: cfg.huggingfaceToken } : undefined }).next(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('HF API connectivity test timeout')), 10000)
+      ),
+    ]);
+    logger.info('[discover_promising_models] HF API connectivity OK');
+
     // Fetch recent text-generation models from HuggingFace
     const models = [];
     for await (const model of listModels({

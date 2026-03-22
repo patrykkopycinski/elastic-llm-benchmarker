@@ -21,28 +21,18 @@ export class InteractiveOrchestrator {
 
   async benchmarkModel(modelId: string, options: BenchmarkOptions = {}): Promise<QueueEntry> {
     options.progressCallback?.('Researching optimal config...');
-    const config = await this.configResearcher.research(modelId);
-
-    // TODO: Config overrides are currently not persisted to queue
-    // The QueueService needs to support metadata/config storage for this to work
-    // For now, overrides are validated but not applied to the actual benchmark run
-    if (options.configOverrides) {
-      Object.assign(config, options.configOverrides);
-
-      // Log warning that overrides won't be applied
-      console.warn(
-        'Config overrides requested but not yet supported in queue persistence. ' +
-        'Overrides will not be applied to benchmark run. ' +
-        'Track: https://github.com/elastic/elastic-llm-benchmarker/issues/XXX'
-      );
-    }
+    await this.configResearcher.research(modelId);
 
     options.progressCallback?.('Adding to priority queue...');
     const queueEntry = await this.queueService.enqueue(
       modelId,
       'user',
       100,
-      'interactive-user'
+      'interactive-user',
+      {
+        configOverrides: options.configOverrides,
+        skipReasoning: options.skipReasoning,
+      }
     );
 
     if (options.wait) {

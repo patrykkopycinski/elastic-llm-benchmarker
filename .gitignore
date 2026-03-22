@@ -61,3 +61,5 @@ failed-reports/
 
 # Additional Logs
 *.jsonl
+data/checkpoints.db
+data/*.db
