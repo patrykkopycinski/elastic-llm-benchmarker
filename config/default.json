@@ -1,0 +1,53 @@
+{
+  "$schema": "../src/types/config.ts",
+  "ssh": {
+    "host": "",
+    "port": 22,
+    "username": "",
+    "privateKeyPath": ""
+  },
+  "huggingfaceToken": "",
+  "benchmarkThresholds": {
+    "minContextWindow": 128000,
+    "maxITLMs": 20,
+    "maxToolCallLatencyMs": 1000,
+    "minToolCallSuccessRate": 1.0,
+    "concurrencyLevels": [1, 4, 16],
+    "healthCheckTimeoutSeconds": 600
+  },
+  "vmHardwareProfile": {
+    "gpuType": "nvidia-l4",
+    "gpuCount": 1,
+    "ramGb": 64,
+    "cpuCores": 8,
+    "diskGb": 200,
+    "machineType": "g2-standard-8"
+  },
+  "logLevel": "info",
+  "resultsDir": "./results",
+  "daemon": {
+    "enabled": false,
+    "sleepIntervalMs": 60000,
+    "maxConsecutiveErrors": 10,
+    "maxCycles": 0,
+    "recursionLimit": 25,
+    "stateFilePath": "./data/daemon-state.json",
+    "pauseWindows": [],
+    "errorBackoffMultiplier": 1.5,
+    "maxSleepIntervalMs": 300000
+  },
+  "tunnel": {
+    "enabled": false,
+    "provider": "ngrok",
+    "ngrokRegion": "us",
+    "localPort": 8000,
+    "timeoutMs": 30000,
+    "retryAttempts": 3,
+    "retryDelayMs": 5000
+  },
+  "kibanaConnector": {
+    "enabled": false,
+    "connectorNamePrefix": "vllm-",
+    "requestTimeoutMs": 30000
+  }
+}

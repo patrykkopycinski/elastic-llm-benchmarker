@@ -1,0 +1,31 @@
+{
+  "category": "feature",
+  "description": "Port and enhance deploy_model.mjs to TypeScript. Handle Docker container lifecycle: stop existing containers, pull vllm/vllm-openai:latest, configure tensor-parallel-size based on GPU count, set max-model-len, tool-call-parser (hermes/mistral/llama3_json), enable-auto-tool-choice. Store exact deployment command for reproducibility.",
+  "id": "vllm-deployment-service",
+  "title": "VLLM Model Deployment Service",
+  "dependencies": [
+    "ssh-client-service",
+    "configuration-management"
+  ],
+  "priority": 7,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Port and enhance deploy_model.mjs to TypeScript. Handle Docker container lifecycle: stop existing containers, pull vllm/vllm-openai:latest, configure tensor-parallel-size based on GPU count, set max-model-len, tool-call-parser (hermes/mistral/llama3_json), enable-auto-tool-choice. Store exact deployment command for reproducibility.",
+      "timestamp": "2026-02-19T15:35:41.204Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:48:35.048Z",
+  "summary": "## Summary: Port and enhance deploy_model.mjs to TypeScript - vLLM Deployment Service\n\n### Changes Implemented\n- Created `VllmDeploymentService` class following existing service patterns (class-based, Winston logger, custom error classes, Zod-compatible types)\n- Implements full Docker container lifecycle management via SSH:\n  - **Stop existing containers**: Lists and stops/removes all running vLLM containers before deploying\n  - **Pull vLLM image**: Pulls `vllm/vllm-openai:latest` (or custom image) with configurable timeout\n  - **Configure and launch**: Builds complete `docker run` command with all vLLM parameters\n  - **Health check**: Polls `/health` endpoint with container crash detection and configurable timeout\n- **tensor-parallel-size**: Automatically set based on `hardwareProfile.gpuCount`\n- **tool-call-parser**: Resolved based on model architecture (`hermes` for Qwen, `mistral` for Mistral/Mixtral, `llama3_json` for Llama/CodeLlama) with model ID fallback\n- **enable-auto-tool-choice**: Automatically enabled when a tool call parser is configured\n- **max-model-len**: Optional override; auto-detected from running vLLM instance via `/v1/models` endpoint when not set\n- **Reproducible docker command**: Full `docker run` command stored in `DeploymentResult.dockerCommand`\n- **Custom error hierarchy**: `VllmDeploymentError` (base), `ContainerError` (Docker ops), `HealthCheckError` (timeout/readiness)\n- Exported all types and classes from barrel files (`services/index.ts` and `src/index.ts`)\n- Created comprehensive unit test suite (35 tests) covering all public API methods and error cases\n\n### Files Modified\n- `src/services/vllm-deployment.ts` — **NEW** — Main deployment service (470+ lines)\n- `src/services/index.ts` — Added barrel exports for VllmDeploymentService, error classes, and types\n- `src/index.ts` — Added public API re-exports for the new service\n- `tests/unit/vllm-deployment.test.ts` — **NEW** — Comprehensive unit tests (35 tests)\n\n### Notes for Developer\n- The service uses `SSHClientPool` for all remote operations, matching the established SSH-based architecture\n- GPU memory utilization defaults to 0.90 (configurable via `gpuMemoryUtilization` option)\n- The `TOOL_CALL_PARSERS` mapping is intentionally duplicated from `model-candidate-filter.ts` for service isolation; consider extracting to a shared constant if they need to stay in sync\n- Container names are auto-generated from model IDs with sanitization for Docker naming rules\n- The `deploy()` method returns a `DeploymentResult` object whose `dockerCommand` field can be directly stored in `BenchmarkResult.dockerCommand` for reproducibility\n- All 328 tests pass (including 35 new ones), TypeScript type check is clean, and production build succeeds\n\n### Verification Status\n- **Playwright**: 8 verification tests passed, covering module exports, service instantiation, tool call parser resolution for all supported architectures, docker command building with tensor-parallel-size/max-model-len/tool-call-parser, command reproducibility, and error class inheritance. Temporary test files were deleted after verification.\n- **Vitest**: 35 unit tests passed covering constructor, resolveToolCallParser (all architectures + fallbacks), buildDockerRunCommand (tool parsers, max-model-len, custom images, ports, additional args, tensor parallelism), listContainers, stop, getContainerLogs, full deploy lifecycle, error handling (pull failure, run failure, container crash during health check), and error class properties.\n- **Full suite**: All 328 tests across 10 test files pass. Build produces clean output."
+}

@@ -4,6 +4,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { writeFile, unlink } from 'fs/promises';
 import { createLogger } from '../utils/logger.js';
+import retry from 'async-retry';
 
 const execAsync = promisify(exec);
 
@@ -30,17 +31,31 @@ export class GitHubPublisher {
   }
 
   async publish(markdown: string): Promise<void> {
-    if (await this.isGhCliAvailable()) {
-      await this.publishViaGhCli(markdown);
-      return;
-    }
+    await retry(
+      async () => {
+        if (await this.isGhCliAvailable()) {
+          await this.publishViaGhCli(markdown);
+          return;
+        }
 
-    if (this.token) {
-      await this.publishViaApi(markdown);
-      return;
-    }
+        if (this.token) {
+          await this.publishViaApi(markdown);
+          return;
+        }
 
-    throw new Error('No GitHub auth available (gh CLI or GITHUB_TOKEN)');
+        throw new Error('No GitHub auth available (gh CLI or GITHUB_TOKEN)');
+      },
+      {
+        retries: 3,
+        minTimeout: 1000,
+        maxTimeout: 10000,
+        onRetry: (error, attempt) => {
+          this.logger.warn(`GitHub publish attempt ${attempt} failed, retrying...`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      }
+    );
   }
 
   private async isGhCliAvailable(): Promise<boolean> {

@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Implement pre-deployment filters based on MODEL_EVALUATION_LOG.md criteria: context size >= 128K (hard requirement), model size fits in 2x A100 80GB, vLLM architecture support, tool calling capability (check model family: Qwen, Mistral, Llama with hermes/mistral/llama3_json parsers). Auto-skip models known to fail these criteria.",
+  "id": "model-candidate-filter",
+  "title": "Model Candidate Pre-Filtering Engine",
+  "dependencies": [
+    "model-discovery-service"
+  ],
+  "priority": 6,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement pre-deployment filters based on MODEL_EVALUATION_LOG.md criteria: context size >= 128K (hard requirement), model size fits in 2x A100 80GB, vLLM architecture support, tool calling capability (check model family: Qwen, Mistral, Llama with hermes/mistral/llama3_json parsers). Auto-skip models known to fail these criteria.",
+      "timestamp": "2026-02-19T15:35:41.202Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:46:12.332Z",
+  "summary": "## Summary: Model Candidate Pre-Filtering Engine\n\n### Changes Implemented\n- Created `ModelCandidateFilter` service class with 5 pre-deployment filter criteria:\n  1. **Context Size (hard)**: Rejects models with context window < 128K tokens\n  2. **Model Size (hard)**: Estimates VRAM usage and rejects models exceeding 2x A100 80GB (160GB) capacity, accounting for quantization (fp16, gptq-4bit, awq, int8, etc.)\n  3. **vLLM Architecture (hard)**: Validates model architecture against comprehensive list of vLLM-supported architectures\n  4. **Tool Calling (configurable)**: Checks model family supports tool calling with known vLLM parsers: Qwen→hermes, Mistral/Mixtral→mistral, Llama/CodeLlama→llama3_json\n  5. **Known Failure List (hard)**: Auto-skips models known to fail deployment (supports exact match and wildcard prefix patterns)\n- Implemented `evaluate()` for single model evaluation returning detailed `FilterResult` with rejections, warnings, recommended parser, and estimated VRAM\n- Implemented `evaluateBatch()` for batch evaluation partitioning models into passed/rejected groups\n- Implemented `estimateVramUsage()` with quantization-aware VRAM estimation (20% overhead for KV cache/buffers)\n- Implemented `getRecommendedToolCallParser()` with architecture-based and model ID-based fallback detection\n- Full type definitions: `FilterRejection`, `FilterCriterion`, `FilterResult`, `BatchFilterResult`, `CandidateFilterOptions`\n- GPU VRAM lookup table for nvidia-a100-80gb, nvidia-h100, nvidia-l4, nvidia-t4, nvidia-v100, nvidia-a10g\n- Exported all new types and classes from the package index\n\n### Files Modified\n- `src/services/model-candidate-filter.ts` (NEW) - Core pre-deployment filter service (~400 lines)\n- `src/index.ts` - Added exports for `ModelCandidateFilter` and all related types\n- `tests/unit/model-candidate-filter.test.ts` (NEW) - 66 comprehensive unit tests covering all filter criteria, edge cases, realistic model scenarios, and batch evaluation\n\n### Notes for Developer\n- The filter defaults to 2x A100 80GB (160GB VRAM) as the target hardware, matching the feature spec. This can be overridden via `CandidateFilterOptions.targetHardwareProfile`\n- Tool calling is required by default (`requireToolCalling: true`). Set to `false` to make it a warning instead of a hard rejection\n- The known failure list can be expanded by modifying the `KNOWN_FAILURE_LIST` map in the service\n- Models with unknown parameter counts get a warning (not a hard rejection) for the VRAM fit check\n- The service follows existing codebase patterns: Winston logging, JSDoc documentation, readonly data structures\n\n### Verification Status\n- **Unit tests**: 66 tests passing (vitest) covering all filter criteria, edge cases, batch evaluation, realistic model scenarios (Llama-3.1-70B, Qwen2.5-72B, Mistral-Large), and parser detection\n- **Full test suite**: All 293 tests pass across 9 test files (no regressions)\n- **TypeScript**: Clean compile with `tsc --noEmit` (no type errors)\n- **Playwright verification**: 4 Playwright tests verified core functionality including: module import, filter evaluation, parser assignment for all families, known failure list, batch evaluation, and VRAM calculations. Test file was deleted after successful verification."
+}

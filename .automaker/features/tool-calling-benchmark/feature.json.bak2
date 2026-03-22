@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Implement parallel tool calling tests using the chat completions API. Test with multi-function requests (get_weather, get_stock_price for multiple locations). Measure: parallel call support (must be 100%), max concurrent calls, tool call latency (target< 1000ms), success rate. This is a critical pass/fail criteria.",
+  "id": "tool-calling-benchmark",
+  "title": "Tool Calling Capability Benchmark",
+  "dependencies": [
+    "vllm-deployment-service",
+    "health-check-service"
+  ],
+  "priority": 10,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement parallel tool calling tests using the chat completions API. Test with multi-function requests (get_weather, get_stock_price for multiple locations). Measure: parallel call support (must be 100%), max concurrent calls, tool call latency (target< 1000ms), success rate. This is a critical pass/fail criteria.",
+      "timestamp": "2026-02-19T15:35:41.219Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:58:04.225Z"
+}

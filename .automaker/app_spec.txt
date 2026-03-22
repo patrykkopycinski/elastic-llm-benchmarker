@@ -1,0 +1,119 @@
+<project_specification>
+  <project_name>elastic-llm-benchmarker</project_name>
+
+  <overview>
+    Describe your project here. This file will be analyzed by an AI agent
+    to understand your project structure and tech stack.
+  </overview>
+
+  <technology_stack>
+    <!-- The AI agent will fill this in after analyzing your project -->
+  </technology_stack>
+
+  <core_capabilities>
+    <!-- List core features and capabilities -->
+  </core_capabilities>
+
+  <implemented_features>
+    <feature>
+      <name>Project Foundation &amp; TypeScript Setup</name>
+      <description>Initialize the TypeScript/Node.js project with LangGraph.js, configure build tools (tsup/esbuild), set up ESLint/Prettier, create package.json with dependencies including @langchain/langgraph, @langchain/core, ssh2, and create the core project structure with src/, tests/, and config/ directories.</description>
+    </feature>
+    <feature>
+      <name>Benchmark Results Storage System</name>
+      <description>Design a JSON/SQLite storage system for benchmark results. Store: model ID, timestamp, VLLM version, exact Docker command used, hardware config, all benchmark metrics (ITL, throughput, tool call success rate, latencies), pass/fail status, rejection reason if failed. Support querying historical results and avoiding re-benchmarking.</description>
+    </feature>
+    <feature>
+      <name>Configuration &amp; Secrets Management</name>
+      <description>Create a configuration system for GCP VM credentials (SSH host, user, password/key), HuggingFace token, benchmark parameters, model criteria thresholds (context &gt;= 128K, ITL &lt; 20ms, tool call &lt; 1000ms), and VM hardware profiles. Support environment variables and config files with validation.</description>
+    </feature>
+    <feature>
+      <name>HuggingFace Model Discovery Service</name>
+      <description>Implement a service that searches HuggingFace for candidate LLM models. Filter by: text-generation task, context window &gt;= 128K tokens, open-source license, compatible architectures (transformers, MoE). Fetch model cards and config.json to extract context size, architecture type, and quantization options. Track already-evaluated models to avoid re-testing.</description>
+    </feature>
+    <feature>
+      <name>Results Dashboard API</name>
+      <description>Create a REST API to serve benchmark results for dashboard visualization. Endpoints: GET /models (list all evaluated models with status), GET /models/:id (detailed results), GET /benchmarks (comparison table), GET /stats (aggregated statistics). Support filtering by status, date range, and model family.</description>
+    </feature>
+    <feature>
+      <name>SSH Client Service for VM Communication</name>
+      <description>Port the SSH client functionality from thePoC (ssh_client.mjs) to TypeScript. Implement connection pooling, command execution with timeouts, sudo support, and file transfer capabilities. Include error handling for common SSH failures and reconnection logic.</description>
+    </feature>
+    <feature>
+      <name>LangGraph Agent Core Architecture</name>
+      <description>Design and implement the LangGraph.js agent with a state machine architecture. Define states: IDLE, DISCOVERING_MODELS, EVALUATING_MODEL, RUNNING_BENCHMARK, STORING_RESULTS, EXPOSING_API, RUNNING_KIBANA_EVAL. Implement checkpointing for agent persistence and graceful shutdown handling.</description>
+    </feature>
+    <feature>
+      <name>VM Hardware Profile Management</name>
+      <description>Design a system for managing different VM hardware configurations. Initially support the existing2x A100 80GB profile. Plan for future profiles: A60, different memory configs, varying GPU counts. Store hardware profile with each benchmark for accurate comparisons.</description>
+    </feature>
+    <feature>
+      <name>Model Candidate Pre-Filtering Engine</name>
+      <description>Implement pre-deployment filters based on MODEL_EVALUATION_LOG.md criteria: context size &gt;= 128K (hard requirement), model size fits in 2x A100 80GB, vLLM architecture support, tool calling capability (check model family: Qwen, Mistral, Llama with hermes/mistral/llama3_json parsers). Auto-skip models known to fail these criteria.</description>
+    </feature>
+    <feature>
+      <name>VLLM Model Deployment Service</name>
+      <description>Port and enhance deploy_model.mjs to TypeScript. Handle Docker container lifecycle: stop existing containers, pull vllm/vllm-openai:latest, configure tensor-parallel-size based on GPU count, set max-model-len, tool-call-parser (hermes/mistral/llama3_json), enable-auto-tool-choice. Store exact deployment command for reproducibility.</description>
+    </feature>
+    <feature>
+      <name>Continuous Background Runner Daemon</name>
+      <description>Implement the daemon process that keeps the agent running continuously. Support: graceful start/stop via signals (SIGTERM, SIGINT), configurable sleep intervals between benchmark cycles, automatic recovery from errors, state persistence across restarts, optional scheduling (e.g., pause during certain hours).</description>
+    </feature>
+    <feature>
+      <name>Results Dashboard Web UI</name>
+      <description>Build a web dashboard (React/Vite) displaying: model comparison table (like MODEL_EVALUATION_LOG.md format), status badges (Approved/Conditional/Rejected), performance charts (throughput, latency), tool calling success rates, historical trends. Support sorting, filtering, and export to CSV/JSON.</description>
+    </feature>
+    <feature>
+      <name>VLLM Health Check &amp; Readiness Service</name>
+      <description>Implement health checking for deployed vLLM instances. Poll /health and /v1/models endpoints with configurable timeout (default 600s). Detect fatal errors from container logs (OOM, CUDA errors, gated repo access, architecture not supported). Provide detailed error classification for failure analysis.</description>
+    </feature>
+    <feature>
+      <name>CLI Interface for Agent Control</name>
+      <description>Create a CLI tool for interacting with the agent: start/stop daemon, trigger immediate benchmark of specific model, view current status, query results, export reports. Use commander.js or similar for argument parsing. Support both interactive and scriptable modes.</description>
+    </feature>
+    <feature>
+      <name>Tool Calling Capability Benchmark</name>
+      <description>Implement parallel tool calling tests using the chat completions API. Test with multi-function requests (get_weather, get_stock_price for multiple locations). Measure: parallel call support (must be 100%), max concurrent calls, tool call latency (target&lt; 1000ms), success rate. This is a critical pass/fail criteria.</description>
+    </feature>
+    <feature>
+      <name>VLLM Benchmark Runner</name>
+      <description>Implement benchmark execution using vllm bench serve command. Run throughput tests at multiple concurrency levels (1, 4, 16). Parse output for key metrics: ITL (Inter-Token Latency), TTFT (Time To First Token), throughput (tok/s), p99 latencies. Store raw benchmark output and parsed metrics.</description>
+    </feature>
+    <feature>
+      <name>Error Recovery &amp; Resilience System</name>
+      <description>Implement comprehensive error handling: SSH connection failures (retry with backoff), Docker container crashes (cleanup and retry), benchmark timeouts (graceful termination), OOM handling (skip model, record failure). Add circuit breaker for repeated failures on same model.</description>
+    </feature>
+    <feature>
+      <name>Ngrok/GCP Tunnel Service for API Exposure</name>
+      <description>Implement tunneling service to expose VLLM API publicly. Support ngrok integration (check for existing tunnel, create new if needed, get public URL). Plan for future GCP native options (Cloud Run, Load Balancer). Store tunnel URL in results for Kibana connector creation.</description>
+    </feature>
+    <feature>
+      <name>Model Evaluation Decision Engine</name>
+      <description>Implement the evaluation logic from MODEL_EVALUATION_LOG.md. Classify models as: APPROVED (meets all criteria), CONDITIONAL (works with limitations), REJECTED (fails hard requirements). Criteria: context &gt;= 128K, parallel tool calling 100%, ITL &lt; 20ms preferred, tool latency &lt; 1000ms preferred. Generate detailed evaluation reports.</description>
+    </feature>
+    <feature>
+      <name>Evaluation Methodology Improvements Document</name>
+      <description>Create a living document (METHODOLOGY_IMPROVEMENTS.md) proposing enhancements to the evaluation approach. Include: additional benchmark scenarios, quality metrics beyond speed, reasoning capability tests, multi-turn conversation evaluation, code generation benchmarks, comparison with industry benchmarks (LMSYS, OpenRouter).</description>
+    </feature>
+    <feature>
+      <name>Ollama Engine Support (Future)</name>
+      <description>Design extensible engine architecture to support Ollama alongside VLLM. Based on OLLAMA_EVALUATION_LOG.md findings: Ollama has easier setup but limited tool calling (only Qwen2.5 works). Implement engine abstraction layer, Ollama-specific deployment, and benchmark adapters. Mark as lower priority per user request to focus on VLLM.</description>
+    </feature>
+    <feature>
+      <name>Kibana Connector Creation Integration</name>
+      <description>Implement API client to create Kibana Connectors pointing to the exposed VLLM endpoint. Configure connector with model details, API endpoint URL, and authentication. Support configurable Kibana URL target. This enables the Agent builder LLM features evaluation workflow.</description>
+    </feature>
+    <feature>
+      <name>Notification System for Results</name>
+      <description>Implement notifications for benchmark events: new model approved, model rejected with reason, benchmark errors, daily summary. Support channels: console logs, file output, webhook (Slack/Discord), email. Configurable notification levels and filters.</description>
+    </feature>
+    <feature>
+      <name>Markdown Report Generator</name>
+      <description>Implement automatic generation of markdown reports in the format of MODEL_EVALUATION_LOG.md. Include: summary statistics, approved/rejected model tables, detailed benchmark data, changelog entries. Auto-update on each benchmark completion. Support both full reports and incremental updates.</description>
+    </feature>
+    <feature>
+      <name>Kibana Agent Builder LLM Evaluation Runner</name>
+      <description>Implement the evaluation framework for testing models via Kibana&apos;s Agent builder features. Define evaluation tasks, success criteria, and scoring methodology. Run evaluations against the created connector and collect results. Store evaluation outcomes linked to benchmark results.</description>
+    </feature>
+  </implemented_features>
+</project_specification>

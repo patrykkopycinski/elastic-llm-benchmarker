@@ -1,0 +1,31 @@
+{
+  "category": "feature",
+  "description": "Implement benchmark execution using vllm bench serve command. Run throughput tests at multiple concurrency levels (1, 4, 16). Parse output for key metrics: ITL (Inter-Token Latency), TTFT (Time To First Token), throughput (tok/s), p99 latencies. Store raw benchmark output and parsed metrics.",
+  "id": "vllm-benchmark-runner",
+  "title": "VLLM Benchmark Runner",
+  "dependencies": [
+    "vllm-deployment-service",
+    "health-check-service"
+  ],
+  "priority": 9,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement benchmark execution using vllm bench serve command. Run throughput tests at multiple concurrency levels (1, 4, 16). Parse output for key metrics: ITL (Inter-Token Latency), TTFT (Time To First Token), throughput (tok/s), p99 latencies. Store raw benchmark output and parsed metrics.",
+      "timestamp": "2026-02-19T15:35:41.218Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T17:07:35.948Z",
+  "summary": "## Summary: Implement benchmark execution using vllm bench serve command\n\n### Changes Implemented\n- **Created `BenchmarkRunnerService`** (`src/services/benchmark-runner.ts`) — A comprehensive service for running vLLM benchmarks via `vllm bench serve` on remote VMs over SSH. Features:\n  - Runs throughput tests at multiple concurrency levels (configurable, default: 1, 4, 16)\n  - Builds correct `vllm bench serve` commands with configurable parameters (API port, num prompts, random input/output lengths)\n  - Handles SSH execution failures gracefully with proper error reporting\n  - Evaluates benchmark results against configured thresholds (max ITL, P99 latency)\n  - Stores raw benchmark output alongside parsed metrics\n  - Returns pass/fail status with detailed rejection reasons\n\n- **Created `BenchmarkOutputParser`** (`src/services/benchmark-output-parser.ts`) — A robust parser for extracting metrics from vllm bench serve output. Features:\n  - Parses ITL (Inter-Token Latency), TTFT (Time To First Token), throughput (tok/s), and P99 latencies\n  - Supports multiple output formats: standard tabular, key-value pairs, underscore-format keys, and JSON output\n  - Graceful degradation: requires minimum ITL + throughput for success, but extracts partial metrics when possible\n  - Returns structured parse results with errors and raw extracted values for debugging\n\n- **Updated `src/services/index.ts`** — Added exports for `BenchmarkRunnerService`, `BenchmarkRunnerError`, `parseBenchmarkOutput`, and their associated types\n\n- **Updated `src/index.ts`** — Added public API exports for the benchmark runner service, error class, output parser, and all associated types\n\n- **Created unit tests** (`tests/unit/benchmark-runner.test.ts`) — 18 tests covering:\n  - Service initialization with default and custom options\n  - Command building with various configurations\n  - Single benchmark execution with successful parsing\n  - SSH failure handling, non-zero exit codes, unparseable output\n  - Multi-concurrency benchmark runs\n  - Threshold evaluation (ITL, P99, failed runs)\n  - Error class properties\n\n- **Created unit tests** (`tests/unit/benchmark-output-parser.test.ts`) — 17 tests covering:\n  - Standard vllm bench serve output parsing\n  - Integer and decimal value handling\n  - Alternative output formats (key-value, underscore, avg per-token)\n  - JSON output parsing (standalone and embedded)\n  - Partial/missing metrics behavior\n  - Edge cases (empty output, noisy output, concurrency levels)\n\n### Files Modified\n- `src/services/benchmark-runner.ts` (new — 436 lines)\n- `src/services/benchmark-output-parser.ts` (new — 290 lines)\n- `src/services/index.ts` (modified — added exports)\n- `src/index.ts` (modified — added public API exports)\n- `tests/unit/benchmark-runner.test.ts` (new — 518 lines)\n- `tests/unit/benchmark-output-parser.test.ts` (new — 321 lines)\n\n### Notes for Developer\n- The `BenchmarkRunnerService` is designed to be injected into the agent's `runBenchmarkNode` when connecting the service layer to the agent graph. The current `runBenchmarkNode` remains a placeholder — the service is ready for integration when the SSH and deployment infrastructure is wired up.\n- The service follows the same patterns as `VllmDeploymentService`: constructor with SSHClientPool, log level, and options; methods that accept SSHConfig for remote execution.\n- The parser handles multiple vllm output formats to be resilient across vllm versions. Minimum required metrics for success are ITL and throughput.\n- Concurrency levels default to `[1, 4, 16]` matching the config schema in `benchmarkThresholdsSchema`.\n- The 5 pre-existing test failures in `dashboard-api.test.ts` are unrelated (Express 5 / path-to-regexp compatibility issue).\n\n### Verification Status\n- ✅ **Unit tests**: 35 tests passing (18 benchmark-runner + 17 benchmark-output-parser)\n- ✅ **TypeScript build**: Compiles successfully with `tsup` (no new type errors)\n- ✅ **Playwright verification**: 7 end-to-end verification tests passed, covering output parsing, command building, multi-concurrency execution, threshold evaluation, and JSON format support. Temporary test files were deleted after verification."
+}

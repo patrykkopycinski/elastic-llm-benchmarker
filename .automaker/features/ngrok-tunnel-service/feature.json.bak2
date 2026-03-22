@@ -1,0 +1,24 @@
+{
+  "category": "feature",
+  "description": "Implement tunneling service to expose VLLM API publicly. Support ngrok integration (check for existing tunnel, create new if needed, get public URL). Plan for future GCP native options (Cloud Run, Load Balancer). Store tunnel URL in results for Kibana connector creation.",
+  "id": "ngrok-tunnel-service",
+  "title": "Ngrok/GCP Tunnel Service for API Exposure",
+  "dependencies": [
+    "vllm-deployment-service",
+    "health-check-service"
+  ],
+  "priority": 14,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement tunneling service to expose VLLM API publicly. Support ngrok integration (check for existing tunnel, create new if needed, get public URL). Plan for future GCP native options (Cloud Run, Load Balancer). Store tunnel URL in results for Kibana connector creation.",
+      "timestamp": "2026-02-19T15:35:41.221Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T16:58:06.259Z"
+}

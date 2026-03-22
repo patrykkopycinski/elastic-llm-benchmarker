@@ -1,0 +1,28 @@
+{
+  "category": "feature",
+  "description": "Implement pre-deployment filters based on MODEL_EVALUATION_LOG.md criteria: context size >= 128K (hard requirement), model size fits in 2x A100 80GB, vLLM architecture support, tool calling capability (check model family: Qwen, Mistral, Llama with hermes/mistral/llama3_json parsers). Auto-skip models known to fail these criteria.",
+  "id": "model-candidate-filter",
+  "title": "Model Candidate Pre-Filtering Engine",
+  "dependencies": [
+    "model-discovery-service"
+  ],
+  "priority": 6,
+  "status": "backlog",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement pre-deployment filters based on MODEL_EVALUATION_LOG.md criteria: context size >= 128K (hard requirement), model size fits in 2x A100 80GB, vLLM architecture support, tool calling capability (check model family: Qwen, Mistral, Llama with hermes/mistral/llama3_json parsers). Auto-skip models known to fail these criteria.",
+      "timestamp": "2026-02-19T15:35:41.202Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom"
+}

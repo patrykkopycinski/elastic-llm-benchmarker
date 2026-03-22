@@ -1,0 +1,26 @@
+{
+  "category": "feature",
+  "description": "Implement the evaluation logic from MODEL_EVALUATION_LOG.md. Classify models as: APPROVED (meets all criteria), CONDITIONAL (works with limitations), REJECTED (fails hard requirements). Criteria: context >= 128K, parallel tool calling 100%, ITL < 20ms preferred, tool latency < 1000ms preferred. Generate detailed evaluation reports.",
+  "id": "model-evaluation-engine",
+  "title": "Model Evaluation Decision Engine",
+  "dependencies": [
+    "vllm-benchmark-runner",
+    "tool-calling-benchmark",
+    "benchmark-results-storage"
+  ],
+  "priority": 12,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement the evaluation logic from MODEL_EVALUATION_LOG.md. Classify models as: APPROVED (meets all criteria), CONDITIONAL (works with limitations), REJECTED (fails hard requirements). Criteria: context >= 128K, parallel tool calling 100%, ITL < 20ms preferred, tool latency < 1000ms preferred. Generate detailed evaluation reports.",
+      "timestamp": "2026-02-19T15:35:41.220Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:14:45.077Z",
+  "summary": "## Summary: Model Evaluation Engine\n\n### Changes Implemented\n- Created `ModelEvaluationEngine` service class that evaluates benchmark results and classifies models as APPROVED, CONDITIONAL, or REJECTED\n- Implemented 4 evaluation criteria matching MODEL_EVALUATION_LOG specifications:\n  - **Context window >= 128K tokens** (HARD requirement) - fails to REJECTED\n  - **Parallel tool calling success rate = 100%** (HARD requirement) - fails to REJECTED\n  - **Inter-token latency (ITL) < 20ms** (PREFERRED criterion) - fails to CONDITIONAL\n  - **Tool call latency < 1000ms** (PREFERRED criterion) - fails to CONDITIONAL\n- Classification logic: REJECTED if any HARD fails, CONDITIONAL if only PREFERRED fails, APPROVED if all pass\n- Added `evaluate()` for single model evaluation with detailed `ModelEvaluationReport`\n- Added `evaluateBatch()` for batch evaluation with model info mapping\n- Added `formatReport()` for formatted text output with pass/fail indicators and severity tags\n- Added `fromConfig()` factory method to create engine from `BenchmarkThresholds` config\n- Added comprehensive TypeScript types: `EvaluationClassification`, `CriterionSeverity`, `CriterionEvaluation`, `ModelEvaluationReport`\n- Uses lowest-concurrency benchmark metrics for fairest ITL evaluation\n- Follows existing codebase patterns: Winston logging, service class architecture, JSDoc documentation\n\n### Files Modified\n- `src/types/benchmark.ts` - Added evaluation types (EvaluationClassification, CriterionSeverity, CriterionEvaluation, ModelEvaluationReport)\n- `src/services/model-evaluation-engine.ts` - New file: ModelEvaluationEngine service (340 LOC)\n- `src/services/index.ts` - Added ModelEvaluationEngine exports\n- `src/index.ts` - Added ModelEvaluationEngine and evaluation type exports\n- `tests/unit/model-evaluation-engine.test.ts` - New file: 39 comprehensive unit tests\n\n### Notes for Developer\n- The evaluation engine operates as a post-benchmark evaluation step, complementing the existing `ModelCandidateFilter` (pre-deployment filtering)\n- All 39 unit tests pass; TypeScript type checking passes with zero errors\n- 5 pre-existing failures in `dashboard-api.test.ts` are unrelated (Express 5 path-to-regexp compatibility issue)\n- The engine supports custom thresholds via constructor options or via `fromConfig()` using the existing `BenchmarkThresholds` config schema\n\n### Verification Status\n- Verified with 5 Playwright tests covering: APPROVED classification, CONDITIONAL classification, REJECTED classification, formatted report generation, and batch evaluation\n- All 5 Playwright tests passed successfully\n- Temporary Playwright test file was deleted after verification\n- Additionally verified with 39 Vitest unit tests (the project's primary test framework), all passing"
+}

@@ -1,0 +1,29 @@
+{
+  "category": "feature",
+  "description": "Port and enhance deploy_model.mjs to TypeScript. Handle Docker container lifecycle: stop existing containers, pull vllm/vllm-openai:latest, configure tensor-parallel-size based on GPU count, set max-model-len, tool-call-parser (hermes/mistral/llama3_json), enable-auto-tool-choice. Store exact deployment command for reproducibility.",
+  "id": "vllm-deployment-service",
+  "title": "VLLM Model Deployment Service",
+  "dependencies": [
+    "ssh-client-service",
+    "configuration-management"
+  ],
+  "priority": 7,
+  "status": "backlog",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Port and enhance deploy_model.mjs to TypeScript. Handle Docker container lifecycle: stop existing containers, pull vllm/vllm-openai:latest, configure tensor-parallel-size based on GPU count, set max-model-len, tool-call-parser (hermes/mistral/llama3_json), enable-auto-tool-choice. Store exact deployment command for reproducibility.",
+      "timestamp": "2026-02-19T15:35:41.204Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom"
+}

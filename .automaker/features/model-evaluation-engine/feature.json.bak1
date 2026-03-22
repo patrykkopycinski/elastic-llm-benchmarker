@@ -1,0 +1,25 @@
+{
+  "category": "feature",
+  "description": "Implement the evaluation logic from MODEL_EVALUATION_LOG.md. Classify models as: APPROVED (meets all criteria), CONDITIONAL (works with limitations), REJECTED (fails hard requirements). Criteria: context >= 128K, parallel tool calling 100%, ITL < 20ms preferred, tool latency < 1000ms preferred. Generate detailed evaluation reports.",
+  "id": "model-evaluation-engine",
+  "title": "Model Evaluation Decision Engine",
+  "dependencies": [
+    "vllm-benchmark-runner",
+    "tool-calling-benchmark",
+    "benchmark-results-storage"
+  ],
+  "priority": 12,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement the evaluation logic from MODEL_EVALUATION_LOG.md. Classify models as: APPROVED (meets all criteria), CONDITIONAL (works with limitations), REJECTED (fails hard requirements). Criteria: context >= 128K, parallel tool calling 100%, ITL < 20ms preferred, tool latency < 1000ms preferred. Generate detailed evaluation reports.",
+      "timestamp": "2026-02-19T15:35:41.220Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:14:45.068Z"
+}

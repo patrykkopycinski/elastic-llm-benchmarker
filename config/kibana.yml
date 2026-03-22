@@ -1,0 +1,7 @@
+server.host: "0.0.0.0"
+server.shutdownTimeout: "5s"
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+monitoring.ui.container.elasticsearch.enabled: true
+xpack.encryptedSavedObjects.encryptionKey: "a3F8k2PqmZ9xR7vLwY6tN5sBc4dEfGhX"
+xpack.security.encryptionKey: "b4G9l3QrnA0yS8wMxZ7uO6tP5rCd4eFgX"
+xpack.reporting.encryptionKey: "c5H0m4RsoB1zT9xNyA8vP7uQ6sDe5fGhX"

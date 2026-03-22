@@ -879,11 +879,18 @@ program
   });
 
 async function pollUntilComplete(queueService: QueueService, queueId: string) {
-  const POLL_INTERVAL = 5000;
-  const MAX_ITERATIONS = 720; // 1 hour max
+  const MAX_WAIT_MS = 3600000; // 1 hour
+  const startTime = Date.now();
   let lastStatus: string | null = null;
+  let pollInterval = 1000; // Start at 1s
+  const MAX_INTERVAL = 30000; // Cap at 30s
 
-  for (let i = 0; i < MAX_ITERATIONS; i++) {
+  while (true) {
+    if (Date.now() - startTime > MAX_WAIT_MS) {
+      console.error('❌ Timeout after 1 hour');
+      process.exit(1);
+    }
+
     // Efficient: Get single entry by ID instead of fetching entire queue
     const entry = await queueService.getById(queueId);
 
@@ -911,11 +918,11 @@ async function pollUntilComplete(queueService: QueueService, queueId: string) {
       process.exit(1);
     }
 
-    await new Promise(r => setTimeout(r, POLL_INTERVAL));
-  }
+    await new Promise(r => setTimeout(r, pollInterval));
 
-  console.error('❌ Timeout after 1 hour');
-  process.exit(1);
+    // Exponential backoff: 1s → 1.5s → 2.25s → ... → 30s max
+    pollInterval = Math.min(pollInterval * 1.5, MAX_INTERVAL);
+  }
 }
 
 // ─── queue-status command ──────────────────────────────────────────────────

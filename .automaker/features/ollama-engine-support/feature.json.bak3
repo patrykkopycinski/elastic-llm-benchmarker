@@ -1,0 +1,23 @@
+{
+  "category": "enhancement",
+  "description": "Design extensible engine architecture to support Ollama alongside VLLM. Based on OLLAMA_EVALUATION_LOG.md findings: Ollama has easier setup but limited tool calling (only Qwen2.5 works). Implement engine abstraction layer, Ollama-specific deployment, and benchmark adapters. Mark as lower priority per user request to focus on VLLM.",
+  "id": "ollama-engine-support",
+  "title": "Ollama Engine Support (Future)",
+  "dependencies": [
+    "vllm-deployment-service",
+    "vllm-benchmark-runner"
+  ],
+  "priority": 22,
+  "status": "backlog",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Design extensible engine architecture to support Ollama alongside VLLM. Based on OLLAMA_EVALUATION_LOG.md findings: Ollama has easier setup but limited tool calling (only Qwen2.5 works). Implement engine abstraction layer, Ollama-specific deployment, and benchmark adapters. Mark as lower priority per user request to focus on VLLM.",
+      "timestamp": "2026-02-19T15:35:41.225Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false
+}

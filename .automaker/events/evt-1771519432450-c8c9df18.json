@@ -1,0 +1,11 @@
+{
+  "id": "evt-1771519432450-c8c9df18",
+  "trigger": "feature_success",
+  "timestamp": "2026-02-19T16:43:52.450Z",
+  "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker",
+  "projectName": "elastic-llm-benchmarker",
+  "featureId": "vm-hardware-profiles",
+  "featureName": "VM Hardware Profile Management",
+  "error": "Feature completed in 524s - auto-verified",
+  "passes": true
+}

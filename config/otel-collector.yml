@@ -1,0 +1,106 @@
+# EDOT Collector configuration for vLLM observability
+# Scrapes Prometheus metrics from vLLM and accepts OTLP traces,
+# then exports everything directly to Elasticsearch.
+
+receivers:
+  # Scrape vLLM's native Prometheus metrics endpoint (/metrics on the API port)
+  # Captures: request latency, token throughput, TTFT, ITL, GPU cache usage,
+  # running/waiting requests, prompt/generation token counts, etc.
+  prometheus/vllm:
+    config:
+      scrape_configs:
+        - job_name: 'vllm'
+          scrape_interval: 15s
+          scrape_timeout: 10s
+          metrics_path: /metrics
+          static_configs:
+            - targets: ['${env:VLLM_METRICS_TARGET}']
+              labels:
+                service_name: vllm
+
+  # Accept OTLP traces/metrics from vLLM (requires --otlp-traces-endpoint on vLLM side)
+  # vLLM pushes to this endpoint via SSH reverse tunnel or direct network access
+  otlp/fromsdk:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+connectors:
+  # Generates pre-aggregated APM metrics from trace data for Kibana APM UI
+  elasticapm:
+
+processors:
+  elasticapm: {}
+
+  cumulativetodelta:
+    include:
+      match_type: ""
+
+  resource/vllm:
+    attributes:
+      - key: service.name
+        value: vllm-inference
+        action: upsert
+      - key: deployment.environment
+        value: benchmarker
+        action: upsert
+
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+    send_batch_max_size: 1500
+
+exporters:
+  elasticsearch/otel:
+    endpoints: ['http://elasticsearch:9200']
+    user: elastic
+    password: '${env:ELASTIC_PASSWORD}'
+    mapping:
+      mode: otel
+    sending_queue:
+      enabled: true
+    retry:
+      enabled: true
+      initial_interval: 100ms
+      max_interval: 30s
+
+  debug:
+    verbosity: basic
+
+service:
+  telemetry:
+    logs:
+      level: info
+
+  pipelines:
+    # vLLM Prometheus metrics -> ES (cumulativetodelta converts histograms for ES)
+    metrics/vllm:
+      receivers: [prometheus/vllm]
+      processors: [cumulativetodelta, resource/vllm, batch]
+      exporters: [elasticsearch/otel]
+
+    # OTLP traces from vLLM -> APM enrichment -> ES
+    traces/fromsdk:
+      receivers: [otlp/fromsdk]
+      processors: [elasticapm, resource/vllm]
+      exporters: [elasticapm, elasticsearch/otel]
+
+    # OTLP metrics from SDKs -> ES
+    metrics/fromsdk:
+      receivers: [otlp/fromsdk]
+      processors: [resource/vllm]
+      exporters: [elasticsearch/otel]
+
+    # Pre-aggregated APM metrics from trace connector -> ES
+    metrics/apm:
+      receivers: [elasticapm]
+      processors: [batch]
+      exporters: [elasticsearch/otel]
+
+    # OTLP logs from SDKs -> ES
+    logs/fromsdk:
+      receivers: [otlp/fromsdk]
+      processors: [resource/vllm]
+      exporters: [elasticapm, elasticsearch/otel]

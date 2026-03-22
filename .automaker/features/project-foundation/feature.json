@@ -1,0 +1,28 @@
+{
+  "category": "feature",
+  "description": "Initialize the TypeScript/Node.js project with LangGraph.js, configure build tools (tsup/esbuild), set up ESLint/Prettier, create package.json with dependencies including @langchain/langgraph, @langchain/core, ssh2, and create the core project structure with src/, tests/, and config/ directories.",
+  "id": "project-foundation",
+  "title": "Project Foundation & TypeScript Setup",
+  "dependencies": [],
+  "priority": 1,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Initialize the TypeScript/Node.js project with LangGraph.js, configure build tools (tsup/esbuild), set up ESLint/Prettier, create package.json with dependencies including @langchain/langgraph, @langchain/core, ssh2, and create the core project structure with src/, tests/, and config/ directories.",
+      "timestamp": "2026-02-19T15:35:41.193Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:23:49.689Z",
+  "summary": "## Summary: Project Foundation & TypeScript Setup\n\n### Changes Implemented\n- Created `package.json` with all required dependencies: `@langchain/langgraph`, `@langchain/core`, `@langchain/openai`, `ssh2`, `zod`, `winston`, `dotenv`, `commander`, plus dev dependencies for TypeScript, tsup, ESLint, Prettier, and Vitest\n- Created `tsconfig.json` with strict TypeScript configuration targeting ES2022 with ESNext modules and bundler module resolution\n- Created `tsup.config.ts` build configuration targeting Node 20 with ESM output, declarations, and source maps\n- Created `eslint.config.js` with flat config format using `@typescript-eslint` plugin and Prettier integration\n- Created `.prettierrc` and `.prettierignore` for consistent code formatting\n- Created `.gitignore` with comprehensive ignore rules for Node.js, build outputs, IDE files, and secrets\n- Created `.editorconfig` for cross-editor consistency\n- Created `.env.example` documenting all environment variables\n- Created `config/default.json` with default configuration values\n- Created `vitest.config.ts` for test runner configuration\n- Created core project directory structure: `src/agent/`, `src/services/`, `src/config/`, `src/types/`, `src/utils/`, `tests/unit/`, `tests/integration/`, `config/`\n- Created `src/types/config.ts` with Zod schemas for SSH config, benchmark thresholds, and app config with full validation\n- Created `src/types/agent.ts` with agent state machine types (`AgentState`, `AgentStateKey`) and initial state\n- Created `src/types/benchmark.ts` with `ModelInfo`, `BenchmarkMetrics`, `ToolCallResult`, and `BenchmarkResult` type definitions\n- Created `src/types/index.ts` barrel export\n- Created `src/utils/logger.ts` with Winston logger factory function\n- Created `src/config/index.ts` with `loadConfig()` function that loads from environment variables with Zod validation\n- Created `src/index.ts` main entry point with public API exports\n- Created 3 unit test files (11 tests total) covering config loading, logger creation, types, and Zod schemas\n\n### Files Modified\n- `package.json` (new)\n- `tsconfig.json` (new)\n- `tsup.config.ts` (new)\n- `eslint.config.js` (new)\n- `.prettierrc` (new)\n- `.prettierignore` (new)\n- `.gitignore` (new)\n- `.editorconfig` (new)\n- `.env.example` (new)\n- `vitest.config.ts` (new)\n- `config/default.json` (new)\n- `src/index.ts` (new)\n- `src/types/config.ts` (new)\n- `src/types/agent.ts` (new)\n- `src/types/benchmark.ts` (new)\n- `src/types/index.ts` (new)\n- `src/utils/logger.ts` (new)\n- `src/utils/index.ts` (new)\n- `src/config/index.ts` (new)\n- `src/agent/.gitkeep` (new)\n- `src/services/.gitkeep` (new)\n- `tests/unit/config.test.ts` (new)\n- `tests/unit/logger.test.ts` (new)\n- `tests/unit/types.test.ts` (new)\n- `tests/unit/.gitkeep` (new)\n- `tests/integration/.gitkeep` (new)\n\n### Notes for Developer\n- TypeScript strict mode is enabled with additional checks (`noUncheckedIndexedAccess`, `noImplicitReturns`, etc.)\n- The project uses ESM (`\"type\": \"module\"`) throughout\n- Path alias `@/*` is configured for `src/*` imports\n- Zod schemas provide runtime validation for all configuration\n- The `src/agent/` and `src/services/` directories are empty placeholders ready for the LangGraph agent core and SSH client service features\n- All 11 unit tests pass, TypeScript compiles cleanly, and tsup build produces ESM + declarations\n\n### Verification Status\n- Created a temporary Playwright test (`verify-foundation.spec.ts`) with 7 test cases verifying: directory structure, config files existence, package.json dependencies, build output, source files, unit tests passing, and TypeScript compilation\n- All 7 Playwright tests passed successfully\n- Test file was deleted after verification along with Playwright dev dependency"
+}

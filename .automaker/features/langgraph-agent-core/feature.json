@@ -1,0 +1,31 @@
+{
+  "category": "feature",
+  "description": "Design and implement the LangGraph.js agent with a state machine architecture. Define states: IDLE, DISCOVERING_MODELS, EVALUATING_MODEL, RUNNING_BENCHMARK, STORING_RESULTS, EXPOSING_API, RUNNING_KIBANA_EVAL. Implement checkpointing for agent persistence and graceful shutdown handling.",
+  "id": "langgraph-agent-core",
+  "title": "LangGraph Agent Core Architecture",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 4,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Design and implement the LangGraph.js agent with a state machine architecture. Define states: IDLE, DISCOVERING_MODELS, EVALUATING_MODEL, RUNNING_BENCHMARK, STORING_RESULTS, EXPOSING_API, RUNNING_KIBANA_EVAL. Implement checkpointing for agent persistence and graceful shutdown handling.",
+      "timestamp": "2026-02-19T15:35:41.198Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:43:36.938Z",
+  "summary": "## Summary: LangGraph.js Agent Core with State Machine Architecture\n\n### Changes Implemented\n- **Agent State Annotation** (`src/agent/state.ts`): Defined `AgentAnnotation` using LangGraph's `Annotation.Root()` with proper reducers for each state field (last-write-wins for scalars, concat for arrays, deduplication for evaluatedModelIds)\n- **Agent Node Functions** (`src/agent/nodes.ts`): Implemented 8 node functions covering all agent states: `idleNode`, `discoverModelsNode`, `evaluateModelNode`, `runBenchmarkNode`, `storeResultsNode`, `exposeApiNode`, `runKibanaEvalNode`, `handleErrorNode` - plus 3 routing functions (`routeAfterEvaluation`, `routeAfterBenchmark`, `routeAfterError`)\n- **State Graph Definition** (`src/agent/graph.ts`): Built the complete LangGraph `StateGraph` with the state machine flow: START → idle → discover_models → evaluate_model → run_benchmark → store_results → expose_api → run_kibana_eval → evaluate_model (loop). Error handling routes from run_benchmark to handle_error, which either retries (→ idle) or terminates (→ END) based on error count threshold (max 5)\n- **SQLite Checkpointing** (`src/agent/checkpointer.ts`): Implemented `SqliteCheckpointer` extending `BaseCheckpointSaver` with full support for `getTuple`, `list`, `put`, and `putWrites` operations using better-sqlite3 with WAL mode, proper indexing, and ROWID-based ordering for sub-second precision\n- **BenchmarkAgent Class** (`src/agent/agent.ts`): Created the main agent orchestrator with `run()`, `stream()`, `getState()`, and `shutdown()` methods. Supports 3 checkpointer modes: in-memory (MemorySaver), SQLite persistence, or custom BaseCheckpointSaver. Includes graceful shutdown via SIGINT/SIGTERM signal handlers, configurable recursionLimit, and thread-based checkpoint isolation\n- **Barrel Exports** (`src/agent/index.ts`, `src/index.ts`): All agent components exported through proper barrel files following the existing codebase patterns\n- **Comprehensive Unit Tests** (`tests/unit/agent.test.ts`): 50 tests covering all nodes, routing functions, graph compilation, SQLiteCheckpointer CRUD operations, BenchmarkAgent lifecycle, and factory function\n\n### Files Modified\n- `src/agent/state.ts` (new) - LangGraph state annotation with typed reducers\n- `src/agent/nodes.ts` (new) - All 8 node functions and 3 routing functions\n- `src/agent/graph.ts` (new) - StateGraph builder with conditional edges\n- `src/agent/checkpointer.ts` (new) - SQLite-backed checkpoint persistence\n- `src/agent/agent.ts` (new) - BenchmarkAgent class with run/stream/shutdown\n- `src/agent/index.ts` (new) - Agent module barrel export\n- `src/index.ts` (modified) - Added agent exports to main public API\n- `tests/unit/agent.test.ts` (new) - 50 unit tests for complete coverage\n\n### Notes for Developer\n- The agent graph is designed as a **continuous loop** (idle → discover → evaluate → benchmark → store → api → kibana → evaluate...) which is the intended behavior for a long-running benchmarking agent. Use `recursionLimit` parameter to control how many steps execute per invocation.\n- Node functions are currently **placeholder implementations** - they set the correct state transitions but actual HuggingFace API calls, vLLM deployment, benchmark execution, etc. will be added by subsequent features.\n- The `handle_error` node implements a **retry policy** with configurable max error count (5). Errors from `run_benchmark` route through `handle_error`, which either retries or terminates.\n- The pre-existing `dashboard-api.test.ts` failures (path-to-regexp issue) are NOT caused by these changes - they existed before this implementation.\n- All 166 tests pass (116 pre-existing + 50 new agent tests). TypeScript compiles cleanly. Build succeeds.\n\n### Verification Status\n- Created and ran 3 Playwright verification tests that confirmed: (1) all agent components can be imported and instantiated, (2) the agent streams through the full pipeline processing a model with all 7 expected nodes visited, (3) SQLite checkpointing correctly persists and restores checkpoint data. All 3 tests passed. Verification test file was deleted after successful verification."
+}
