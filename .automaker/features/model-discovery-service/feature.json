@@ -1,0 +1,31 @@
+{
+  "category": "feature",
+  "description": "Implement a service that searches HuggingFace for candidate LLM models. Filter by: text-generation task, context window >= 128K tokens, open-source license, compatible architectures (transformers, MoE). Fetch model cards and config.json to extract context size, architecture type, and quantization options. Track already-evaluated models to avoid re-testing.",
+  "id": "model-discovery-service",
+  "title": "HuggingFace Model Discovery Service",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 5,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement a service that searches HuggingFace for candidate LLM models. Filter by: text-generation task, context window >= 128K tokens, open-source license, compatible architectures (transformers, MoE). Fetch model cards and config.json to extract context size, architecture type, and quantization options. Track already-evaluated models to avoid re-testing.",
+      "timestamp": "2026-02-19T15:35:41.200Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:38:19.134Z",
+  "summary": "## Summary: Implement Model Discovery Service for HuggingFace\n\n### Changes Implemented\n- Created `ModelDiscoveryService` class that searches HuggingFace Hub for candidate LLM models\n- Implemented filtering by: text-generation pipeline task, context window >= 128K tokens, open-source license, compatible architectures (transformers, MoE)\n- Fetches model `config.json` to extract context size (with rope_scaling support), architecture type, and quantization options\n- Tracks already-evaluated models via an in-memory Set to avoid re-testing\n- Supports paginated HuggingFace API search (up to 1000 candidates across 10 pages)\n- Detects tool/function calling support from model tags and naming conventions\n- Extracts parameter count from model names (e.g., \"70B\") and tags\n- Extracts quantization options from config, tags, and model file siblings (GPTQ, AWQ, GGUF, etc.)\n- Validates against a comprehensive set of open-source licenses (MIT, Apache-2.0, Llama variants, Gemma, etc.)\n- Validates against vLLM-compatible architectures (Llama, Mistral, Mixtral, Qwen, DeepSeek, Falcon, etc.)\n- Includes authenticated API access via HuggingFace token\n- Created 48 comprehensive unit tests covering all service functionality\n- Updated service barrel exports and main package exports\n\n### Files Modified\n- `src/services/model-discovery.ts` (NEW) - Main ModelDiscoveryService implementation (~640 lines)\n- `tests/unit/model-discovery.test.ts` (NEW) - 48 unit tests covering discovery, filtering, extraction, and edge cases\n- `src/services/index.ts` - Added ModelDiscoveryService and type exports\n- `src/index.ts` - Added ModelDiscoveryService and type exports to public API\n\n### Notes for Developer\n- The service uses the native `fetch` API (available in Node.js 20+) for HuggingFace API calls\n- All Set iterations use `Array.from()` for compatibility with the project's TypeScript configuration\n- The service follows the same patterns as `ResultsStore`: constructor injection, Winston logging, JSDoc documentation\n- The `evaluatedModelIds` can be pre-seeded from `ResultsStore.getEvaluatedModelIds()` for integration with the existing benchmarking pipeline\n- Pre-existing TypeScript errors in `agent/` and `api/routes.ts` files were not modified (they existed before this change)\n- All 141 tests pass (48 new + 93 pre-existing)\n\n### Verification Status\n- All 48 unit tests pass via Vitest covering: constructor, evaluated model tracking, discovery filtering (context window, license, architecture), HuggingFace API fetching, context window extraction (including rope_scaling), architecture detection and normalization, quantization extraction, tool calling detection, parameter count extraction, license validation (8 open-source licenses tested), authentication headers, model name extraction, error handling, and edge cases\n- Playwright verification test created, executed successfully (2 tests passed), and cleaned up\n- ESLint passes with no errors on the new service file\n- Prettier formatting applied to all new files"
+}

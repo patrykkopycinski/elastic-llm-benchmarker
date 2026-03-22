@@ -54,7 +54,8 @@ export class InteractiveOrchestrator {
 
   private async pollUntilComplete(queueId: string, callback?: (msg: string) => void) {
     const startTime = Date.now();
-    let lastStatus: string | null = null; // Track status changes to reduce spam
+    let lastStatus: string | null = null;
+    let pollInterval = 1000; // Start at 1s for quick feedback
 
     while (true) {
       if (Date.now() - startTime > POLLING_CONFIG.MAX_WAIT_MS) {
@@ -86,7 +87,13 @@ export class InteractiveOrchestrator {
         throw new Error(`Benchmark failed: ${entry.errorMessage || 'Unknown error'}`);
       }
 
-      await new Promise(resolve => setTimeout(resolve, POLLING_CONFIG.POLL_INTERVAL_MS));
+      await new Promise(resolve => setTimeout(resolve, pollInterval));
+
+      // Exponential backoff: 1s → 1.5s → 2.25s → ... → 30s max
+      pollInterval = Math.min(
+        pollInterval * POLLING_CONFIG.BACKOFF_MULTIPLIER,
+        POLLING_CONFIG.MAX_POLL_INTERVAL_MS
+      );
     }
   }
 }

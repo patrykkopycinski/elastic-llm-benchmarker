@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Implement a service that searches HuggingFace for candidate LLM models. Filter by: text-generation task, context window >= 128K tokens, open-source license, compatible architectures (transformers, MoE). Fetch model cards and config.json to extract context size, architecture type, and quantization options. Track already-evaluated models to avoid re-testing.",
+  "id": "model-discovery-service",
+  "title": "HuggingFace Model Discovery Service",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 5,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement a service that searches HuggingFace for candidate LLM models. Filter by: text-generation task, context window >= 128K tokens, open-source license, compatible architectures (transformers, MoE). Fetch model cards and config.json to extract context size, architecture type, and quantization options. Track already-evaluated models to avoid re-testing.",
+      "timestamp": "2026-02-19T15:35:41.200Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:38:19.129Z"
+}

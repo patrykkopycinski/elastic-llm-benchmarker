@@ -1,0 +1,24 @@
+{
+  "category": "enhancement",
+  "description": "Implement comprehensive error handling: SSH connection failures (retry with backoff), Docker container crashes (cleanup and retry), benchmark timeouts (graceful termination), OOM handling (skip model, record failure). Add circuit breaker for repeated failures on same model.",
+  "id": "error-recovery-resilience",
+  "title": "Error Recovery & Resilience System",
+  "dependencies": [
+    "langgraph-agent-core",
+    "continuous-runner-daemon"
+  ],
+  "priority": 23,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement comprehensive error handling: SSH connection failures (retry with backoff), Docker container crashes (cleanup and retry), benchmark timeouts (graceful termination), OOM handling (skip model, record failure). Add circuit breaker for repeated failures on same model.",
+      "timestamp": "2026-02-19T15:35:41.225Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:08:45.053Z"
+}

@@ -1,0 +1,24 @@
+{
+  "category": "feature",
+  "description": "Create a REST API to serve benchmark results for dashboard visualization. Endpoints: GET /models (list all evaluated models with status), GET /models/:id (detailed results), GET /benchmarks (comparison table), GET /stats (aggregated statistics). Support filtering by status, date range, and model family.",
+  "id": "results-dashboard-api",
+  "title": "Results Dashboard API",
+  "dependencies": [
+    "benchmark-results-storage"
+  ],
+  "priority": 17,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Create a REST API to serve benchmark results for dashboard visualization. Endpoints: GET /models (list all evaluated models with status), GET /models/:id (detailed results), GET /benchmarks (comparison table), GET /stats (aggregated statistics). Support filtering by status, date range, and model family.",
+      "timestamp": "2026-02-19T15:35:41.222Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T16:40:53.556Z",
+  "summary": "## Summary: Create REST API for Dashboard Visualization\n\n### Changes Implemented\n- Created a complete REST API server using Express.js 5 to serve benchmark results for dashboard visualization\n- Implemented 4 core endpoints: `GET /api/models` (list all evaluated models with status), `GET /api/models/:org/:name` (detailed results for a specific model), `GET /api/benchmarks` (comparison table of latest results per model), `GET /api/stats` (aggregated statistics)\n- Added health check endpoint at `GET /health`\n- Implemented comprehensive filtering support across all endpoints: filter by status (passed/failed), date range (after/before ISO 8601 timestamps), model family prefix, and GPU type\n- Added pagination support with `limit` and `offset` query parameters\n- Added CORS headers support (configurable, enabled by default)\n- Created `DashboardServer` class with clean start/stop lifecycle management\n- Exported `createDashboardRoutes()` factory function for flexible integration (can mount routes on any Express app)\n- Added 2 bonus endpoints for hardware profiles: `GET /api/hardware-profiles` and `GET /api/hardware-profiles/:id`\n- Wrote 25 comprehensive unit tests covering all endpoints, filtering, pagination, error handling, server configuration, CORS, and custom base paths\n\n### Files Modified\n- `src/api/routes.ts` (new) - Express Router with all dashboard API route handlers and filtering logic\n- `src/api/dashboard-server.ts` (new) - `DashboardServer` class wrapping Express with lifecycle management\n- `src/api/index.ts` (new) - API module barrel exports\n- `src/index.ts` (modified) - Added exports for `DashboardServer`, `DashboardServerOptions`, `createDashboardRoutes`, `DashboardQueryParams`\n- `tests/unit/dashboard-api.test.ts` (new) - 25 unit tests for all API endpoints and server functionality\n- `package.json` (modified) - Added `express` dependency and `@types/express` dev dependency\n\n### Notes for Developer\n- Model IDs containing slashes (e.g., `meta-llama/Llama-3-70B`) are handled via the two-segment route pattern `/models/:org/:name`\n- The `DashboardServer` accepts a `ResultsStore` instance, making it easy to integrate with existing database setups\n- The `createDashboardRoutes()` function can be used standalone to mount on any Express app via `app.use('/api', createDashboardRoutes(store))`\n- Pre-existing test failures in `results-store.test.ts` (35 tests) are unrelated — they stem from the `disk_gb` NOT NULL column being added to the schema without updating that test file's mock data\n- Express 5 is used (installed version 5.2.1) with the new `path-to-regexp` v8 syntax\n\n### Verification Status\n- All 25 unit tests pass via Vitest covering: GET /api/models (7 tests), GET /api/models/:org/:name (3 tests), GET /api/benchmarks (5 tests), GET /api/stats (5 tests), DashboardServer class (5 tests)\n- Feature verified with 11 Playwright end-to-end tests against a live server with seeded data — all 11 tests passed, confirming health check, model listing, model detail, 404 handling, benchmark comparison, stats aggregation, filtering by status/family/date, and CORS headers\n- Temporary Playwright test files were deleted after successful verification"
+}

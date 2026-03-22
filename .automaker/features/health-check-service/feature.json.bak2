@@ -1,0 +1,29 @@
+{
+  "category": "feature",
+  "description": "Implement health checking for deployed vLLM instances. Poll /health and /v1/models endpoints with configurable timeout (default 600s). Detect fatal errors from container logs (OOM, CUDA errors, gated repo access, architecture not supported). Provide detailed error classification for failure analysis.",
+  "id": "health-check-service",
+  "title": "VLLM Health Check & Readiness Service",
+  "dependencies": [
+    "vllm-deployment-service"
+  ],
+  "priority": 8,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement health checking for deployed vLLM instances. Poll /health and /v1/models endpoints with configurable timeout (default 600s). Detect fatal errors from container logs (OOM, CUDA errors, gated repo access, architecture not supported). Provide detailed error classification for failure analysis.",
+      "timestamp": "2026-02-19T15:35:41.217Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:48:36.174Z"
+}

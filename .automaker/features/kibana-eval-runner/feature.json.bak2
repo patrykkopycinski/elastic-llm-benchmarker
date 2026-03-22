@@ -1,0 +1,24 @@
+{
+  "category": "feature",
+  "description": "Implement the evaluation framework for testing models via Kibana's Agent builder features. Define evaluation tasks, success criteria, and scoring methodology. Run evaluations against the created connector and collect results. Store evaluation outcomes linked to benchmark results.",
+  "id": "kibana-eval-runner",
+  "title": "Kibana Agent Builder LLM Evaluation Runner",
+  "dependencies": [
+    "kibana-connector-integration",
+    "benchmark-results-storage"
+  ],
+  "priority": 16,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement the evaluation framework for testing models via Kibana's Agent builder features. Define evaluation tasks, success criteria, and scoring methodology. Run evaluations against the created connector and collect results. Store evaluation outcomes linked to benchmark results.",
+      "timestamp": "2026-02-19T15:35:41.222Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:26:01.451Z"
+}

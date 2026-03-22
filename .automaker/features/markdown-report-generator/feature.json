@@ -1,0 +1,25 @@
+{
+  "category": "feature",
+  "description": "Implement automatic generation of markdown reports in the format of MODEL_EVALUATION_LOG.md. Include: summary statistics, approved/rejected model tables, detailed benchmark data, changelog entries. Auto-update on each benchmark completion. Support both full reports and incremental updates.",
+  "id": "markdown-report-generator",
+  "title": "Markdown Report Generator",
+  "dependencies": [
+    "benchmark-results-storage",
+    "model-evaluation-engine"
+  ],
+  "priority": 19,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement automatic generation of markdown reports in the format of MODEL_EVALUATION_LOG.md. Include: summary statistics, approved/rejected model tables, detailed benchmark data, changelog entries. Auto-update on each benchmark completion. Support both full reports and incremental updates.",
+      "timestamp": "2026-02-19T15:35:41.223Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:27:44.265Z",
+  "summary": "## Summary: Markdown Report Generator\n\n### Changes Implemented\n- Created `MarkdownReportGenerator` service class (`src/services/markdown-report-generator.ts`) that generates comprehensive markdown reports from benchmark results\n  - Summary statistics section (total models, approved/rejected/conditional counts, avg metrics)\n  - Approved models table with key performance metrics (ITL, TTFT, throughput, P99 latency, tool call success, GPU, timestamp)\n  - Conditional models table showing limitations and partial metrics\n  - Rejected models table with rejection reasons and failed criteria\n  - Detailed benchmark data per model including multi-concurrency performance tables, tool call results, and evaluation criteria\n  - Changelog section grouped by date with classification badges\n  - Supports configurable options: output path, title, toggle sections, max changelog entries\n  - Both full report generation (`generateFullReport()`) and incremental updates (`updateReport()`)\n  - Deduplicates models by keeping latest result per model ID\n- Added CLI `report` command to `src/cli.ts` for on-demand markdown report generation with options:\n  - `--output <path>`: custom output file path\n  - `--title <title>`: custom report title\n  - `--no-details`: omit detailed benchmark data\n  - `--no-changelog`: omit changelog section\n  - `--max-changelog <n>`: limit changelog entries\n  - `--db <path>`: custom database path\n- Integrated auto-update on benchmark completion in the daemon (`src/cli.ts` daemon start command):\n  - Listens for `cycle_complete` events and regenerates the markdown report automatically\n  - Writes to `<resultsDir>/MODEL_EVALUATION_LOG.md`\n- Added exports to `src/services/index.ts` and `src/index.ts` for `MarkdownReportGenerator`, `MarkdownReportOptions`, and `ChangelogEntry`\n\n### Files Modified\n- `src/services/markdown-report-generator.ts` (NEW - 650 lines) — core report generator service\n- `src/services/index.ts` — added MarkdownReportGenerator exports\n- `src/index.ts` — added MarkdownReportGenerator exports to main barrel\n- `src/cli.ts` — added `report` CLI command and daemon auto-update integration\n\n### Verification Status\n- All 4 Playwright verification tests passed successfully:\n  1. Empty report generation when no results exist\n  2. Full report generation with approved/rejected model data (verified all sections: summary stats, model tables, detailed benchmarks, changelog, metadata)\n  3. Incremental update via `updateReport()` with new model addition\n  4. Report options (no-details, no-changelog, custom title) all work correctly\n- TypeScript compilation clean (no new errors)\n- 764/764 existing unit tests pass (5 pre-existing failures in unrelated `dashboard-api.test.ts`)\n- Temporary Playwright test files deleted after verification\n\n### Notes for Developer\n- The report auto-updates after each daemon benchmark cycle by listening to `cycle_complete` events\n- Reports are written to `<resultsDir>/MODEL_EVALUATION_LOG.md` by default when run from daemon\n- The `updateReport()` method re-queries the ResultsStore and regenerates the full report to ensure consistency\n- Classification badges use GitHub-compatible emoji shortcodes (`:green_circle:`, `:yellow_circle:`, `:red_circle:`)\n- The DTS build has a pre-existing error in `graph.ts` (unused import) that prevents `.d.ts` generation but ESM/JS build succeeds"
+}

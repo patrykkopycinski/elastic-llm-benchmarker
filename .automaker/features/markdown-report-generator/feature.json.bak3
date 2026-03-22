@@ -1,0 +1,23 @@
+{
+  "category": "feature",
+  "description": "Implement automatic generation of markdown reports in the format of MODEL_EVALUATION_LOG.md. Include: summary statistics, approved/rejected model tables, detailed benchmark data, changelog entries. Auto-update on each benchmark completion. Support both full reports and incremental updates.",
+  "id": "markdown-report-generator",
+  "title": "Markdown Report Generator",
+  "dependencies": [
+    "benchmark-results-storage",
+    "model-evaluation-engine"
+  ],
+  "priority": 19,
+  "status": "backlog",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement automatic generation of markdown reports in the format of MODEL_EVALUATION_LOG.md. Include: summary statistics, approved/rejected model tables, detailed benchmark data, changelog entries. Auto-update on each benchmark completion. Support both full reports and incremental updates.",
+      "timestamp": "2026-02-19T15:35:41.223Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false
+}

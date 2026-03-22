@@ -1,0 +1,10 @@
+{
+  "savedAt": "2026-02-19T16:37:34.435Z",
+  "prompt": "I would like to be able to start building local AI agent based on LangSmith Deployment and Agent builder https://docs.langchain.com/langsmith/deployments. I have Enterprise Langsmith license, so I should be able to deploy Langsmith locally on K8s. Please deploy it and make sure the Agent I have asked to build for vllm model evals also could be deployed there. Make sure it's using Typescript SDK and libraries where possible",
+  "model": "claude-opus-4-6",
+  "result": {
+    "changes": [],
+    "summary": "Failed to parse AI response",
+    "dependencyUpdates": []
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Port the SSH client functionality from thePoC (ssh_client.mjs) to TypeScript. Implement connection pooling, command execution with timeouts, sudo support, and file transfer capabilities. Include error handling for common SSH failures and reconnection logic.",
+  "id": "ssh-client-service",
+  "title": "SSH Client Service for VM Communication",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 3,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Port the SSH client functionality from thePoC (ssh_client.mjs) to TypeScript. Implement connection pooling, command execution with timeouts, sudo support, and file transfer capabilities. Include error handling for common SSH failures and reconnection logic.",
+      "timestamp": "2026-02-19T15:35:41.197Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:41:37.446Z"
+}

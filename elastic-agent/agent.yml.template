@@ -1,0 +1,84 @@
+# Elastic Agent configuration template for LLM benchmark host monitoring
+#
+# USAGE:
+# 1. Copy this file to agent.yml (or elastic-agent.yml)
+# 2. Replace ${ELASTICSEARCH_URL} with your Elasticsearch endpoint (e.g. https://my-deployment.es.us-central1.gcp.cloud.es.io:9200)
+# 3. Replace ${ELASTICSEARCH_API_KEY} with a valid API key with ingest privileges
+# 4. Deploy to the VM and run: elastic-agent run -c agent.yml
+#
+# For variable substitution, use env vars or a preprocessor before deploying.
+
+outputs:
+  default:
+    type: elasticsearch
+    hosts: ["${ELASTICSEARCH_URL}"]
+    api_key: "${ELASTICSEARCH_API_KEY}"
+
+inputs:
+  # ─── System metrics (CPU, memory, disk I/O, network) ─────────────────────────
+  # Host-level metrics collected every 30 seconds.
+  - type: system/metrics
+    id: system-metrics
+    data_stream.namespace: default
+    use_output: default
+    streams:
+      - metricsets: [cpu]
+        data_stream.dataset: system.cpu
+        period: 30s
+      - metricsets: [memory]
+        data_stream.dataset: system.memory
+        period: 30s
+      - metricsets: [diskio]
+        data_stream.dataset: system.diskio
+        period: 30s
+      - metricsets: [network]
+        data_stream.dataset: system.network
+        period: 30s
+
+  # ─── Docker container logs ───────────────────────────────────────────────────
+  # Collects logs from containers. Path pattern matches Docker's default log layout.
+  # Requires: read access to /var/lib/docker/containers and Docker socket for metadata.
+  # To filter by container name (e.g. vllm-*, ollama-*), add a processors section
+  # with a condition on docker.container.name, or use the Docker integration's built-in
+  # filtering when available.
+  - type: filestream
+    id: docker-container-logs
+    data_stream.namespace: default
+    use_output: default
+    prospector.scanner.symlinks: true
+    parsers:
+      - container:
+          stream: stdout
+          format: docker
+    paths:
+      - /var/lib/docker/containers/*/*-json.log
+
+  # ─── Docker container metrics ─────────────────────────────────────────────────
+  # Metrics from Docker containers (CPU, memory, network, diskio). Period must be
+  # >= 3s (Docker API can take up to 2s per request). Filter for vllm-* and ollama-*
+  # containers by adding a stream-level condition if your agent supports it.
+  - type: docker/metrics
+    id: docker-metrics
+    data_stream.namespace: default
+    use_output: default
+    hosts: ["unix:///var/run/docker.sock"]
+    streams:
+      - data_stream.dataset: docker.container
+        period: 30s
+      - data_stream.dataset: docker.cpu
+        period: 30s
+      - data_stream.dataset: docker.memory
+        period: 30s
+      - data_stream.dataset: docker.network
+        period: 30s
+      - data_stream.dataset: docker.diskio
+        period: 30s
+
+  # ─── NVIDIA GPU metrics (placeholder) ─────────────────────────────────────────
+  # Custom integration or nvidia_smi-based collector. Uncomment and configure when
+  # the NVIDIA GPU integration is available, or replace with your custom collector.
+  # - type: nvidia_gpu/metrics
+  #   id: nvidia-gpu-metrics
+  #   data_stream.namespace: default
+  #   use_output: default
+  #   period: 30s

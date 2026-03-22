@@ -1,0 +1,31 @@
+{
+  "category": "feature",
+  "description": "Port the SSH client functionality from thePoC (ssh_client.mjs) to TypeScript. Implement connection pooling, command execution with timeouts, sudo support, and file transfer capabilities. Include error handling for common SSH failures and reconnection logic.",
+  "id": "ssh-client-service",
+  "title": "SSH Client Service for VM Communication",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 3,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Port the SSH client functionality from thePoC (ssh_client.mjs) to TypeScript. Implement connection pooling, command execution with timeouts, sudo support, and file transfer capabilities. Include error handling for common SSH failures and reconnection logic.",
+      "timestamp": "2026-02-19T15:35:41.197Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:41:37.451Z",
+  "summary": "## Summary: SSH Client Service for VM Communication\n\n### Changes Implemented\n- Created a comprehensive SSH client service (`SSHClientPool`) with connection pooling for managing SSH connections to remote VMs\n- Implemented command execution with configurable timeouts, supporting both synchronous result capture (stdout, stderr, exit code, signal)\n- Added sudo command support with password-based authentication (via stdin pipe for security)\n- Implemented working directory (`cwd`) support for command execution\n- Built SFTP file transfer capabilities: `upload`, `download`, `uploadContent`, and `downloadContent`\n- Implemented automatic connection pooling with key-based deduplication (host:port:username)\n- Added reconnection logic with configurable retry attempts and exponential backoff\n- Created idle connection timeout with automatic cleanup\n- Implemented keep-alive heartbeat support via ssh2's built-in keepalive\n- Built a rich error hierarchy: `SSHError` (base), `SSHConnectionError`, `SSHTimeoutError`, `SSHTransferError`\n- Added connection status monitoring via `getStatus()`, `isConnected()`, `disconnect()`, and `close()` methods\n- Supports both password and private key authentication (reads key files from disk)\n- Created comprehensive unit test suite with 36 tests using mocked ssh2 library\n- Updated service barrel exports (`src/services/index.ts`) and main package exports (`src/index.ts`)\n\n### Files Modified\n- `src/services/ssh-client.ts` (NEW) - Main SSH client service implementation (~640 lines)\n- `tests/unit/ssh-client.test.ts` (NEW) - Unit test suite with 36 tests\n- `src/services/index.ts` - Added SSH client exports\n- `src/index.ts` - Added SSH client public API exports\n\n### Notes for Developer\n- The service follows the same patterns as `ResultsStore` and `ModelDiscoveryService`: class-based with constructor dependency injection of log level via `createLogger()`\n- Uses the existing `SSHConfig` type from `src/types/config.ts` (with Zod validation for host, port, username, password/privateKeyPath)\n- The `ssh2` package (v1.16.0) and `@types/ssh2` (v1.15.0) were already installed as dependencies\n- Pre-existing test failures in `tests/unit/dashboard-api.test.ts` (path-to-regexp issue) and `tests/unit/results-store.test.ts` (missing disk_gb column) are unrelated to this change\n- Pre-existing TypeScript errors in `src/agent/nodes.ts` (unused variables) are unrelated to this change\n- The connection pool supports multiple concurrent connections per host (configurable via `maxConnectionsPerHost`)\n\n### Verification Status\n- 36 unit tests pass covering: connection pooling, command execution, sudo support, timeout handling, file upload/download, content upload/download, error classes, connection status, authentication methods, and pool lifecycle\n- 8 Playwright verification tests confirmed the built module exports all expected classes and functions, instantiation works correctly, error inheritance chains are proper, and the pool correctly rejects operations after close\n- All source files pass ESLint linting with zero errors\n- TypeScript typecheck produces no errors related to SSH client code\n- Build (`tsup`) succeeds and produces correct dist output including the SSH client service"
+}

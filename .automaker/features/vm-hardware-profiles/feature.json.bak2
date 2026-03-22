@@ -1,0 +1,23 @@
+{
+  "category": "feature",
+  "description": "Design a system for managing different VM hardware configurations. Initially support the existing2x A100 80GB profile. Plan for future profiles: A60, different memory configs, varying GPU counts. Store hardware profile with each benchmark for accurate comparisons.",
+  "id": "vm-hardware-profiles",
+  "title": "VM Hardware Profile Management",
+  "dependencies": [
+    "configuration-management"
+  ],
+  "priority": 20,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Design a system for managing different VM hardware configurations. Initially support the existing2x A100 80GB profile. Plan for future profiles: A60, different memory configs, varying GPU counts. Store hardware profile with each benchmark for accurate comparisons.",
+      "timestamp": "2026-02-19T15:35:41.224Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T16:35:08.955Z"
+}

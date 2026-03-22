@@ -1,0 +1,24 @@
+{
+  "category": "feature",
+  "description": "Implement API client to create Kibana Connectors pointing to the exposed VLLM endpoint. Configure connector with model details, API endpoint URL, and authentication. Support configurable Kibana URL target. This enables the Agent builder LLM features evaluation workflow.",
+  "id": "kibana-connector-integration",
+  "title": "Kibana Connector Creation Integration",
+  "dependencies": [
+    "ngrok-tunnel-service",
+    "model-evaluation-engine"
+  ],
+  "priority": 15,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement API client to create Kibana Connectors pointing to the exposed VLLM endpoint. Configure connector with model details, API endpoint URL, and authentication. Support configurable Kibana URL target. This enables the Agent builder LLM features evaluation workflow.",
+      "timestamp": "2026-02-19T15:35:41.221Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:26:00.170Z"
+}

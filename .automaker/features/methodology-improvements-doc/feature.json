@@ -1,0 +1,24 @@
+{
+  "category": "enhancement",
+  "description": "Create a living document (METHODOLOGY_IMPROVEMENTS.md) proposing enhancements to the evaluation approach. Include: additional benchmark scenarios, quality metrics beyond speed, reasoning capability tests, multi-turn conversation evaluation, code generation benchmarks, comparison with industry benchmarks (LMSYS, OpenRouter).",
+  "id": "methodology-improvements-doc",
+  "title": "Evaluation Methodology Improvements Document",
+  "dependencies": [
+    "model-evaluation-engine"
+  ],
+  "priority": 21,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Create a living document (METHODOLOGY_IMPROVEMENTS.md) proposing enhancements to the evaluation approach. Include: additional benchmark scenarios, quality metrics beyond speed, reasoning capability tests, multi-turn conversation evaluation, code generation benchmarks, comparison with industry benchmarks (LMSYS, OpenRouter).",
+      "timestamp": "2026-02-19T15:35:41.224Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:20:26.335Z",
+  "summary": "## Summary: Create METHODOLOGY_IMPROVEMENTS.md Living Document\n\n### Changes Implemented\n- Created comprehensive `METHODOLOGY_IMPROVEMENTS.md` document proposing enhancements to the evaluation approach\n- The document includes 8 major sections plus 3 appendices:\n  1. **Current Methodology Overview** — Documents the existing 3-stage pipeline (pre-filtering, benchmarking, classification) with all current thresholds\n  2. **Additional Benchmark Scenarios** — High-concurrency stress testing (64, 128, 256), long-context benchmarks (4K→128K tokens), heterogeneous workload simulation, cold-start/warm-up benchmarks\n  3. **Quality Metrics Beyond Speed** — Output accuracy/faithfulness (SQuAD-style QA, ROUGE-L summarization), output consistency, safety/alignment tests, structured JSON output reliability\n  4. **Reasoning Capability Tests** — Multi-step logical reasoning (math, logic, causal, planning), agentic tool-use reasoning with multi-step scenarios, needle-in-a-haystack context utilization tests\n  5. **Multi-Turn Conversation Evaluation** — Context coherence over turns, multi-turn tool calling workflows, long-conversation performance degradation analysis\n  6. **Code Generation Benchmarks** — HumanEval/MBPP execution, practical code tasks (REST APIs, DB queries, unit tests, bug fixes), TypeScript-specific evaluation\n  7. **Comparison with Industry Benchmarks** — LMSYS Chatbot Arena (Elo ratings), OpenRouter performance data, HuggingFace Open LLM Leaderboard (MMLU, ARC, HellaSwag, GSM8K, TruthfulQA), cross-benchmark correlation dashboard\n  8. **Implementation Roadmap** — 5-phase plan from quick wins (1-2 weeks) to advanced scenarios (8+ weeks) with effort/impact/priority ratings\n  - **Appendix A**: Proposed TypeScript type extensions (QualityMetrics, ReasoningMetrics, MultiTurnMetrics, CodeGenMetrics, IndustryBenchmarkData, ExtendedModelEvaluationReport)\n  - **Appendix B**: Updated classification proposal with 8 new criteria (3 HARD, 5 PREFERRED)\n  - **Appendix C**: References to all industry benchmarks and tools\n\n### Files Modified\n- `METHODOLOGY_IMPROVEMENTS.md` — **NEW** — comprehensive living document (~400 lines)\n\n### Notes for Developer\n- The document accurately reflects the current project's evaluation methodology as implemented in `model-evaluation-engine.ts`, `benchmark-runner.ts`, and `tool-call-benchmark.ts`\n- All proposed thresholds are calibrated against the existing hard/preferred criteria framework\n- TypeScript type extensions in Appendix A are designed to extend the existing `ModelEvaluationReport` interface\n- The implementation roadmap is structured in 5 phases for incremental adoption — Phase 1 can be implemented with minimal code changes\n- Industry benchmark integrations (LMSYS, OpenRouter, HF Leaderboard) have API-level implementation notes\n\n### Verification Status\n- Created a Playwright test suite with 16 tests verifying document existence, structure, all required sections (additional benchmarks, quality metrics, reasoning tests, multi-turn evaluation, code generation, industry benchmarks), accurate project threshold references, and proposed criteria coverage\n- All 16 tests passed successfully\n- Verification test file was deleted after successful verification"
+}

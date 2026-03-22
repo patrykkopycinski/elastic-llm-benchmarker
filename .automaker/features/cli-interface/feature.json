@@ -1,0 +1,25 @@
+{
+  "category": "feature",
+  "description": "Create a CLI tool for interacting with the agent: start/stop daemon, trigger immediate benchmark of specific model, view current status, query results, export reports. Use commander.js or similar for argument parsing. Support both interactive and scriptable modes.",
+  "id": "cli-interface",
+  "title": "CLI Interface for Agent Control",
+  "dependencies": [
+    "continuous-runner-daemon",
+    "benchmark-results-storage"
+  ],
+  "priority": 25,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Create a CLI tool for interacting with the agent: start/stop daemon, trigger immediate benchmark of specific model, view current status, query results, export reports. Use commander.js or similar for argument parsing. Support both interactive and scriptable modes.",
+      "timestamp": "2026-02-19T15:35:41.226Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:03:46.455Z",
+  "summary": "## Summary: Create CLI Tool for Agent Interaction\n\n### Changes Implemented\n- Created a comprehensive CLI tool (`src/cli.ts`) using commander.js for interacting with the benchmarking agent\n- **`start` command**: Starts the benchmarking daemon with PID file management, configurable max-cycles, sleep-interval, and log-level options. Supports JSON event streaming for scriptable mode.\n- **`stop` command**: Stops the running daemon via PID file lookup with graceful SIGTERM or forced SIGKILL shutdown, configurable timeout, and stale PID file cleanup.\n- **`status` command**: Displays comprehensive status including daemon running state (PID, uptime, cycles, errors), results database summary (total/passed/failed/pass-rate), and configuration info. Supports both human-readable and JSON output.\n- **`benchmark` command**: Triggers an immediate benchmark run with optional specific model targeting (`--model`), configurable recursion limit, and thread ID for checkpointing. Handles the expected recursion-limit-reached behavior gracefully.\n- **`results` command**: Queries stored benchmark results with rich filtering (model ID, status, date range, GPU type), pagination (limit/offset), sort order, and a `--summary` mode for per-model summaries. Color-coded PASSED/FAILED output in terminal.\n- **`export` command**: Exports benchmark results as JSON or CSV reports to a file or stdout, with the same filtering options as the results command.\n- **Global options**: `--json` flag for scriptable JSON output across all commands, `-c/--config` for custom config file path, `--version` flag.\n- Added `bin` entries in package.json for both `elastic-llm-benchmarker` and `elbench` short alias\n- Added `cli` npm script for development use (`tsx src/cli.ts`)\n- Updated tsup.config.ts to build both the library entry and CLI entry, with DTS generation only for the library\n\n### Files Modified\n- `src/cli.ts` (new) - Complete CLI implementation (~907 lines) with 6 commands, helpers for PID management, CSV export, duration formatting\n- `package.json` - Added `bin` field with two aliases and `cli` script\n- `tsup.config.ts` - Updated to build both `src/index.ts` and `src/cli.ts` entries, with DTS restricted to library only\n\n### Notes for Developer\n- The CLI uses the existing `commander` dependency (already in package.json)\n- PID file defaults to `./data/daemon.pid` for daemon process management\n- The `--json` global flag enables structured JSON output on all commands, making it fully scriptable for CI/CD pipelines\n- Human-readable output uses stderr for status messages, keeping stdout clean for data piping\n- The `results` and `export` commands accept `--db` to specify a custom database path\n- TypeScript compilation passes cleanly (`tsc --noEmit` = 0 errors)\n- ESLint passes cleanly on `src/cli.ts` (0 warnings, 0 errors)\n- Pre-existing DTS build error in `src/services/error-recovery.ts` is unrelated to this change\n- Pre-existing test failures in `dashboard-api.test.ts` (Express 5 path-to-regexp issue) are unrelated\n\n### Verification Status\n- Created and ran a Playwright test suite with 15 test cases covering:\n  - Version output (`--version`)\n  - Main help output with all 6 commands listed\n  - Individual command help for start, stop, benchmark, results, export\n  - JSON status output structure validation\n  - Text-mode status output content verification\n  - Error handling for missing database (both text and JSON modes)\n  - Stop command behavior with missing PID file and stale PID file\n  - Global `--json` and `--config` flag recognition\n- **All 15 Playwright tests passed** (4.5s runtime)\n- Temporary test files (`cli-verification.spec.ts`, `playwright.config.ts`) were deleted after verification"
+}

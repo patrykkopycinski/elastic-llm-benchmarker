@@ -1,0 +1,280 @@
+{
+  "version": 1,
+  "notifications": [
+    {
+      "id": "7a07c05c-344e-4ed6-a373-47b0eb6d4506",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"project-foundation\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:23:49.685Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "project-foundation",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "e185d23d-c5b4-45cf-8133-8944506e1a3a",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"benchmark-results-storage\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:29:52.020Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "benchmark-results-storage",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "14ab40d1-9e11-4c71-b6d3-78087678d4da",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"configuration-management\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:30:14.283Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "configuration-management",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "3d6819df-2cea-4aa8-837d-19c44eaacdd6",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"model-discovery-service\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:38:19.131Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "model-discovery-service",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "8ebbc119-0d1f-4c04-b6c4-63747765ff79",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"results-dashboard-api\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:40:53.554Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "results-dashboard-api",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "c3ef648a-c786-4744-b1f5-5647e76857d7",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"ssh-client-service\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:41:37.449Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "ssh-client-service",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "2b09745f-8ec3-4a4d-948a-2d0d936a0c36",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"langgraph-agent-core\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:43:36.934Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "langgraph-agent-core",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "88863817-cf35-4f01-9ba6-4508b72f1e85",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"vm-hardware-profiles\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:43:52.443Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "vm-hardware-profiles",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "1b029661-d688-430d-ae16-a862e7065a06",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"model-candidate-filter\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:46:12.331Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "model-candidate-filter",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "59bfc42a-b37f-4ed4-bb30-b6c413f7559f",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"vllm-deployment-service\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:48:35.034Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "vllm-deployment-service",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "6fd571c8-c9c8-44c1-9d44-3b54268a0af6",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"continuous-runner-daemon\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:55:06.962Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "continuous-runner-daemon",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "61d8eec9-287e-4c86-8a4e-fedd21d70dc8",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"results-dashboard-ui\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:56:29.067Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "results-dashboard-ui",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "4fea191c-3618-4257-8860-61686cc064f7",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"health-check-service\" has been verified and is complete.",
+      "createdAt": "2026-02-19T16:58:01.755Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "health-check-service",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "440e3d78-39a0-41b2-90e0-d48ff056e086",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"cli-interface\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:03:46.446Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "cli-interface",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "9516b24a-f180-42a3-b01f-fab0f5200115",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"tool-calling-benchmark\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:05:57.504Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "tool-calling-benchmark",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "69aab696-e891-49ed-be60-7b877161eace",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"vllm-benchmark-runner\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:07:35.943Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "vllm-benchmark-runner",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "22a0b483-3537-407a-934a-7297cca8c298",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"error-recovery-resilience\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:08:45.055Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "error-recovery-resilience",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "4619be28-9653-4c6b-9941-10caafe472e3",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"ngrok-tunnel-service\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:12:36.870Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "ngrok-tunnel-service",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "495bdc21-0bbe-4e08-b4b3-c8f85dca49c6",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"model-evaluation-engine\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:14:45.072Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "model-evaluation-engine",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "eed1556a-2ada-4b89-a3f2-058965d010f1",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"methodology-improvements-doc\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:20:26.305Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "methodology-improvements-doc",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "6a410dd2-849b-462c-b699-5120df16824f",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"ollama-engine-support\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:21:36.656Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "ollama-engine-support",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "e82e2a8e-a916-49c6-94ab-d4788a7dfe21",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"kibana-connector-integration\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:26:00.172Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "kibana-connector-integration",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "2e7a7655-c9a6-4c4a-95e8-864236f5641e",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"notification-system\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:27:10.952Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "notification-system",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "4e4b7051-3b40-4860-97e6-80de2a61a67c",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"markdown-report-generator\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:27:44.263Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "markdown-report-generator",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    },
+    {
+      "id": "96d2e82f-9bde-4155-8673-9ae6ea779b49",
+      "type": "feature_verified",
+      "title": "Feature Verified",
+      "message": "\"kibana-eval-runner\" has been verified and is complete.",
+      "createdAt": "2026-02-19T17:39:40.076Z",
+      "read": false,
+      "dismissed": false,
+      "featureId": "kibana-eval-runner",
+      "projectPath": "/Users/patrykkopycinski/Projects/automaker/elastic-llm-benchmarker"
+    }
+  ]
+}

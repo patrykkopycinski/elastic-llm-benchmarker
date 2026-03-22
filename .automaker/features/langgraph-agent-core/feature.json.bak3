@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Design and implement the LangGraph.js agent with a state machine architecture. Define states: IDLE, DISCOVERING_MODELS, EVALUATING_MODEL, RUNNING_BENCHMARK, STORING_RESULTS, EXPOSING_API, RUNNING_KIBANA_EVAL. Implement checkpointing for agent persistence and graceful shutdown handling.",
+  "id": "langgraph-agent-core",
+  "title": "LangGraph Agent Core Architecture",
+  "dependencies": [
+    "project-foundation",
+    "configuration-management"
+  ],
+  "priority": 4,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Design and implement the LangGraph.js agent with a state machine architecture. Define states: IDLE, DISCOVERING_MODELS, EVALUATING_MODEL, RUNNING_BENCHMARK, STORING_RESULTS, EXPOSING_API, RUNNING_KIBANA_EVAL. Implement checkpointing for agent persistence and graceful shutdown handling.",
+      "timestamp": "2026-02-19T15:35:41.198Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:30:17.164Z"
+}

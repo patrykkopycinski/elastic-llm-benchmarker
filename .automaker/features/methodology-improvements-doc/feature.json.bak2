@@ -1,0 +1,23 @@
+{
+  "category": "enhancement",
+  "description": "Create a living document (METHODOLOGY_IMPROVEMENTS.md) proposing enhancements to the evaluation approach. Include: additional benchmark scenarios, quality metrics beyond speed, reasoning capability tests, multi-turn conversation evaluation, code generation benchmarks, comparison with industry benchmarks (LMSYS, OpenRouter).",
+  "id": "methodology-improvements-doc",
+  "title": "Evaluation Methodology Improvements Document",
+  "dependencies": [
+    "model-evaluation-engine"
+  ],
+  "priority": 21,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Create a living document (METHODOLOGY_IMPROVEMENTS.md) proposing enhancements to the evaluation approach. Include: additional benchmark scenarios, quality metrics beyond speed, reasoning capability tests, multi-turn conversation evaluation, code generation benchmarks, comparison with industry benchmarks (LMSYS, OpenRouter).",
+      "timestamp": "2026-02-19T15:35:41.224Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T17:14:49.711Z"
+}

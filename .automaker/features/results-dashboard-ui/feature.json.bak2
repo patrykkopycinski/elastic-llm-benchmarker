@@ -1,0 +1,23 @@
+{
+  "category": "feature",
+  "description": "Build a web dashboard (React/Vite) displaying: model comparison table (like MODEL_EVALUATION_LOG.md format), status badges (Approved/Conditional/Rejected), performance charts (throughput, latency), tool calling success rates, historical trends. Support sorting, filtering, and export to CSV/JSON.",
+  "id": "results-dashboard-ui",
+  "title": "Results Dashboard Web UI",
+  "dependencies": [
+    "results-dashboard-api"
+  ],
+  "priority": 18,
+  "status": "in_progress",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Build a web dashboard (React/Vite) displaying: model comparison table (like MODEL_EVALUATION_LOG.md format), status badges (Approved/Conditional/Rejected), performance charts (throughput, latency), tool calling success rates, historical trends. Support sorting, filtering, and export to CSV/JSON.",
+      "timestamp": "2026-02-19T15:35:41.223Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false,
+  "updatedAt": "2026-02-19T16:40:53.762Z"
+}

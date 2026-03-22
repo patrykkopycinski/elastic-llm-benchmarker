@@ -1,0 +1,23 @@
+{
+  "category": "feature",
+  "description": "Create a CLI tool for interacting with the agent: start/stop daemon, trigger immediate benchmark of specific model, view current status, query results, export reports. Use commander.js or similar for argument parsing. Support both interactive and scriptable modes.",
+  "id": "cli-interface",
+  "title": "CLI Interface for Agent Control",
+  "dependencies": [
+    "continuous-runner-daemon",
+    "benchmark-results-storage"
+  ],
+  "priority": 25,
+  "status": "backlog",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Create a CLI tool for interacting with the agent: start/stop daemon, trigger immediate benchmark of specific model, view current status, query results, export reports. Use commander.js or similar for argument parsing. Support both interactive and scriptable modes.",
+      "timestamp": "2026-02-19T15:35:41.226Z",
+      "source": "initial"
+    }
+  ],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "skipTests": false
+}

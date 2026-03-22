@@ -1,0 +1,30 @@
+{
+  "category": "feature",
+  "description": "Implement health checking for deployed vLLM instances. Poll /health and /v1/models endpoints with configurable timeout (default 600s). Detect fatal errors from container logs (OOM, CUDA errors, gated repo access, architecture not supported). Provide detailed error classification for failure analysis.",
+  "id": "health-check-service",
+  "title": "VLLM Health Check & Readiness Service",
+  "dependencies": [
+    "vllm-deployment-service"
+  ],
+  "priority": 8,
+  "status": "verified",
+  "branchName": "main",
+  "descriptionHistory": [
+    {
+      "description": "Implement health checking for deployed vLLM instances. Poll /health and /v1/models endpoints with configurable timeout (default 600s). Detect fatal errors from container logs (OOM, CUDA errors, gated repo access, architecture not supported). Provide detailed error classification for failure analysis.",
+      "timestamp": "2026-02-19T15:35:41.217Z",
+      "source": "initial"
+    }
+  ],
+  "skipTests": false,
+  "model": "claude-opus",
+  "thinkingLevel": "none",
+  "reasoningEffort": "none",
+  "imagePaths": [],
+  "textFilePaths": [],
+  "planningMode": "full",
+  "requirePlanApproval": false,
+  "workMode": "custom",
+  "updatedAt": "2026-02-19T16:58:01.756Z",
+  "summary": "## Summary: Implement Health Check Service for vLLM Instances\n\n### Changes Implemented\n- Created a new `HealthCheckService` class (`src/services/health-check.ts`) that provides comprehensive health monitoring for deployed vLLM instances\n- Polls both `/health` and `/v1/models` endpoints with configurable timeout (default 600s) and interval (default 10s)\n- Implements fatal error detection from container logs with 10 error categories: OOM, CUDA errors, gated repo access, architecture not supported, model not found, disk space, network errors, container crash, timeout, and unknown\n- Each error classification includes: category, human-readable message, fatality flag, recovery recommendation, and matched log lines\n- Early termination on fatal errors (no waiting for full timeout when container crashes with OOM, CUDA errors, etc.)\n- Integrated `HealthCheckService` into `VllmDeploymentService` replacing the inline `waitForHealthy` method\n- `DeploymentResult` now includes `healthCheckResult` with detailed timing and health status information\n- Added `getHealthCheckService()` accessor to `VllmDeploymentService` for direct health check operations\n- Model info (id, max_model_len) is now fetched from health check result, reducing redundant /v1/models calls\n- Created comprehensive unit tests (37 tests) covering all error categories, polling behavior, timeout handling, and result formatting\n- Updated existing vllm-deployment tests (35 tests) to work with the new architecture\n\n### Files Modified\n- `src/services/health-check.ts` (NEW) - Core health check service with error classification\n- `src/services/vllm-deployment.ts` - Integrated HealthCheckService, removed old waitForHealthy method, added healthCheckResult to DeploymentResult\n- `src/services/index.ts` - Added HealthCheckService exports\n- `src/index.ts` - Added HealthCheckService exports to main barrel file\n- `tests/unit/health-check.test.ts` (NEW) - 37 unit tests for HealthCheckService\n- `tests/unit/vllm-deployment.test.ts` - Updated to use HealthCheckServiceError and validate healthCheckResult\n\n### Verification Status\n- All 72 unit tests pass (37 health-check + 35 vllm-deployment)\n- TypeScript type checking passes with zero errors\n- Playwright verification test (9 tests) passed, confirming module imports, error classification across all categories, result formatting, and VllmDeploymentService integration. Test file was deleted after verification.\n\n### Notes for Developer\n- The `HealthCheckService` can be used standalone (via `VllmDeploymentService.getHealthCheckService()`) for ad-hoc health checks outside the deployment flow\n- Fatal error patterns are ordered from most specific to least specific for accurate classification\n- Container log analysis is only performed after 60 seconds to avoid excessive SSH calls during normal startup\n- The 5 pre-existing failures in `dashboard-api.test.ts` are unrelated (Express 5 path-to-regexp compatibility issue)"
+}
