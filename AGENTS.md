@@ -182,6 +182,21 @@ context/
 | Golden forwarder queue growing | Check `benchmarker-errors` index for failure reasons. Likely 429 or 503 from shared ES. |
 | Type errors in tests | Check that mocks match new service signatures. Update `__mocks__/` if needed. |
 
+## Security Rules
+
+1. **Never commit credentials**: SSH passwords, private keys, API tokens, and `.env` files must never be committed. Use `.env.example` for documentation only.
+2. **Never log secrets**: Winston loggers must redact sensitive fields (`password`, `apiKey`, `token`, `privateKey`). Use a structured log serializer.
+3. **Config schemas expose field shapes, not values**: The Zod schema for `ssh.password` and `ssh.privateKeyPath` documents what the app accepts — never put real values in committed config files.
+4. **API key hashing**: When storing or comparing API keys, always hash with SHA-256. Never store plaintext in Elasticsearch or config files.
+5. **Golden cluster is write-only**: Read access is prohibited. This prevents accidental leakage of shared eval data back into local contexts.
+
+## Type Safety Rules
+
+1. **Explicit return types on exports**: Every exported function, method, and class must have an explicit return type annotation. Private/internal helpers may use inference.
+2. **No `any`**: Use `unknown` instead of `any`. If `any` is unavoidable, add an `// eslint-disable-next-line @typescript-eslint/no-explicit-any` comment with a justification.
+3. **Type imports**: Always use `import type { ... }` for types used only at compile time. ESLint enforces this.
+4. **Zod at boundaries**: Use Zod schemas to validate all external data (API payloads, ES responses, CLI arguments, config files).
+
 ## Remember
 
 - **This is a daemon service**, not a library. The entry point is `src/cli.ts start` which starts a persistent process.
