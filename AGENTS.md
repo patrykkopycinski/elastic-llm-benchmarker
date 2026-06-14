@@ -4,12 +4,12 @@
 
 Autonomous LLM benchmarking pipeline. Discovers models from HuggingFace, runs vLLM benchmarks on GPU VMs via SSH, evaluates with Kibana's own eval suites, stores everything in Elasticsearch, and publishes curated results to a shared golden cluster.
 
-**Architecture**: TypeScript daemon, local ES as single source of truth, REST API for CI/dashboards, async golden forwarding.
+**Architecture**: TypeScript daemon, Elastic Serverless as single source of truth, REST API for CI/dashboards, async golden forwarding.
 
 ## Quick Start
 
 ```bash
-# Prerequisites: Node.js 20+, local ES at localhost:9200, GPU VM accessible via SSH
+# Prerequisites: Node.js 20+, Elastic Serverless API key, GPU VM accessible via SSH
 git clone https://github.com/patrykkopycinski/elastic-llm-benchmarker.git
 cd elastic-llm-benchmarker
 npm install
@@ -24,7 +24,7 @@ npm run start -- --config config.yaml --stage2 --stage3 --api-port 3000
 
 ## Critical Project Rules
 
-1. **Unified persistence**: Local ES only. No SQLite. No dual persistence. All data (queue, results, traces, DLQ, model history) lives in local ES indices.
+1. **Unified persistence**: Elastic Serverless is the primary store. No SQLite. No local ES instance. All data (queue, results, traces, DLQ, model history) lives in the serverless cluster.
 2. **Forward-only shared cluster**: The shared/golden ES cluster is write-only. We forward eval traces and public benchmark cards; we never read from it.
 3. **Never throw in services**: All service methods return structured results with `.success`, `.error`, `.data`. Internal errors are logged and returned, never thrown.
 4. **Queue API surface**: Services talk to each other via `QueueService` with exactly four methods: `enqueue()`, `claim()`, `complete()`, `fail()`. No `add()` or `initialize()`.
@@ -94,7 +94,7 @@ context/
 ## Testing Conventions
 
 - Unit tests mock ALL external dependencies (ES, SSH, HF API, LLM API). Use `vi.mock()` for external modules.
-- Integration tests use `testcontainers` or local ES Docker container, but mock GPU VM SSH.
+- Integration tests use a test Elastic Serverless project or ES Docker container, but mock GPU VM SSH.
 - E2E tests are currently TBD.
 - Test files live in `tests/unit/` or `tests/integration/` with `.test.ts` extension.
 - Fixtures go in `tests/fixtures/`.
@@ -138,7 +138,7 @@ context/
 | Symptom | Fix |
 |---|---|
 | `Cannot find module '@kbn/setup-node-env'` | You are in a fresh git worktree. Run `npm run bootstrap` or `yarn kbn bootstrap` if inside Kibana repo. For this project, just `npm install`. |
-| ES connection refused | Check `elasticsearch.url` in config. Default: `http://localhost:9200`. |
+| ES connection refused | Check `elasticsearch.url` in config. Should point to your Elastic Serverless endpoint. |
 | SSH timeout | Verify `gpu_vms` config, SSH key permissions (`chmod 600`), and VM network connectivity. |
 | Golden forwarder queue growing | Check `benchmarker-errors` index for failure reasons. Likely 429 or 503 from shared ES. |
 | Type errors in tests | Check that mocks match new service signatures. Update `__mocks__/` if needed. |
@@ -146,6 +146,6 @@ context/
 ## Remember
 
 - **This is a daemon service**, not a library. The entry point is `src/cli.ts start` which starts a persistent process.
-- **The golden cluster is not yours.** You write to it; you don't manage it. All querying, queueing, and history lives in local ES.
-- **Every feature must justify its existence.** If it's not on the happy path (discovery → queue → benchmark → eval → forward), delete it. The codebase has been cleaned of Ollama, multi-VM orchestration, and SQLite precisely because they were not on the happy path.
+- **The golden cluster is not yours.** You write to it; you don't manage it. All querying, queueing, and history lives in Elastic Serverless.
+- **Every feature must justify its existence.** If it's not on the happy path (discovery → queue → benchmark → eval → forward), delete it. The codebase has been cleaned of Ollama, multi-VM orchestration, local ES, and SQLite precisely because they were not on the happy path.
 - **Quality gate**: `npx tsc --noEmit` + `npx vitest run` must pass before any commit.

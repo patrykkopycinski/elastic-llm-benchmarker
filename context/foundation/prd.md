@@ -94,8 +94,9 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     LOCAL ELASTICSEARCH (PRIMARY)                    │
+│              ELASTIC SERVERLESS (PRIMARY — CLOUD)                    │
 │              Single source of truth for all data                     │
+│              No local ES instance required                            │
 │                                                                      │
 │  Queue + Results Indices:          Trace Indices (OTel native):      │
 │  - benchmark-queue                 - .benchmark-traces-*              │
@@ -111,7 +112,7 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
              ▼                                 ▼
 ┌──────────────────────────────┐    ┌──────────────────────────────┐
 │  SHARED/GOLDEN ES CLUSTER    │    │         KIBANA               │
-│  (write-only, evals only)    │    │  (dashboards on local ES)    │
+│  (external — write-only)     │    │  (dashboards on serverless)  │
 │  - llm-benchmark-public      │    │  - Pipeline Overview         │
 │  - *.eval-traces-*           │    │  - Performance Comparison    │
 │  (async batched forward)     │    │  - Quality Deep-Dive         │
@@ -120,6 +121,20 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
                                     │  - Trace Explorer            │
                                     └──────────────────────────────┘
 ```
+
+### Why Serverless Instead of Local ES
+
+| Requirement | Local ES | Elastic Serverless |
+|---|---|---|
+| **RAM** | 4–8 GB minimum heap | **Zero** — fully managed |
+| **Setup** | Docker, JVM tuning, ILM policies | **One API key** — instant |
+| **Scaling** | Manual shard allocation | **Auto-scaling** |
+| **Persistence** | Self-managed snapshots | **Built-in backup** |
+| **Cost** | Hardware/VM cost | Pay-per-ingest + search |
+| **Network** | Localhost only | Internet required |
+| **Multi-instance** | Complex clustering | **Single endpoint** |
+
+**Trade-off**: All benchmarking now requires internet connectivity. The daemon cannot run fully air-gapped. Acceptable for this use case (HF API and LLM APIs already need internet).
 ┌─────────────────────────────────────────────────────────────────────┐
 │              Kibana (Dashboards — golden cluster)                    │
 │  - Pipeline Overview        - Performance Comparison                 │
@@ -492,10 +507,12 @@ api_server:
   cors_origins: ["https://dashboard.internal", "https://ci.elastic.dev"]
 
 elasticsearch:
-  url: "http://localhost:9200"
+  # Elastic Serverless — primary data store (zero local RAM required)
+  url: "https://my-project.es.us-east-1.aws.elastic.cloud"
   api_key: "${ES_API_KEY}"
-  # NOTE: Local ES is the SINGLE source of truth. No SQLite. No dual persistence.
+  # NOTE: Elastic Serverless is the SINGLE source of truth. No local ES. No SQLite.
   # All data: queue, results, traces, model history, health metrics, DLQ.
+  # Auto-scaling, built-in ILM, zero ops overhead.
 
 golden_cluster:
   url: "https://shared-es.internal"
