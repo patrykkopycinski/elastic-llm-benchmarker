@@ -19,6 +19,13 @@ export {
   defaultHardwareProfileRegistry,
 } from './hardware-profiles.js';
 export type { HardwareProfileDefinition } from './hardware-profiles.js';
+export { HardwareEstimator } from './hardware-estimator.js';
+export type {
+  HFModelConfig,
+  EstimationResult,
+  DryRunResult,
+  ProfileFitResult,
+} from './hardware-estimator.js';
 export {
   SSHClientPool,
   SSHError,
@@ -151,3 +158,10 @@ export { ReasoningPromptBuilderImpl } from './reasoning-prompt-builder.js';
 export type { ReasoningPromptBuilder } from './reasoning-prompt-builder.js';
 export { LlmClientImpl } from './llm-client.js';
 export type { LlmClient, LlmResponse } from './llm-client.js';
+export { DiscoveryScheduler } from './discovery-scheduler.js';
+export type {
+  ScoredModel,
+  DiscoverySchedulerDependencies,
+  AutoQueueResult,
+  RunOnceResult,
+} from './discovery-scheduler.js';

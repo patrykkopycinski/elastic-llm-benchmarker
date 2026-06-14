@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "setup": "bash scripts/setup-local.sh && bash scripts/setup-ilm.sh",
     "clean": "rm -rf dist",
     "import-mock": "tsx src/scripts/import-mock-benchmarks.ts",
     "prepublishOnly": "npm run build:ts",

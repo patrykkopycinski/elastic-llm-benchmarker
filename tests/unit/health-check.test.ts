@@ -9,6 +9,8 @@ import type {
   HealthCheckErrorClassification,
   HealthCheckResult,
 } from '../../src/services/health-check.js';
+import { SystemHealthChecker } from '../../src/services/system-health-check.js';
+import { GoldenForwarder } from '../../src/services/golden-forwarder.js';
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 
@@ -714,6 +716,140 @@ describe('HealthCheckService', () => {
       expect(error.classification.category).toBe('oom');
       expect(error.result).toBe(result);
       expect(error.result.healthy).toBe(false);
+    });
+  });
+
+  describe('SystemHealthChecker', () => {
+    const baseConfig = {
+      goldenCluster: { enabled: false },
+    } as unknown as import('../../src/types/config.js').AppConfig;
+
+    it('returns ok when no optional services are configured', async () => {
+      const checker = new SystemHealthChecker({ config: baseConfig });
+      const result = await checker.run();
+
+      expect(result.ok).toBe(true);
+      expect(result.checks['discovery_scheduler'].ok).toBe(true);
+      expect(result.checks['golden_forwarder'].ok).toBe(true);
+      expect(result.checks['queue_depth'].ok).toBe(true);
+      expect(result.checks['golden_es'].ok).toBe(true);
+    });
+
+    it('reports discovery scheduler not running', async () => {
+      const mockScheduler = {
+        get isRunning() {
+          return false;
+        },
+      } as unknown as import('../../src/services/discovery-scheduler.js').DiscoveryScheduler;
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        discoveryScheduler: mockScheduler,
+      });
+      const result = await checker.run();
+
+      expect(result.ok).toBe(false);
+      expect(result.checks['discovery_scheduler'].ok).toBe(false);
+      expect(result.checks['discovery_scheduler'].message).toContain('not running');
+    });
+
+    it('reports discovery scheduler running', async () => {
+      const mockScheduler = {
+        get isRunning() {
+          return true;
+        },
+      } as unknown as import('../../src/services/discovery-scheduler.js').DiscoveryScheduler;
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        discoveryScheduler: mockScheduler,
+      });
+      const result = await checker.run();
+
+      expect(result.checks['discovery_scheduler'].ok).toBe(true);
+      expect(result.checks['discovery_scheduler'].message).toContain('running');
+    });
+
+    it('reports golden forwarder healthy when pending < 100 and no errors', async () => {
+      const forwarder = new GoldenForwarder();
+      forwarder.incrementPending();
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        goldenForwarder: forwarder,
+      });
+      const result = await checker.run();
+
+      expect(result.checks['golden_forwarder'].ok).toBe(true);
+      expect(result.checks['golden_forwarder'].message).toContain('Pending: 1');
+    });
+
+    it('reports golden forwarder unhealthy when pending >= 100', async () => {
+      const forwarder = new GoldenForwarder();
+      for (let i = 0; i < 100; i++) {
+        forwarder.incrementPending();
+      }
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        goldenForwarder: forwarder,
+      });
+      const result = await checker.run();
+
+      expect(result.ok).toBe(false);
+      expect(result.checks['golden_forwarder'].ok).toBe(false);
+      expect(result.checks['golden_forwarder'].message).toContain('Pending: 100');
+    });
+
+    it('reports golden forwarder unhealthy when recent replication errors exist', async () => {
+      const forwarder = new GoldenForwarder();
+      forwarder.recordReplicationError('connection timeout');
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        goldenForwarder: forwarder,
+      });
+      const result = await checker.run();
+
+      expect(result.ok).toBe(false);
+      expect(result.checks['golden_forwarder'].ok).toBe(false);
+      expect(result.checks['golden_forwarder'].message).toContain('1 replication error(s)');
+    });
+
+    it('reports queue depth warning when count > 50', async () => {
+      const mockQueueService = {
+        async getPending() {
+          return 55;
+        },
+      } as unknown as import('../../src/services/queue-service.js').QueueService;
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        queueService: mockQueueService,
+      });
+      const result = await checker.run();
+
+      expect(result.ok).toBe(false);
+      expect(result.checks['queue_depth'].ok).toBe(false);
+      expect(result.checks['queue_depth'].message).toContain('55');
+      expect(result.checks['queue_depth'].message).toContain('threshold: 50');
+    });
+
+    it('reports queue depth ok when count <= 50', async () => {
+      const mockQueueService = {
+        async getPending() {
+          return 12;
+        },
+      } as unknown as import('../../src/services/queue-service.js').QueueService;
+
+      const checker = new SystemHealthChecker({
+        config: baseConfig,
+        queueService: mockQueueService,
+      });
+      const result = await checker.run();
+
+      expect(result.checks['queue_depth'].ok).toBe(true);
+      expect(result.checks['queue_depth'].message).toContain('12');
     });
   });
 });

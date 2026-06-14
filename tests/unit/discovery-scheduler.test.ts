@@ -1,0 +1,422 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { DiscoveryScheduler } from '../../src/services/discovery-scheduler.js';
+import { createLogger } from '../../src/utils/logger.js';
+
+import type { ModelDiscoveryService } from '../../src/services/model-discovery.js';
+import type { HardwareEstimator } from '../../src/services/hardware-estimator.js';
+import type { HardwareProfileRegistry } from '../../src/services/hardware-profiles.js';
+import type { QueueService } from '../../src/services/queue-service.js';
+import type { DiscoverySchedulerConfig } from '../../src/types/config.js';
+import type { ModelInfo } from '../../src/types/benchmark.js';
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function createMockModelInfo(overrides: Partial<ModelInfo> = {}): ModelInfo {
+  return {
+    id: 'org/model-a',
+    name: 'Model A',
+    architecture: 'llama',
+    contextWindow: 4096,
+    license: 'apache-2.0',
+    parameterCount: 7_000_000_000,
+    quantizations: ['fp16'],
+    supportsToolCalling: false,
+    ...overrides,
+  };
+}
+
+function createMockConfig(): DiscoverySchedulerConfig {
+  return {
+    enabled: true,
+    intervalMinutes: 1,
+    search: undefined,
+    maxModelsPerRun: 2,
+    minTrendingScore: 0,
+    autoQueue: true,
+    hardwareProfileId: '1xl4',
+  };
+}
+
+function createMockDeps(overrides: Partial<{
+  discoveryService: ModelDiscoveryService;
+  hardwareEstimator: HardwareEstimator;
+  profileRegistry: HardwareProfileRegistry;
+  queueService: QueueService;
+  config: DiscoverySchedulerConfig;
+  logger: ReturnType<typeof createLogger>;
+}> = {}) {
+  const config = overrides.config ?? createMockConfig();
+
+  const discoveryService = overrides.discoveryService ?? {
+    discover: vi.fn().mockResolvedValue({ models: [], totalScanned: 0, totalRejected: 0, timestamp: new Date().toISOString() }),
+    fetchModelConfig: vi.fn().mockResolvedValue({ model_type: 'llama', hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+    fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+    isEvaluated: vi.fn().mockReturnValue(false),
+    markEvaluated: vi.fn().mockResolvedValue(undefined),
+  } as unknown as ModelDiscoveryService;
+
+  const hardwareEstimator = overrides.hardwareEstimator ?? {
+    estimateGpuMemory: vi.fn(),
+    dryRunCheck: vi.fn().mockReturnValue({ fits: true, estimatedGb: 18, availableGb: 21.6, reason: 'fits' }),
+    selectBestProfiles: vi.fn(),
+  } as unknown as HardwareEstimator;
+
+  const profileRegistry = overrides.profileRegistry ?? {
+    getProfile: vi.fn().mockReturnValue({ id: '1xl4', hardware: { gpuType: 'nvidia-l4', gpuCount: 1, ramGb: 64, cpuCores: 8, diskGb: 200, machineType: 'g2-standard-8' } }),
+    listProfiles: vi.fn().mockReturnValue([]),
+    registerProfile: vi.fn(),
+  } as unknown as HardwareProfileRegistry;
+
+  const queueService = overrides.queueService ?? {
+    enqueue: vi.fn().mockResolvedValue(undefined),
+    dequeue: vi.fn().mockResolvedValue(undefined),
+    getQueueSize: vi.fn().mockReturnValue(0),
+  } as unknown as QueueService;
+
+  const logger = overrides.logger ?? createLogger('silent');
+
+  return { discoveryService, hardwareEstimator, profileRegistry, queueService, config, logger };
+}
+
+// ─── Tests ──────────────────────────────────────────────────────────────────
+
+describe('DiscoveryScheduler', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  describe('trending score calculation', () => {
+    it('computes correct trending scores from downloads and createdAt', async () => {
+      const now = new Date('2024-06-01T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'org/old-popular' }),
+        createMockModelInfo({ id: 'org/new-hot' }),
+      ];
+
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockImplementation((id: string) => {
+          if (id === 'org/old-popular') {
+            return Promise.resolve({ downloads: 100, createdAt: '2023-01-01T00:00:00Z' });
+          }
+          return Promise.resolve({ downloads: 50, createdAt: '2024-05-30T00:00:00Z' });
+        }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+
+      expect(scored).toHaveLength(2);
+      // new-hot should score higher because of recency (100) + decent downloads
+      const newHot = scored.find((m) => m.id === 'org/new-hot')!;
+      const oldPopular = scored.find((m) => m.id === 'org/old-popular')!;
+
+      expect(newHot.trendingScore).toBeGreaterThan(oldPopular.trendingScore);
+      expect(newHot.totalScore).toBeGreaterThan(oldPopular.totalScore);
+    });
+
+    it('filters models below minTrendingScore', async () => {
+      const now = new Date('2024-06-01T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [createMockModelInfo({ id: 'org/low-trend' })];
+
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 0, createdAt: '2023-01-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = createMockConfig();
+      config.minTrendingScore = 50;
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(scored).toHaveLength(0);
+    });
+  });
+
+  describe('hardware fit filtering', () => {
+    it('marks hardwareFit=true when model fits profile', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const hardwareEstimator = {
+        dryRunCheck: vi.fn().mockReturnValue({ fits: true, estimatedGb: 18, availableGb: 21.6, reason: 'fits' }),
+      } as unknown as HardwareEstimator;
+
+      const deps = createMockDeps({ discoveryService, hardwareEstimator });
+      const scheduler = new DiscoveryScheduler(deps);
+      const scored = await scheduler.discoverAndScore();
+
+      expect(scored[0].hardwareFit).toBe(true);
+      expect(scored[0].totalScore).toBeGreaterThanOrEqual(scored[0].trendingScore);
+    });
+
+    it('marks hardwareFit=false when model does not fit', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 8192, num_hidden_layers: 80, num_attention_heads: 64 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const hardwareEstimator = {
+        dryRunCheck: vi.fn().mockReturnValue({ fits: false, estimatedGb: 100, availableGb: 21.6, reason: 'exceeds' }),
+      } as unknown as HardwareEstimator;
+
+      const deps = createMockDeps({ discoveryService, hardwareEstimator });
+      const scheduler = new DiscoveryScheduler(deps);
+      const scored = await scheduler.discoverAndScore();
+
+      expect(scored[0].hardwareFit).toBe(false);
+      expect(scored[0].totalScore).toBe(scored[0].trendingScore * 0.6);
+    });
+  });
+
+  describe('autoQueue', () => {
+    it('enqueues models when autoQueue is true', async () => {
+      const models = [createMockModelInfo(), createMockModelInfo({ id: 'org/model-b' })];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const queueService = {
+        enqueue: vi.fn().mockResolvedValue(undefined),
+      } as unknown as QueueService;
+
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const result = await scheduler.runOnce();
+      expect(result.queued).toBe(2);
+      expect(result.skipped).toBe(0);
+      expect(queueService.enqueue).toHaveBeenCalledTimes(2);
+    });
+
+    it('skips all models when autoQueue is false', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const queueService = {
+        enqueue: vi.fn().mockResolvedValue(undefined),
+      } as unknown as QueueService;
+
+      const config = createMockConfig();
+      config.autoQueue = false;
+      const deps = createMockDeps({ discoveryService, queueService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const result = await scheduler.runOnce();
+      expect(result.queued).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips already-evaluated models', async () => {
+      const models = [createMockModelInfo(), createMockModelInfo({ id: 'org/model-b' })];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockImplementation((id: string) => id === 'org/model-a'),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const queueService = {
+        enqueue: vi.fn().mockResolvedValue(undefined),
+      } as unknown as QueueService;
+
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const result = await scheduler.runOnce();
+      expect(result.queued).toBe(1);
+      expect(result.skipped).toBe(1);
+    });
+  });
+
+  describe('429 retry logic', () => {
+    it('retries once on 429 then gives up', async () => {
+      const error = new Error('HTTP 429: Too Many Requests');
+      const discoveryService = {
+        discover: vi.fn().mockRejectedValue(error),
+        fetchModelConfig: vi.fn().mockResolvedValue({}),
+        fetchModelInfo: vi.fn().mockResolvedValue({}),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = createMockConfig();
+      config.intervalMinutes = 1;
+      const deps = createMockDeps({ discoveryService, config });
+
+      // Override delay so tests don't wait 60s
+      const scheduler = new DiscoveryScheduler(deps);
+      (scheduler as unknown as { delay: () => Promise<void> }).delay = vi.fn().mockResolvedValue(undefined);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(discoveryService.discover).toHaveBeenCalledTimes(2);
+      expect(scored).toEqual([]);
+    });
+
+    it('succeeds on retry after 429', async () => {
+      const error = new Error('HTTP 429: Too Many Requests');
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+      (scheduler as unknown as { delay: () => Promise<void> }).delay = vi.fn().mockResolvedValue(undefined);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(discoveryService.discover).toHaveBeenCalledTimes(2);
+      expect(scored).toHaveLength(1);
+    });
+  });
+
+  describe('unknown hardware profile fallback', () => {
+    it('passes all models with fits=true when profile is missing', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const profileRegistry = {
+        getProfile: vi.fn().mockReturnValue(undefined),
+        listProfiles: vi.fn().mockReturnValue([]),
+        registerProfile: vi.fn(),
+      } as unknown as HardwareProfileRegistry;
+
+      const deps = createMockDeps({ discoveryService, profileRegistry });
+      const scheduler = new DiscoveryScheduler(deps);
+      const scored = await scheduler.discoverAndScore();
+
+      expect(scored[0].hardwareFit).toBe(true);
+    });
+  });
+
+  describe('start/stop timer', () => {
+    it('starts interval and runs immediately', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(discoveryService.discover).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(discoveryService.discover).toHaveBeenCalledTimes(2);
+
+      scheduler.stop();
+    });
+
+    it('guards against double start', async () => {
+      const deps = createMockDeps();
+      const scheduler = new DiscoveryScheduler(deps);
+      scheduler.start();
+      scheduler.start(); // double start
+      await vi.advanceTimersByTimeAsync(0);
+      // Should not throw and should only schedule one interval
+      scheduler.stop();
+    });
+
+    it('guards against double stop', () => {
+      const deps = createMockDeps();
+      const scheduler = new DiscoveryScheduler(deps);
+      scheduler.start();
+      scheduler.stop();
+      scheduler.stop(); // double stop
+      // Should not throw
+    });
+  });
+
+  describe('never throws', () => {
+    it('absorbs errors in discoverAndScore and returns empty array', async () => {
+      const discoveryService = {
+        discover: vi.fn().mockImplementation(() => {
+          throw new Error('Kaboom');
+        }),
+        fetchModelConfig: vi.fn().mockResolvedValue({}),
+        fetchModelInfo: vi.fn().mockResolvedValue({}),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+      // Non-429 errors should be caught and return empty models
+      const scored = await scheduler.discoverAndScore();
+      expect(scored).toEqual([]);
+    });
+
+    it('absorbs errors in runOnce and returns zero stats', async () => {
+      const discoveryService = {
+        discover: vi.fn().mockRejectedValue(new Error('Kaboom')),
+        fetchModelConfig: vi.fn().mockResolvedValue({}),
+        fetchModelInfo: vi.fn().mockResolvedValue({}),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+      (scheduler as unknown as { delay: () => Promise<void> }).delay = vi.fn().mockResolvedValue(undefined);
+
+      const result = await scheduler.runOnce();
+      expect(result).toEqual({ discovered: 0, queued: 0, skipped: 0, errors: 0, hardwareFitCount: 0 });
+    });
+  });
+});

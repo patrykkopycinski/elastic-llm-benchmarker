@@ -400,6 +400,26 @@ export const kibanaRepoConfigSchema = z.object({
 });
 
 /**
+ * Discovery scheduler configuration for automated model discovery and queueing.
+ */
+export const discoverySchedulerConfigSchema = z.object({
+  /** Whether the discovery scheduler is enabled. */
+  enabled: z.boolean().default(false),
+  /** Interval in minutes between discovery runs. */
+  intervalMinutes: z.number().int().positive().default(60),
+  /** Optional search query to filter models by name or tag. */
+  search: z.string().optional(),
+  /** Maximum number of models to accept per discovery run. */
+  maxModelsPerRun: z.number().int().positive().default(10),
+  /** Minimum trending score (0–100) required for a model to be considered. */
+  minTrendingScore: z.number().min(0).max(100).default(50),
+  /** Whether to automatically enqueue discovered models. */
+  autoQueue: z.boolean().default(true),
+  /** Hardware profile ID used for dry-run fit checks. */
+  hardwareProfileId: z.string().default('1xl4'),
+});
+
+/**
  * Application configuration schema
  */
 export const appConfigSchema = z.object({
@@ -439,6 +459,8 @@ export const appConfigSchema = z.object({
   edotCollector: edotCollectorConfigSchema.default({}),
   /** Kibana repository configuration for cloning the Kibana main repo. */
   kibanaRepo: kibanaRepoConfigSchema.default({}),
+  /** Discovery scheduler configuration for automated model discovery. */
+  discoveryScheduler: discoverySchedulerConfigSchema.default({}),
   /** LLM configuration for reasoning and evaluation tasks. */
   llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
   llmBaseUrl: z.string().url().optional().describe('Base URL for OpenAI-compatible API'),
@@ -495,3 +517,4 @@ export type Stage2Thresholds = z.infer<typeof stage2ThresholdsSchema>;
 export type GoldenClusterConfig = z.infer<typeof goldenClusterConfigSchema>;
 export type EdotCollectorConfig = z.infer<typeof edotCollectorConfigSchema>;
 export type KibanaRepoConfig = z.infer<typeof kibanaRepoConfigSchema>;
+export type DiscoverySchedulerConfig = z.infer<typeof discoverySchedulerConfigSchema>;

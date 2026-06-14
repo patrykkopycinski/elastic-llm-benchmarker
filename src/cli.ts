@@ -46,6 +46,8 @@ import { ToolCallBenchmarkService } from './services/tool-call-benchmark.js';
 import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js';
 import { ConfigResearcherService } from './services/config-researcher.js';
 import { VMResourceManagerService } from './services/vm-resource-manager.js';
+import { runEnqueue } from './cli/enqueue-handler.js';
+import { SystemHealthChecker } from './services/system-health-check.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1096,13 +1098,57 @@ if (binaryName === 'benchmarker-queue') {
     .option('--poll-interval <ms>', 'Polling interval in milliseconds', '30000')
     .option('--stage2', 'Enable Stage 2 eval pipeline', false)
     .option('--stage3', 'Enable Stage 3 reasoning pipeline', true)
+    .option('--queue-model <modelId>', 'Enqueue a single model and exit (does not start scheduler)')
     .action(async (opts) => {
       const configPath = opts['config'] as string;
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
       const enableStage2 = opts['stage2'] as boolean;
       const enableStage3 = opts['stage3'] as boolean;
+      const queueModel = opts['queueModel'] as string | undefined;
 
-      // Lockfile check
+      // Load config first — needed for both one-off enqueue and scheduler start
+      const config = loadAppConfig({ config: configPath, json: false });
+      if (!config) process.exit(1);
+
+      // One-off enqueue mode (for CI)
+      if (queueModel) {
+        const esClient = createEsClient(config);
+        if (!esClient) {
+          console.error('Error: Could not create Elasticsearch client');
+          process.exit(1);
+        }
+
+        try {
+          const result = await runEnqueue({
+            modelId: queueModel,
+            config,
+            esClient,
+            hardwareProfileId: config.hardwareProfileId,
+            priority: 5,
+          });
+
+          if (!result.success) {
+            console.error(`Error: ${result.message}`);
+            await esClient.close();
+            process.exit(1);
+          }
+
+          console.log(result.message);
+          if (result.dryRun) {
+            console.log(
+              `Dry-run: estimated ${result.dryRun.estimatedGb.toFixed(2)} GB / available ${result.dryRun.availableGb.toFixed(2)} GB (${result.dryRun.fits ? 'fits' : 'does not fit'})`,
+            );
+          }
+          await esClient.close();
+          process.exit(0);
+        } catch (error) {
+          console.error('Error:', error instanceof Error ? error.message : String(error));
+          await esClient.close();
+          process.exit(1);
+        }
+      }
+
+      // Lockfile check (only when actually starting the scheduler)
       const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
       if (!lockfile.acquire()) {
         console.error('Error: benchmarker-queue is already running (lockfile exists)');
@@ -1115,13 +1161,6 @@ if (binaryName === 'benchmarker-queue') {
       } catch {
         lockfile.release();
         console.error('Error: Health check failed. Fix issues and try again.');
-        process.exit(1);
-      }
-
-      // Load config
-      const config = loadAppConfig({ config: configPath, json: false });
-      if (!config) {
-        lockfile.release();
         process.exit(1);
       }
 
@@ -1249,12 +1288,50 @@ if (binaryName === 'benchmarker-queue') {
   program
     .command('health-check')
     .description('Run the health-check script for ES + EDOT + GPU VM')
-    .action(() => {
+    .option('--format <fmt>', 'Output format: text or json', 'text')
+    .action(async (opts) => {
+      const json = opts['format'] === 'json';
+      const config = loadAppConfig({ config: undefined, json });
+
+      let bashOk = true;
+      let bashOutput = '';
       try {
-        execSync('bash scripts/health-check.sh', { stdio: 'inherit' });
+        bashOutput = execSync('bash scripts/health-check.sh', { encoding: 'utf-8' });
       } catch (err) {
-        process.exit((err as Error & { status?: number }).status ?? 1);
+        bashOk = false;
+        bashOutput = String(err);
       }
+
+      const checker = new SystemHealthChecker({
+        config: config ?? undefined,
+      });
+      const tsResult = await checker.run();
+
+      if (json) {
+        const result = {
+          ok: bashOk && tsResult.ok,
+          checks: {
+            bash_health_check: { ok: bashOk, message: bashOutput.trim() || undefined },
+            ...tsResult.checks,
+          },
+        };
+        output(result, true);
+        process.exit(result.ok ? 0 : 1);
+      }
+
+      if (!bashOk) {
+        console.error('Bash health-check script failed');
+        if (bashOutput) console.error(bashOutput);
+      } else {
+        console.log(bashOutput.trim() || 'Bash health-check script passed');
+      }
+
+      for (const [name, check] of Object.entries(tsResult.checks)) {
+        const status = check.ok ? '✓' : '✗';
+        console.log(`${status} ${name}: ${check.message ?? ''}`);
+      }
+
+      process.exit(bashOk && tsResult.ok ? 0 : 1);
     });
 
   program
@@ -1315,6 +1392,51 @@ if (binaryName === 'benchmarker-queue') {
         process.exit(result.status === 'success' ? 0 : 1);
       } catch (error) {
         console.error('Error:', error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      } finally {
+        await esClient.close();
+      }
+    });
+
+  program
+    .command('enqueue <modelId>')
+    .description('Enqueue a single model for benchmarking with optional hardware-fit dry-run')
+    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
+    .option('--hardware-profile <id>', 'Hardware profile ID to check against', undefined)
+    .option('--priority <n>', 'Queue priority (1 = highest)', '5')
+    .option('--force', 'Skip hardware-fit check and enqueue anyway')
+    .option('--reason <text>', 'Optional reason/note to store in metadata')
+    .action(async (modelId: string, opts) => {
+      const configPath = opts['config'] as string;
+      const config = loadAppConfig({ config: configPath, json: false });
+      if (!config) process.exit(1);
+
+      const esClient = createEsClient(config);
+      if (!esClient) {
+        console.error('Error: Could not create Elasticsearch client');
+        process.exit(1);
+      }
+
+      try {
+        const result = await runEnqueue({
+          modelId,
+          config,
+          esClient,
+          hardwareProfileId: opts['hardwareProfile'] as string | undefined,
+          priority: Number(opts['priority']),
+          force: Boolean(opts['force']),
+          reason: opts['reason'] as string | undefined,
+        });
+
+        console.log(result.message);
+        if (result.dryRun) {
+          console.log(
+            `Estimated VRAM: ${result.dryRun.estimatedGb.toFixed(2)} GB / Available: ${result.dryRun.availableGb.toFixed(2)} GB`,
+          );
+        }
+        process.exit(result.success ? 0 : 1);
+      } catch (error) {
+        console.error('Unexpected error:', error instanceof Error ? error.message : String(error));
         process.exit(1);
       } finally {
         await esClient.close();

@@ -20,6 +20,20 @@ export interface QueueEntry {
       maxModelLen?: number;
     };
     skipReasoning?: boolean;
+    /** Trending score assigned by the discovery scheduler. */
+    trendingScore?: number;
+    /** Whether the model fits the target hardware profile. */
+    hardwareFit?: boolean;
+    /** Hardware profile ID used for dry-run estimation. */
+    hardwareProfileId?: string;
+    /** Estimated VRAM in GB from dry-run check. */
+    estimatedGb?: number | null;
+    /** Whether the model fits the hardware profile. */
+    fits?: boolean | null;
+    /** Whether the enqueue was forced despite failing checks. */
+    force?: boolean;
+    /** Reason or note for the enqueue. */
+    reason?: string;
   };
 }
 
@@ -39,6 +53,13 @@ type EsSource = {
       max_model_len?: number;
     };
     skip_reasoning?: boolean;
+    trending_score?: number;
+    hardware_fit?: boolean;
+    hardware_profile_id?: string;
+    estimated_gb?: number | null;
+    fits?: boolean | null;
+    force?: boolean;
+    reason?: string;
   };
 };
 
@@ -60,6 +81,13 @@ function toEntry(id: string, src: EsSource): QueueEntry {
         maxModelLen: src.metadata.config_overrides.max_model_len,
       } : undefined,
       skipReasoning: src.metadata.skip_reasoning,
+      trendingScore: src.metadata.trending_score,
+      hardwareFit: src.metadata.hardware_fit,
+      hardwareProfileId: src.metadata.hardware_profile_id,
+      estimatedGb: src.metadata.estimated_gb,
+      fits: src.metadata.fits,
+      force: src.metadata.force,
+      reason: src.metadata.reason,
     } : undefined,
   };
 }
@@ -92,6 +120,13 @@ export class QueueService {
           max_model_len: metadata.configOverrides.maxModelLen,
         } : undefined,
         skip_reasoning: metadata.skipReasoning,
+        trending_score: metadata.trendingScore,
+        hardware_fit: metadata.hardwareFit,
+        hardware_profile_id: metadata.hardwareProfileId,
+        estimated_gb: metadata.estimatedGb,
+        fits: metadata.fits,
+        force: metadata.force,
+        reason: metadata.reason,
       } : undefined,
     };
     const res = await this.esClient.index({
@@ -276,6 +311,14 @@ export class QueueService {
       query: { term: { status: 'pending' } },
     });
     return (res.count ?? 0) > 0;
+  }
+
+  async getPending(): Promise<number> {
+    const res = await this.esClient.count({
+      index: INDEX,
+      query: { term: { status: 'pending' } },
+    });
+    return res.count ?? 0;
   }
 
   async shouldAutoStop(entryId: string, maxDurationMs: number): Promise<boolean> {
