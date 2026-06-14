@@ -1,6 +1,6 @@
 import { QueueService, QueueEntry } from '../services/queue-service.js';
 import { PipelineRun } from './pipeline-state.js';
-import type { Stage1Worker, Stage2Worker } from '../worker/index.js';
+import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../worker/index.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 
 export interface SchedulerOptions {
@@ -19,6 +19,7 @@ export class Scheduler {
     private options: SchedulerOptions = { pollIntervalMs: 30000, maxConcurrentRuns: 1 },
     private stage2Worker?: Stage2Worker,
     private resultsStore?: ElasticsearchResultsStore,
+    private stage3Worker?: Stage3Worker,
   ) {}
 
   async start(): Promise<void> {
@@ -91,6 +92,16 @@ export class Scheduler {
 
         if (stage2Result.status === 'error') {
           await this.queueService.updateStatus(entry.id, 'failed', stage2Result.reason);
+          return;
+        }
+      }
+
+      // Stage 3 reasoning — optional
+      if (this.stage3Worker) {
+        const stage3Result = await this.stage3Worker.execute(run);
+        run.stage3Result = stage3Result;
+        if (stage3Result.status === 'error') {
+          await this.queueService.updateStatus(entry.id, 'failed', stage3Result.error);
           return;
         }
       }

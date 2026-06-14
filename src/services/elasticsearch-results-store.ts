@@ -731,6 +731,28 @@ export class ElasticsearchResultsStore {
     this.logger.info('Stored stage2 result', { modelId: result.modelId, index, status: result.status });
   }
 
+  async saveReasoningResult(result: import('../scheduler/pipeline-state.js').Stage3Result): Promise<void> {
+    const dateSuffix = result.startedAt.slice(0, 10);
+    const index = `${INDEX_NAMES.BENCHMARKER_REASONING}-${dateSuffix}`;
+    const doc: Record<string, unknown> = {
+      run_id: result.runId,
+      model_id: result.modelId,
+      status: result.status,
+      suggestions: result.suggestions ?? null,
+      trace_summary: result.traceSummary ?? null,
+      raw_response: result.rawResponse ?? null,
+      error: result.error ?? null,
+      started_at: result.startedAt,
+      completed_at: result.completedAt,
+      '@timestamp': new Date().toISOString(),
+    };
+    await this.esClient.index({
+      index,
+      document: doc,
+    });
+    this.logger.info('Stored reasoning result', { modelId: result.modelId, index, status: result.status });
+  }
+
   async close(): Promise<void> {
     await this.esClient.close();
     this.logger.info('ElasticsearchResultsStore closed');

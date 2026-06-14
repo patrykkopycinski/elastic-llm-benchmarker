@@ -439,6 +439,12 @@ export const appConfigSchema = z.object({
   edotCollector: edotCollectorConfigSchema.default({}),
   /** Kibana repository configuration for cloning the Kibana main repo. */
   kibanaRepo: kibanaRepoConfigSchema.default({}),
+  /** LLM configuration for reasoning and evaluation tasks. */
+  llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
+  llmBaseUrl: z.string().url().optional().describe('Base URL for OpenAI-compatible API'),
+  llmModel: z.string().default('gpt-4o').describe('Model name for reasoning'),
+  llmMaxTokens: z.number().int().positive().default(4096),
+  llmTemperature: z.number().min(0).max(2).default(0.3),
 });
 
 export type SSHConfig = z.infer<typeof sshConfigSchema>;

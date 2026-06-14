@@ -28,7 +28,7 @@ import { ElasticsearchResultsStore } from './services/elasticsearch-results-stor
 import { ResultsStore } from './services/results-store.js';
 import { QueueService } from './services/queue-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
-import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate } from './worker/index.js';
+import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate, Stage3WorkerImpl } from './worker/index.js';
 import { KibanaRepoService } from './services/kibana-repo-service.js';
 import { EvalSuiteRunner } from './services/eval-suite-runner.js';
 import { Lockfile } from './utils/lockfile.js';
@@ -36,6 +36,9 @@ import { SSHClientPool } from './services/ssh-client.js';
 import { VllmEngine } from './engines/vllm-engine.js';
 import { createLogger } from './utils/logger.js';
 import { registerIngestPipelines } from './services/es-ingest-pipelines.js';
+import { TraceQueryBuilderImpl } from './services/trace-query-builder.js';
+import { ReasoningPromptBuilderImpl } from './services/reasoning-prompt-builder.js';
+import { LlmClientImpl } from './services/llm-client.js';
 import type { BenchmarkResult } from './types/benchmark.js';
 import type { ModelBenchmarkSummary } from './services/elasticsearch-results-store.js';
 import type { AppConfig } from './types/config.js';
@@ -1092,10 +1095,12 @@ if (binaryName === 'benchmarker-queue') {
     .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('--poll-interval <ms>', 'Polling interval in milliseconds', '30000')
     .option('--stage2', 'Enable Stage 2 eval pipeline', false)
+    .option('--stage3', 'Enable Stage 3 reasoning pipeline', true)
     .action(async (opts) => {
       const configPath = opts['config'] as string;
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
       const enableStage2 = opts['stage2'] as boolean;
+      const enableStage3 = opts['stage3'] as boolean;
 
       // Lockfile check
       const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
@@ -1157,6 +1162,23 @@ if (binaryName === 'benchmarker-queue') {
         logger.info('Stage 2 pipeline enabled');
       }
 
+      // Optionally create Stage 3 worker
+      const stage3Worker =
+        enableStage3
+          ? new Stage3WorkerImpl({
+              config,
+              traceQueryBuilder: new TraceQueryBuilderImpl(esClient, logger),
+              promptBuilder: new ReasoningPromptBuilderImpl(),
+              llmClient: new LlmClientImpl(config, logger),
+              resultsStore,
+              logger,
+            })
+          : undefined;
+
+      if (stage3Worker) {
+        logger.info('Stage 3 reasoning pipeline enabled');
+      }
+
       // Create scheduler
       const scheduler = new Scheduler(
         queueService,
@@ -1170,6 +1192,7 @@ if (binaryName === 'benchmarker-queue') {
         { pollIntervalMs: pollInterval, maxConcurrentRuns: 1 },
         stage2Worker,
         resultsStore,
+        stage3Worker,
       );
 
       logger.info('Scheduler starting. Polling every %d ms...', pollInterval);
@@ -1245,6 +1268,56 @@ if (binaryName === 'benchmarker-queue') {
       } catch (err) {
         console.error('Setup failed:', (err as Error).message);
         process.exit((err as Error & { status?: number }).status ?? 1);
+      }
+    });
+
+  program
+    .command('reasoning <runId>')
+    .description('Run Stage 3 reasoning on a benchmark run')
+    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
+    .option('-m, --model <modelId>', 'Model identifier (defaults to runId)')
+    .action(async (runId: string, opts) => {
+      const configPath = opts['config'] as string;
+      const modelId = (opts['model'] as string) || runId;
+
+      const config = loadAppConfig({ config: configPath, json: false });
+      if (!config) process.exit(1);
+
+      const logger = createLogger(config.logLevel ?? 'info');
+      const esClient = createEsClient(config);
+      if (!esClient) {
+        console.error('Error: Could not create Elasticsearch client');
+        process.exit(1);
+      }
+
+      const resultsStore = new ElasticsearchResultsStore(esClient);
+
+      const stage3Worker = new Stage3WorkerImpl({
+        config,
+        traceQueryBuilder: new TraceQueryBuilderImpl(esClient, logger),
+        promptBuilder: new ReasoningPromptBuilderImpl(),
+        llmClient: new LlmClientImpl(config, logger),
+        resultsStore,
+        logger,
+      });
+
+      const run: import('./scheduler/pipeline-state.js').PipelineRun = {
+        runId,
+        modelId,
+        queueEntryId: runId,
+        stage: 'idle',
+        startedAt: new Date().toISOString(),
+      };
+
+      try {
+        const result = await stage3Worker.execute(run);
+        console.log(JSON.stringify(result.suggestions ?? [], null, 2));
+        process.exit(result.status === 'success' ? 0 : 1);
+      } catch (error) {
+        console.error('Error:', error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      } finally {
+        await esClient.close();
       }
     });
 

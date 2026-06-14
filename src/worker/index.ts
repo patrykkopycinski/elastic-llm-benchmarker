@@ -4,3 +4,5 @@ export { Stage2Gate } from './stage2-gate.js';
 export type { Stage2Result } from '../scheduler/pipeline-state.js';
 export { Stage2WorkerImpl } from './stage2-worker.js';
 export type { Stage2Worker, Stage2WorkerDependencies } from './stage2-worker.js';
+export { Stage3WorkerImpl } from './stage3-worker.js';
+export type { Stage3Worker, Stage3WorkerDependencies } from './stage3-worker.js';

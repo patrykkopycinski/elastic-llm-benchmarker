@@ -145,3 +145,9 @@ export type {
 } from './hf-card-parser.js';
 export { KibanaRepoService, KibanaRepoError } from './kibana-repo-service.js';
 export type { KibanaRepoServiceOptions } from './kibana-repo-service.js';
+export { TraceQueryBuilderImpl } from './trace-query-builder.js';
+export type { TraceSummary, TraceQueryBuilder } from './trace-query-builder.js';
+export { ReasoningPromptBuilderImpl } from './reasoning-prompt-builder.js';
+export type { ReasoningPromptBuilder } from './reasoning-prompt-builder.js';
+export { LlmClientImpl } from './llm-client.js';
+export type { LlmClient, LlmResponse } from './llm-client.js';

@@ -13,6 +13,7 @@ export interface PipelineRun {
   deployment?: DeploymentInfo;
   benchmarkResult?: Stage1Result;
   stage2Result?: Stage2Result;
+  stage3Result?: Stage3Result;
 }
 
 export interface HFCardResult {
@@ -62,6 +63,25 @@ export interface Stage2Result {
   suiteResults?: Array<{ suite: string; status: string; score?: number; error?: string }>;
   tracesIndex?: string;
   reason?: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface Stage3Suggestion {
+  category: 'config' | 'quantization' | 'hardware' | 'other';
+  title: string;
+  description: string;
+  estimatedImpact: 'high' | 'medium' | 'low';
+}
+
+export interface Stage3Result {
+  runId: string;
+  modelId: string;
+  status: 'success' | 'error';
+  suggestions?: Stage3Suggestion[];
+  traceSummary?: import('../services/trace-query-builder.js').TraceSummary;
+  rawResponse?: string;
+  error?: string;
   startedAt: string;
   completedAt: string;
 }

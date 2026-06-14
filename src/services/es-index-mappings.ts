@@ -7,6 +7,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_ERRORS: 'benchmarker-errors',
   BENCHMARKER_EVALUATIONS: 'benchmark-evaluations',
   BENCHMARKER_STAGE2: 'benchmark-stage2',
+  BENCHMARKER_REASONING: 'benchmark-reasoning',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -252,6 +253,46 @@ export const INDEX_MAPPINGS: Record<
       number_of_replicas: 1,
     },
   },
+  [INDEX_NAMES.BENCHMARKER_REASONING]: {
+    mappings: {
+      properties: {
+        run_id: { type: 'keyword' },
+        model_id: { type: 'keyword' },
+        status: { type: 'keyword' },
+        suggestions: {
+          type: 'nested',
+          properties: {
+            category: { type: 'keyword' },
+            title: { type: 'text' },
+            description: { type: 'text' },
+            estimatedImpact: { type: 'keyword' },
+          },
+        },
+        trace_summary: {
+          properties: {
+            totalSpans: { type: 'integer' },
+            errorCount: { type: 'integer' },
+            latencyPercentiles: {
+              properties: {
+                p50_ms: { type: 'float' },
+                p95_ms: { type: 'float' },
+                p99_ms: { type: 'float' },
+              },
+            },
+          },
+        },
+        raw_response: { type: 'text', index: false },
+        error: { type: 'text' },
+        started_at: { type: 'date' },
+        completed_at: { type: 'date' },
+        '@timestamp': { type: 'date' },
+      },
+    },
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 1,
+    },
+  },
 };
 
 export const benchmarkEvaluationsMapping = {
@@ -300,8 +341,32 @@ export const benchmarkStage2Mapping = {
 export const benchmarkReasoningMapping = {
   run_id: { type: 'keyword' },
   model_id: { type: 'keyword' },
-  esql_query: { type: 'text' },
-  suggestions: { type: 'object', enabled: false },
   status: { type: 'keyword' },
-  created_at: { type: 'date' },
+  suggestions: {
+    type: 'nested',
+    properties: {
+      category: { type: 'keyword' },
+      title: { type: 'text' },
+      description: { type: 'text' },
+      estimatedImpact: { type: 'keyword' },
+    },
+  },
+  trace_summary: {
+    properties: {
+      totalSpans: { type: 'integer' },
+      errorCount: { type: 'integer' },
+      latencyPercentiles: {
+        properties: {
+          p50_ms: { type: 'float' },
+          p95_ms: { type: 'float' },
+          p99_ms: { type: 'float' },
+        },
+      },
+    },
+  },
+  raw_response: { type: 'text', index: false },
+  error: { type: 'text' },
+  started_at: { type: 'date' },
+  completed_at: { type: 'date' },
+  '@timestamp': { type: 'date' },
 };

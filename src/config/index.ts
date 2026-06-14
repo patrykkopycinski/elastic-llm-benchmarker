@@ -240,6 +240,15 @@ function buildEnvConfig(): Record<string, unknown> {
     kibanaRepo['autoPull'] = process.env['KIBANA_REPO_AUTO_PULL'] === 'true';
   if (Object.keys(kibanaRepo).length > 0) env['kibanaRepo'] = kibanaRepo;
 
+  // LLM configuration from env vars
+  if (process.env['LLM_API_KEY'] !== undefined) env['llmApiKey'] = process.env['LLM_API_KEY'];
+  if (process.env['LLM_BASE_URL'] !== undefined) env['llmBaseUrl'] = process.env['LLM_BASE_URL'];
+  if (process.env['LLM_MODEL'] !== undefined) env['llmModel'] = process.env['LLM_MODEL'];
+  if (process.env['LLM_MAX_TOKENS'] !== undefined)
+    env['llmMaxTokens'] = Number(process.env['LLM_MAX_TOKENS']);
+  if (process.env['LLM_TEMPERATURE'] !== undefined)
+    env['llmTemperature'] = Number(process.env['LLM_TEMPERATURE']);
+
   // Kibana connector configuration from env vars
   const kibanaConnector: Record<string, unknown> = {};
   if (process.env['KIBANA_CONNECTOR_ENABLED'] !== undefined)
