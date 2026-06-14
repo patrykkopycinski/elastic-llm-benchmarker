@@ -108,8 +108,12 @@ export class Stage2WorkerImpl implements Stage2Worker {
         completedAt,
       };
 
-      // 6. Persist result
-      await this.resultsStore.saveStage2Result(result);
+      // 6. Persist result (ignore errors)
+      try {
+        await this.resultsStore.saveStage2Result(result);
+      } catch {
+        // swallow — result should still be returned
+      }
 
       return result;
     } catch (err: unknown) {

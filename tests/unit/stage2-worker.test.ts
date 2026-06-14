@@ -264,4 +264,28 @@ describe('Stage2WorkerImpl', () => {
     expect(result.reason).toBe('unexpected gate error');
     expect(resultsStore.saveStage2Result).not.toHaveBeenCalled();
   });
+
+  it('swallows ES save error and still returns result', async () => {
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
+    vi.mocked(evalRunner.run).mockResolvedValue({
+      modelId: 'meta-llama/Llama-3-8B',
+      endpointUrl: 'http://localhost:8000',
+      status: 'success',
+      suiteResults: [
+        { suite: 'tool_calls', status: 'pass', score: 0.95, durationMs: 1200 },
+      ],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+    vi.mocked(resultsStore.saveStage2Result).mockRejectedValue(new Error('ES timeout'));
+
+    const run = createPipelineRun();
+    const stage1 = createStage1Result();
+
+    const result = await worker.execute(run, stage1);
+
+    expect(result.status).toBe('success');
+    expect(result.scores).toEqual({ tool_calls: 0.95 });
+    expect(resultsStore.saveStage2Result).toHaveBeenCalledOnce();
+  });
 });
