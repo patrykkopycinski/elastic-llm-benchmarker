@@ -64,6 +64,7 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    Standalone TypeScript Daemon                      │
+│                                                                      │
 │  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐               │
 │  │  Discovery  │→ │  HF Card     │→ │   Queue      │               │
 │  │  (HF API)   │  │  Parser      │  │   (ES docs)  │               │
@@ -76,12 +77,25 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
 │  │  Stage 2: Clone Kibana main → Bootstrap → Run eval suites         │
 │  │  Stage 3: LLM reasoning (cloud API) → Improvement suggestions     │
 │  └──────────────────────────────────────────────────────────────────│
-```
+│                                           │                          │
+│  ┌────────────────────────────────────────┘                          │
+│  │ REST API Server                                                     │
+│  │  POST /api/v1/evaluate                                              │
+│  │  GET  /api/v1/evaluate/:id                                          │
+│  │  GET  /api/v1/models                                                │
+│  │  GET  /api/v1/queue                                                 │
+│  └──────────────────────────────────────────────────────────────────│
+│                                           │                          │
+│  ┌────────────────────────────────────────┘                          │
+│  │ Golden Forwarder (background worker)                                │
+│  │  Async batch replication to shared ES cluster                       │
+│  └──────────────────────────────────────────────────────────────────│
+└─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│                     Elasticsearch — Golden Cluster                   │
-│              https://kbn-evals-serverless-ed035a...                  │
+│                     LOCAL ELASTICSEARCH (PRIMARY)                    │
+│              Single source of truth for all data                     │
 │                                                                      │
 │  Queue + Results Indices:          Trace Indices (OTel native):      │
 │  - benchmark-queue                 - .benchmark-traces-*              │
@@ -90,17 +104,22 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
 │  - benchmark-reasoning                                               │
 │  - benchmark-models                                                  │
 │  - benchmark-health-checks                                           │
+│  - benchmarker-errors        ← DLQ (golden forward failures)         │
 └─────────────────────────────────────────────────────────────────────┘
                               │
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│              EDOT Collector (long-running Docker service)            │
-│  - Receives OTLP from benchmark worker    - Forwards to golden ES    │
-│  - Health check: /healthz endpoint      - Port: non-blocking         │
-│  - 100% sampling, no tail-based dropping                             │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
+             ┌────────────────┴────────────────┐
+             ▼                                 ▼
+┌──────────────────────────────┐    ┌──────────────────────────────┐
+│  SHARED/GOLDEN ES CLUSTER    │    │         KIBANA               │
+│  (write-only, evals only)    │    │  (dashboards on local ES)    │
+│  - llm-benchmark-public      │    │  - Pipeline Overview         │
+│  - *.eval-traces-*           │    │  - Performance Comparison    │
+│  (async batched forward)     │    │  - Quality Deep-Dive         │
+└──────────────────────────────┘    │  - Improvement Suggestions   │
+                                    │  - vLLM Config Audit         │
+                                    │  - Trace Explorer            │
+                                    └──────────────────────────────┘
+```
 ┌─────────────────────────────────────────────────────────────────────┐
 │              Kibana (Dashboards — golden cluster)                    │
 │  - Pipeline Overview        - Performance Comparison                 │
@@ -184,7 +203,7 @@ Single internal team (~5-10 engineers) choosing OSS LLMs for GPU deployment.
 |---|---|---|---|
 | FR-019 | All stage results written to ES, visible in Kibana dashboards | Must-have | Preserved |
 | FR-020 | Dashboard shows queue status, current stage, per-run progress, vLLM config audit | Must-have | New |
-| FR-021 | Queue model by writing ES document (API call or direct index write) | Must-have | New |
+| FR-021 | Queue model via REST API `POST /api/v1/evaluate` or direct ES index write | Must-have | New |
 
 ### 6.7 Configuration Requirements
 
@@ -357,59 +376,145 @@ Then they see:
 }
 ```
 
+### Index: benchmarker-errors (DLQ)
+```json
+{
+  "error_id": "uuid",
+  "component": "golden_forwarder | discovery | scheduler | ssh | vllm | api",
+  "reason": "rate_limit | timeout | connection_failed | es_unavailable | unexpected",
+  "context": {
+    "batch_size": 100,
+    "target": "https://shared-es.internal",
+    "document_ids": ["doc1", "doc2"]
+  },
+  "retry_count": 3,
+  "max_retries": 3,
+  "failed_at": "2026-06-14T10:37:00Z",
+  "stack_trace": "optional",
+  "manual_review_required": true
+}
+```
+
 ## 9. API / Interfaces
 
-### Queue Model (Manual)
-```bash
-# CLI
-benchmarker queue --model "Qwen/Qwen3-70B" --profile "A100-80GBx4" --suites tool_calls,latency
+### 9.1 REST API
 
-# With explicit vLLM flags (overrides HF card parsing)
-benchmarker queue --model "Qwen/Qwen3-70B" \
-  --vllm-flags "--tensor-parallel-size=4 --quantization=fp8 --max-model-len=65536" \
-  --profile "A100-80GBx4" --suites tool_calls
+The benchmarker exposes a general-purpose HTTP API for CI pipelines, dashboards, and manual triggering. Default port: `3000`.
 
-# Direct ES write equivalent
-POST benchmark-queue/_doc
+#### Authentication
+- `Authorization: Bearer <api-key>` header required for all endpoints.
+- API keys are SHA-256 hashed and stored in `benchmarker-api-keys` index.
+- Rate limit: 100 requests/min per key (configurable).
+
+#### Endpoints
+
+**`POST /api/v1/evaluate`** — Queue a model for evaluation
+```json
 {
   "model_id": "Qwen/Qwen3-70B",
-  "status": "pending",
-  "priority": 999,
-  "source": "manual",
-  "requested_by": "patryk",
-  "eval_suites": ["tool_calls", "latency"],
   "hardware_profile": "A100-80GBx4",
+  "eval_suites": ["tool_calls", "latency"],
   "vllm_config": {
     "flags": ["--tensor-parallel-size=4", "--quantization=fp8"],
     "source": "manual_override"
+  },
+  "priority": 999,
+  "webhook_url": "https://hooks.slack.com/services/..."  // optional
+}
+```
+Response: `201 Created`
+```json
+{
+  "evaluate_id": "uuid",
+  "model_id": "Qwen/Qwen3-70B",
+  "status": "queued",
+  "queue_position": 3,
+  "estimated_start": "2026-06-14T12:00:00Z"
+}
+```
+
+**`GET /api/v1/evaluate/:id`** — Check evaluation status
+```json
+{
+  "evaluate_id": "uuid",
+  "model_id": "Qwen/Qwen3-70B",
+  "status": "queued | in-progress | completed | failed",
+  "progress": {
+    "current_stage": 2,
+    "stage_name": "kibana_eval",
+    "started_at": "2026-06-14T11:00:00Z"
   }
 }
 ```
 
-### Service Start
-```bash
-benchmarker daemon --config /etc/benchmarker/config.yaml
+**`GET /api/v1/models`** — List benchmarked models with latest results
+Query params: `?filter=passed&sort=throughput&limit=50`
+
+**`GET /api/v1/queue`** — View queue status
+```json
+{
+  "pending": 4,
+  "in_progress": 1,
+  "completed_today": 12,
+  "items": [...]
+}
 ```
 
-### Config File (YAML)
-```yaml
-elasticsearch:
-  url: "http://localhost:9200"           # PRIMARY — local queue + results + traces
-  api_key: "${ES_API_KEY}"
+**`GET /healthz`** — Service health (used by systemd, Docker, k8s probes)
+Returns `200` if local ES, EDOT collector, and GPU VM are reachable.
 
-golden_cluster:                            # OPTIONAL secondary destination
-  url: "https://kbn-evals-serverless-ed035a.kb.us-central1.gcp.elastic.cloud"
+### 9.2 CLI
+
+```bash
+# Start daemon with discovery, eval, and API server
+benchmarker start --config config.yaml --stage2 --stage3 --api-port 3000
+
+# Queue manually (CLI talks to REST API or writes directly to ES)
+benchmarker enqueue --model "Qwen/Qwen3-70B" --profile "A100-80GBx4" --suites tool_calls,latency
+
+# Bootstrap Kibana for Stage 2
+benchmarker bootstrap-kibana --commit main
+
+# Get reasoning for a completed run
+benchmarker reasoning <run-id>
+
+# Health check
+benchmarker health-check --format json
+```
+
+### 9.3 Config File (YAML)
+
+```yaml
+api_server:
+  port: 3000
+  api_keys: ["${BENCHMARKER_API_KEY}"]   # SHA-256 hashed before storage
+  rate_limit_rpm: 100
+  cors_origins: ["https://dashboard.internal", "https://ci.elastic.dev"]
+
+elasticsearch:
+  url: "http://localhost:9200"
+  api_key: "${ES_API_KEY}"
+  # NOTE: Local ES is the SINGLE source of truth. No SQLite. No dual persistence.
+  # All data: queue, results, traces, model history, health metrics, DLQ.
+
+golden_cluster:
+  url: "https://shared-es.internal"
   api_key: "${GOLDEN_ES_API_KEY}"
-  forward_to_golden: false                 # Toggle when ready to share
+  forward_enabled: true                     // async forward from local ES
+  # Forwarded data ONLY: eval traces + public benchmark cards
+  # NOT forwarded: queue state, model history, raw metrics, DLQ
+  batch_size: 100
+  flush_interval_sec: 300
+  indices:
+    public_benchmarks: "llm-benchmark-public"
+    eval_traces: "*.eval-traces-*"
 
 edot_collector:
-  otlp_endpoint: "http://localhost:4318"   # Local EDOT receiver
+  otlp_endpoint: "http://localhost:4318"
   health_url: "http://localhost:8080/healthz"
   container_id: "3084721cdd0466f68cd1d3df496a5c11bd68ef0919ddca1739d30255edc091a1"
-  sampling_rate: 1.0                       # 1.0 = 100%, no dropping
-  trace_retention_days: 30                 # ILM policy for trace indices
-  # Also forward to golden if configured:
-  golden_otlp_endpoint: "https://kbn-evals-serverless-ed035a.kb.us-central1.gcp.elastic.cloud:443"
+  sampling_rate: 1.0
+  trace_retention_days: 30
 
 gpu_vms:
   - name: "benchmark-a100"
@@ -460,6 +565,36 @@ ssh:
   key_path: "${SSH_KEY_PATH}"
 ```
 
+### 9.4 Golden Forwarding
+
+The Golden Forwarder is a background worker that asynchronously replicates evaluation results from **local ES** to the **shared/golden ES cluster**. It is NOT a real-time path — it batches, deduplicates, and replays.
+
+**Forwarding Rules**
+| Data | Forward? | Target Index | Reason |
+|---|---|---|---|
+| Eval traces (OTel) | ✅ Yes | `*.eval-traces-*` | Public-facing trace data |
+| Public benchmark cards | ✅ Yes | `llm-benchmark-public` | Curated results for community |
+| Queue state | ❌ No | — | Internal scheduling, not shareable |
+| Model history / discovery logs | ❌ No | — | Internal research |
+| Raw metrics / Stage 1 details | ❌ No | — | Too verbose for shared cluster |
+| Reasoning output | ❌ No | — | Internal suggestions |
+| DLQ / errors | ❌ No | — | Operational, not public |
+
+**Mechanism**
+1. Poll `benchmark-runs` for `status: completed` AND `forwarded_to_golden: false`
+2. Build batch (max 100 docs or 5 min)
+3. Transform to shared index schema (strip internal fields, normalize IDs)
+4. `POST _bulk` to shared ES
+5. On `429`: drop last item, retry with exponential backoff (1s, 2s, 4s, 8s)
+6. On `503`: retry with exponential backoff
+7. On repeated 4xx/5xx (>3 attempts): write to `benchmarker-errors` DLQ with `reason: golden_forward_failed`
+8. On success: update local doc `forwarded_to_golden: true`
+
+**Conflict Resolution**
+- Shared ES doc IDs are deterministic: `sha256(model_id + run_id)`
+- On version conflict (`409`): skip (already exists)
+- No updates — forwarder is append-only
+
 ## 10. Error Handling & Reliability
 
 | Scenario | Behavior |
@@ -476,7 +611,9 @@ ssh:
 | Stage 3 LLM API error | Retry 2×. If persistent, store placeholder: "Reasoning unavailable due to API error." |
 | ES unavailable | Buffer results in memory + local file. Retry ES write every 30s. Backpressure if buffer > 100MB. |
 | **EDOT Collector unhealthy** | Health check fails (`/healthz` timeout or non-200). Log error, skip current run. Re-check on next scheduler tick. Do NOT start vLLM if collector down. |
-| **Golden ES cluster unreachable** | If trace cluster unavailable but local ES is up: run benchmark, but warn that traces won't be stored. Write local OTLP fallback file for later replay. |
+| **Golden ES cluster unreachable** | If shared golden cluster unavailable, local benchmarks continue unaffected. Forwarder retries with backoff. After 3 failures per batch, writes to `benchmarker-errors` DLQ. |
+| **Golden forward 429 (rate limit)** | Drop last item from batch, halve batch size, retry. Log queue depth. |
+| **Golden forward 5xx** | Exponential backoff (1s, 2s, 4s, 8s). After 3 attempts, write entire batch to `benchmarker-errors` DLQ for manual replay. |
 
 ## 11. Security & Compliance
 
