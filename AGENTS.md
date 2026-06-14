@@ -78,6 +78,45 @@ context/
     shape-notes.md        # 10x shaping notes
 ```
 
+## Project Conventions
+
+### Folder Structure
+- `src/services/` — Business logic services (e.g., `queue-service.ts`). Export a class or factory function.
+- `src/worker/` — Pipeline stage workers. Export a class implementing the stage interface.
+- `src/scheduler/` — Orchestration logic. Export scheduler classes.
+- `src/api/` — Express routers and server setup.
+- `src/cli/` — CLI command handlers.
+- `src/engines/` — Deployment engines (vLLM, Ollama stubs). Export an engine class.
+- `src/types/` — Shared TypeScript interfaces and types.
+- `src/utils/` — Utility functions. Export individual functions, not classes.
+- `src/config/` — Configuration loading and validation.
+- `src/scripts/` — One-off scripts (not part of the main pipeline).
+- `tests/unit/` — Unit tests. Mirror `src/` structure. Name: `{module-name}.test.ts`.
+
+### Naming Conventions
+- **Files**: kebab-case (`queue-service.ts`, `stage1-worker.ts`).
+- **Services**: PascalCase class name matching file name (`QueueService` in `queue-service.ts`).
+- **Utilities**: camelCase function names (`createLogger`, `parseModelId`).
+- **Types/Interfaces**: PascalCase, explicit `export interface` or `export type`.
+- **Tests**: Co-located in `tests/unit/` with same kebab-case name + `.test.ts`.
+
+### Export Patterns
+- Services: `export class ServiceName { ... }`
+- Utilities: `export function utilityName(...) { ... }`
+- Types: `export interface TypeName { ... }`
+- Index barrels: `src/services/index.ts`, `src/types/index.ts`, etc. Re-export public API.
+
+### Error Handling
+- Never throw inside services. Return `{ success: boolean, error?: string, data?: T }`.
+- Log errors via `winston` logger (from `src/utils/logger.ts`).
+
+## Type Safety
+
+1. **Explicit return types on exports**: Every exported function, method, and class must have an explicit return type annotation. Private/internal helper functions may use inference.
+2. **No `any`**: Use `unknown` instead of `any`. If `any` is unavoidable, add an `// eslint-disable-next-line @typescript-eslint/no-explicit-any` comment with a justification.
+3. **Type imports**: Always use `import type { ... }` for types used only at compile time. ESLint enforces this.
+4. **Zod at boundaries**: Use Zod schemas to validate all external data (API payloads, ES responses, CLI arguments, config files).
+
 ## Stack & Tooling
 
 | Layer | Technology |
@@ -148,4 +187,4 @@ context/
 - **This is a daemon service**, not a library. The entry point is `src/cli.ts start` which starts a persistent process.
 - **The golden cluster is not yours.** You write to it; you don't manage it. All querying, queueing, and history lives in Elastic Serverless.
 - **Every feature must justify its existence.** If it's not on the happy path (discovery → queue → benchmark → eval → forward), delete it. The codebase has been cleaned of Ollama, multi-VM orchestration, local ES, and SQLite precisely because they were not on the happy path.
-- **Quality gate**: `npx tsc --noEmit` + `npx vitest run` must pass before any commit.
+- **Quality gate**: `npm run typecheck && npm run lint && npm run test` must all pass before any commit. Do not skip tests or suppress lint errors to pass.
