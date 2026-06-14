@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { LlmClientImpl } from '../../src/services/llm-client.js';
 import type { AppConfig } from '../../src/types/config.js';
+import type { Logger } from 'winston';
 
 function createMockConfig(overrides: Partial<AppConfig> = {}): AppConfig {
   return {
@@ -351,7 +352,7 @@ describe('LlmClientImpl', () => {
         info: vi.fn(),
         warn: vi.fn(),
         error: vi.fn(),
-      } as unknown as import('winston').Logger;
+      } as unknown as Logger;
 
       const client = new LlmClientImpl(config, logger);
       expect(client).toBeInstanceOf(LlmClientImpl);

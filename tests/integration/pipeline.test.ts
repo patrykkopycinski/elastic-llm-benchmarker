@@ -81,7 +81,7 @@ function createMockConfig(): AppConfig {
 }
 
 function createMockQueueService(entries: QueueEntry[] = []): QueueService {
-  let data = [...entries];
+  const data = [...entries];
   const statusHistory: { id: string; status: string; errorMessage?: string }[] = [];
 
   const svc = {

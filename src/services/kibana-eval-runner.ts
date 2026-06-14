@@ -778,7 +778,7 @@ export class KibanaEvalRunner {
     const hasContent =
       typeof data === 'string'
         ? data.length > 0
-        : data != null;
+        : data !== null;
 
     if (!hasContent) {
       return this.createFailResult(

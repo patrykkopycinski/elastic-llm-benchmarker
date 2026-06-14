@@ -384,10 +384,8 @@ describe('VllmDeploymentService', () => {
   describe('deploy', () => {
     it('executes the full deployment lifecycle', async () => {
       const model = createTestModel();
-      let callCount = 0;
 
       mockExec.mockImplementation((_config: SSHConfig, command: string) => {
-        callCount++;
 
         // Call 1: listContainers (for stopExistingContainers)
         if (command.includes('docker ps')) {

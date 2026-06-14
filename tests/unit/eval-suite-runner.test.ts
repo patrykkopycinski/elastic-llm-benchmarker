@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const actual = await vi.importActual('node:child_process');
   return {
     ...actual,
     execFile: vi.fn(),
@@ -21,7 +21,7 @@ vi.mock('../../src/utils/logger.js', () => ({
 
 // Keep the real OTelSpanRecorder so we can inspect its file writes in integration tests
 vi.mock('../../src/utils/otel-span-recorder.js', async () => {
-  const actual = await vi.importActual<typeof import('../../src/utils/otel-span-recorder.js')>('../../src/utils/otel-span-recorder.js');
+  const actual = await vi.importActual('../../src/utils/otel-span-recorder.js');
   return {
     ...actual,
     OTelSpanRecorder: vi.fn().mockImplementation(() => {
@@ -41,8 +41,8 @@ vi.mock('../../src/utils/otel-span-recorder.js', async () => {
 
 import { execFile } from 'node:child_process';
 import { EvalSuiteRunner, EvalSuiteError, type EvalRunOptions } from '../../src/services/eval-suite-runner.js';
-import { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
-import { OTelSpanRecorder } from '../../src/utils/otel-span-recorder.js';
+import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
+import type { OTelSpanRecorder } from '../../src/utils/otel-span-recorder.js';
 
 const execFileMock = vi.mocked(execFile);
 

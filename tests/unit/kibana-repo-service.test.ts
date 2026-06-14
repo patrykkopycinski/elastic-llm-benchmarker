@@ -4,7 +4,7 @@ import type { AppConfig } from '../../src/types/config.js';
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process');
+  const actual = await vi.importActual('node:child_process');
   return {
     ...actual,
     execFile: vi.fn(),
@@ -12,7 +12,7 @@ vi.mock('node:child_process', async () => {
 });
 
 vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const actual = await vi.importActual('node:fs');
   return {
     ...actual,
     existsSync: vi.fn(),

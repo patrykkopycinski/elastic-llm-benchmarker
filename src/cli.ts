@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import type { PipelineRun } from './scheduler/pipeline-state.js';
+
 
 /**
  * elastic-llm-benchmarker CLI
@@ -1378,7 +1380,7 @@ if (binaryName === 'benchmarker-queue') {
         logger,
       });
 
-      const run: import('./scheduler/pipeline-state.js').PipelineRun = {
+      const run: PipelineRun = {
         runId,
         modelId,
         queueEntryId: runId,

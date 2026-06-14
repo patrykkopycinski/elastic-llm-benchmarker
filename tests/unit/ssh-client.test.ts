@@ -8,10 +8,6 @@ import {
   SSHTransferError,
 } from '../../src/services/ssh-client.js';
 import type {
-  CommandResult,
-  ExecOptions,
-  SSHClientPoolOptions,
-  ConnectionStatus,
 } from '../../src/services/ssh-client.js';
 import type { SSHConfig } from '../../src/types/config.js';
 
@@ -33,9 +29,9 @@ class MockClient extends EventEmitter {
   private _readyCallback: (() => void) | null = null;
   private _shouldFailConnect = false;
   private _connectError: Error | null = null;
-  private _execHandler: ((command: string, options: unknown, callback: Function) => void) | null =
+  private _execHandler: ((command: string, options: unknown, callback: (...args: unknown[]) => unknown) => void) | null =
     null;
-  private _sftpHandler: ((callback: Function) => void) | null = null;
+  private _sftpHandler: ((callback: (...args: unknown[]) => unknown) => void) | null = null;
 
   connect = vi.fn().mockImplementation(() => {
     if (this._shouldFailConnect) {
@@ -84,12 +80,12 @@ class MockClient extends EventEmitter {
   }
 
   setExecHandler(
-    handler: (command: string, options: unknown, callback: Function) => void,
+    handler: (command: string, options: unknown, callback: (...args: unknown[]) => unknown) => void,
   ): void {
     this._execHandler = handler;
   }
 
-  setSftpHandler(handler: (callback: Function) => void): void {
+  setSftpHandler(handler: (callback: (...args: unknown[]) => unknown) => void): void {
     this._sftpHandler = handler;
   }
 }
@@ -101,7 +97,7 @@ vi.mock('ssh2', () => ({
 
 // Mock fs for file operations
 vi.mock('node:fs', async () => {
-  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  const actual = await vi.importActual('node:fs');
   return {
     ...actual,
     existsSync: vi.fn().mockReturnValue(true),
@@ -188,7 +184,7 @@ describe('SSHClientPool', () => {
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setExecHandler((_cmd, _opts, callback) => {
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         setTimeout(() => {
           stream.stderr.emit('data', Buffer.from('command not found'));
           stream.emit('close', 127, null);
@@ -214,7 +210,7 @@ describe('SSHClientPool', () => {
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setExecHandler((_cmd, _opts, callback) => {
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         setTimeout(() => {
           stream.emit('data', Buffer.from('output line 1\n'));
           stream.emit('data', Buffer.from('output line 2\n'));
@@ -241,7 +237,7 @@ describe('SSHClientPool', () => {
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setExecHandler((_cmd, _opts, callback) => {
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         setTimeout(() => {
           stream.emit('close', null, 'SIGKILL');
         }, 0);
@@ -267,7 +263,7 @@ describe('SSHClientPool', () => {
       mockClient.setExecHandler((cmd, _opts, callback) => {
         executedCommand = cmd as string;
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         setTimeout(() => {
           stream.emit('data', Buffer.from('root'));
           stream.emit('close', 0, null);
@@ -293,7 +289,7 @@ describe('SSHClientPool', () => {
       mockClient.setExecHandler((cmd, _opts, callback) => {
         executedCommand = cmd as string;
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         setTimeout(() => {
           stream.emit('data', Buffer.from(''));
           stream.emit('close', 0, null);
@@ -318,7 +314,7 @@ describe('SSHClientPool', () => {
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setExecHandler((_cmd, _opts, callback) => {
         const stream = new MockStream();
-        (callback as Function)(null, stream);
+        (callback as (...args: unknown[]) => unknown)(null, stream);
         // Never emit close - simulating a hung command
       });
 
@@ -568,7 +564,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -593,7 +589,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -620,7 +616,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -645,7 +641,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -664,16 +660,16 @@ describe('SSHClientPool', () => {
     it('should upload string content via SFTP write stream', async () => {
       const { Client } = await import('ssh2');
       const mockSftp = new MockSFTPWrapper();
-      const mockWriteStream = new EventEmitter() as EventEmitter & { end?: Function };
+      const mockWriteStream = new EventEmitter() as EventEmitter & { end?: (...args: unknown[]) => unknown };
       // Simulate a writable stream
-      (mockWriteStream as unknown as { write: Function }).write = vi.fn();
+      (mockWriteStream as unknown as { write: (...args: unknown[]) => unknown }).write = vi.fn();
       mockWriteStream.end = vi.fn();
 
       mockSftp.createWriteStream.mockReturnValue(mockWriteStream);
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -704,7 +700,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
@@ -735,7 +731,7 @@ describe('SSHClientPool', () => {
 
       const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
       mockClient.setSftpHandler((callback) => {
-        (callback as Function)(null, mockSftp);
+        (callback as (...args: unknown[]) => unknown)(null, mockSftp);
       });
 
       vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);

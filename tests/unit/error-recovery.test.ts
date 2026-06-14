@@ -1,9 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ErrorRecoveryService } from '../../src/services/error-recovery.js';
 import type {
-  ErrorCategory,
-  RecoveryAction,
-  ErrorRecoveryDecision,
   RecoveryContext,
 } from '../../src/services/error-recovery.js';
 import {

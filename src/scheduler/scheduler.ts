@@ -1,5 +1,5 @@
-import { QueueService, QueueEntry } from '../services/queue-service.js';
-import { PipelineRun } from './pipeline-state.js';
+import type { QueueService, QueueEntry } from '../services/queue-service.js';
+import type { PipelineRun } from './pipeline-state.js';
 import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../worker/index.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 

@@ -11,6 +11,9 @@ import type {
 } from '../../src/services/health-check.js';
 import { SystemHealthChecker } from '../../src/services/system-health-check.js';
 import { GoldenForwarder } from '../../src/services/golden-forwarder.js';
+import type { AppConfig } from '../../src/types/config.js';
+import type { DiscoveryScheduler } from '../../src/services/discovery-scheduler.js';
+import type { QueueService } from '../../src/services/queue-service.js';
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
 
@@ -571,7 +574,7 @@ describe('HealthCheckService', () => {
     });
 
     it('classifies logs on timeout when fatal error present', async () => {
-      let callCount = 0;
+      const _callCount = 0;
 
       mockExec.mockImplementation((_config: SSHConfig, command: string) => {
         if (command.includes('docker inspect')) {
@@ -722,7 +725,7 @@ describe('HealthCheckService', () => {
   describe('SystemHealthChecker', () => {
     const baseConfig = {
       goldenCluster: { enabled: false },
-    } as unknown as import('../../src/types/config.js').AppConfig;
+    } as unknown as AppConfig;
 
     it('returns ok when no optional services are configured', async () => {
       const checker = new SystemHealthChecker({ config: baseConfig });
@@ -740,7 +743,7 @@ describe('HealthCheckService', () => {
         get isRunning() {
           return false;
         },
-      } as unknown as import('../../src/services/discovery-scheduler.js').DiscoveryScheduler;
+      } as unknown as DiscoveryScheduler;
 
       const checker = new SystemHealthChecker({
         config: baseConfig,
@@ -758,7 +761,7 @@ describe('HealthCheckService', () => {
         get isRunning() {
           return true;
         },
-      } as unknown as import('../../src/services/discovery-scheduler.js').DiscoveryScheduler;
+      } as unknown as DiscoveryScheduler;
 
       const checker = new SystemHealthChecker({
         config: baseConfig,
@@ -821,7 +824,7 @@ describe('HealthCheckService', () => {
         async getPending() {
           return 55;
         },
-      } as unknown as import('../../src/services/queue-service.js').QueueService;
+      } as unknown as QueueService;
 
       const checker = new SystemHealthChecker({
         config: baseConfig,
@@ -840,7 +843,7 @@ describe('HealthCheckService', () => {
         async getPending() {
           return 12;
         },
-      } as unknown as import('../../src/services/queue-service.js').QueueService;
+      } as unknown as QueueService;
 
       const checker = new SystemHealthChecker({
         config: baseConfig,

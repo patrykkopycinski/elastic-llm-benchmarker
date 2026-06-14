@@ -5,7 +5,7 @@ const DEFAULT_APP_LOG_FILE = '/var/log/benchmarker/app.jsonl';
 
 /** ECS-style JSON format for file transport (Elastic Agent / Elasticsearch) */
 const jsonFileFormat = winston.format((info) => {
-  const { timestamp, level, message, service, ...meta } = info;
+  const { timestamp, level, message, _service, ...meta } = info;
   const ts =
     typeof timestamp === 'string' || typeof timestamp === 'number' || timestamp instanceof Date
       ? new Date(timestamp).toISOString()

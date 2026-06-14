@@ -6,11 +6,12 @@ import type {
 } from '../types/config.js';
 import type { BenchmarkResult, ModelInfo } from '../types/benchmark.js';
 import { HFCardParser } from '../services/hf-card-parser.js';
-import { VllmEngine } from '../engines/vllm-engine.js';
-import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
-import { QueueService } from '../services/queue-service.js';
+import type { VllmEngine } from '../engines/vllm-engine.js';
+import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
+import type { QueueService } from '../services/queue-service.js';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
+import type { EngineDeploymentResult } from '../engines/engine-types.js';
 
 /**
  * Interface for Stage 1 workers that execute the HF parse → deploy → benchmark
@@ -59,7 +60,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
 
   async execute(run: PipelineRun): Promise<Stage1Result> {
     const startTime = Date.now();
-    let deployment: import('../engines/engine-types.js').EngineDeploymentResult | null = null;
+    let deployment: EngineDeploymentResult | null = null;
 
     const result: Stage1Result = {
       runId: run.runId,

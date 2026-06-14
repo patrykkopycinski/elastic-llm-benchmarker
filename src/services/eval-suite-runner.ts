@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { ElasticsearchResultsStore } from './elasticsearch-results-store.js';
+import type { ElasticsearchResultsStore } from './elasticsearch-results-store.js';
 import { createLogger } from '../utils/logger.js';
 import { OTelSpanRecorder } from '../utils/otel-span-recorder.js';
 import type { Logger } from 'winston';

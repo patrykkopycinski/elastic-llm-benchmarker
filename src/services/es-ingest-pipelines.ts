@@ -1,4 +1,4 @@
-import { Client } from '@elastic/elasticsearch';
+import type { Client } from '@elastic/elasticsearch';
 
 export const PIPELINE_NAME = 'benchmarker-results-pipeline';
 

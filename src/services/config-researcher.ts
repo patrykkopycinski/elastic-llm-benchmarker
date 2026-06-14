@@ -121,14 +121,14 @@ export class ConfigResearcherService {
 
     const capabilities = {
       toolCalling: {
-        supported: baseParams.toolCallParser != null,
+        supported: baseParams.toolCallParser !== null,
         parser: baseParams.toolCallParser,
       },
       reasoning: {
         supported: modelCard ? this.detectReasoning(modelId) : false,
         method: 'native' as const,
       },
-      parallelToolCalls: baseParams.toolCallParser != null,
+      parallelToolCalls: baseParams.toolCallParser !== null,
     };
 
     return {

@@ -1,3 +1,4 @@
+import type { TraceSummary } from '../services/trace-query-builder.js';
 export type PipelineStage = 'idle' | 'hf_parse' | 'deploy' | 'benchmark' | 'store' | 'done' | 'failed';
 
 export interface PipelineRun {
@@ -79,7 +80,7 @@ export interface Stage3Result {
   modelId: string;
   status: 'success' | 'error';
   suggestions?: Stage3Suggestion[];
-  traceSummary?: import('../services/trace-query-builder.js').TraceSummary;
+  traceSummary?: TraceSummary;
   rawResponse?: string;
   error?: string;
   startedAt: string;

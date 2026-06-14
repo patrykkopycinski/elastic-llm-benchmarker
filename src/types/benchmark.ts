@@ -1,3 +1,5 @@
+import type { ReasoningBenchmarkResult } from './reasoning.js';
+
 /**
  * Information about a discovered HuggingFace model
  */
@@ -133,7 +135,7 @@ export interface BenchmarkResult {
   /** Tool calling test results */
   toolCallResults: ToolCallResult | null;
   /** Reasoning capability test results */
-  reasoningResults?: import('./reasoning.js').ReasoningBenchmarkResult | null;
+  reasoningResults?: ReasoningBenchmarkResult | null;
   /** Overall pass/fail status */
   passed: boolean;
   /** Reasons for rejection, if any */

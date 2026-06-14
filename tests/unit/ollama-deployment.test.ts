@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SSHConfig, VMHardwareProfile } from '../../src/types/config.js';
 import type { ModelInfo } from '../../src/types/benchmark.js';
-import type { SSHClientPool, CommandResult } from '../../src/services/ssh-client.js';
+import type { SSHClientPool } from '../../src/services/ssh-client.js';
 import {
   OllamaDeploymentService,
   OllamaDeploymentError,
@@ -17,35 +16,6 @@ function createMockSSHPool(execMock?: typeof vi.fn): SSHClientPool {
     close: vi.fn(),
   } as unknown as SSHClientPool;
 }
-
-function createCommandResult(overrides: Partial<CommandResult> = {}): CommandResult {
-  return {
-    command: 'test-command',
-    stdout: '',
-    stderr: '',
-    exitCode: 0,
-    signal: null,
-    success: true,
-    durationMs: 100,
-    ...overrides,
-  };
-}
-
-const testSSHConfig: SSHConfig = {
-  host: '10.0.0.1',
-  port: 22,
-  username: 'testuser',
-  privateKeyPath: '/home/testuser/.ssh/id_rsa',
-};
-
-const testHardwareProfile: VMHardwareProfile = {
-  gpuType: 'nvidia-a100-80gb',
-  gpuCount: 2,
-  ramGb: 680,
-  cpuCores: 24,
-  diskGb: 1000,
-  machineType: 'a2-ultragpu-2g',
-};
 
 const qwenModel: ModelInfo = {
   id: 'Qwen/Qwen2.5-7B-Instruct',
@@ -72,11 +42,8 @@ const llamaModel: ModelInfo = {
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('OllamaDeploymentService', () => {
-  let mockExec: ReturnType<typeof vi.fn>;
-
   beforeEach(() => {
     vi.clearAllMocks();
-    mockExec = vi.fn();
   });
 
   describe('constructor', () => {

@@ -141,7 +141,7 @@ export function buildDeployCommandWithToolCalling(options: {
     `--model ${modelId}`,
     `--tensor-parallel-size ${tensorParallelSize}`,
     `--gpu-memory-utilization ${gpuMemoryUtilization}`,
-    maxModelLen != null ? `--max-model-len ${maxModelLen}` : '--max-model-len auto',
+    maxModelLen !== null ? `--max-model-len ${maxModelLen}` : '--max-model-len auto',
   ].filter(Boolean);
 
   if (params.toolCallParser) {

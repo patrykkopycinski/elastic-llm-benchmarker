@@ -23,7 +23,7 @@ function createDefaultKibanaConfig(overrides: Partial<KibanaConnectorConfig> = {
   };
 }
 
-function createMockConnectorInfo(overrides: Partial<KibanaConnectorInfo> = {}): KibanaConnectorInfo {
+function _createMockConnectorInfo(overrides: Partial<KibanaConnectorInfo> = {}): KibanaConnectorInfo {
   return {
     id: 'connector-123',
     name: 'vllm-meta-llama-Llama-3-70B',

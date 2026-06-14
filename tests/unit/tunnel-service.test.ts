@@ -23,7 +23,7 @@ function createDefaultTunnelConfig(overrides: Partial<TunnelConfig> = {}): Tunne
   };
 }
 
-function createMockTunnelInfo(overrides: Partial<TunnelInfo> = {}): TunnelInfo {
+function _createMockTunnelInfo(overrides: Partial<TunnelInfo> = {}): TunnelInfo {
   return {
     publicUrl: 'https://abc123.ngrok-free.app',
     provider: 'ngrok',

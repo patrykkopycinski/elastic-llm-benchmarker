@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type { SSHConfig, VMHardwareProfile, BenchmarkThresholds } from '../../src/types/config.js';
+import {describe, it, expect, vi } from 'vitest';
+import type { } from '../../src/types/config.js';
 import type { ModelInfo } from '../../src/types/benchmark.js';
 import type { SSHClientPool, CommandResult } from '../../src/services/ssh-client.js';
 import { VllmEngine } from '../../src/engines/vllm-engine.js';
@@ -13,7 +13,7 @@ function createMockSSHPool(execMock?: typeof vi.fn): SSHClientPool {
   } as unknown as SSHClientPool;
 }
 
-function createCommandResult(overrides: Partial<CommandResult> = {}): CommandResult {
+function _createCommandResult(overrides: Partial<CommandResult> = {}): CommandResult {
   return {
     command: 'test-command',
     stdout: '',

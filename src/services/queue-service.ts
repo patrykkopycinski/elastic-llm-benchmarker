@@ -284,7 +284,7 @@ export class QueueService {
       return updateRes.result !== 'noop';
     } catch (err: unknown) {
       if (
-        err != null &&
+        err !== null &&
         typeof err === 'object' &&
         'statusCode' in err &&
         (err as { statusCode: number }).statusCode === 404

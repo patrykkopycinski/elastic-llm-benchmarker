@@ -1,6 +1,6 @@
 // tests/unit/vm-resource-manager.test.ts
 import { describe, it, expect } from 'vitest';
-import { VMResourceManagerService, VMLease } from '../../src/services/vm-resource-manager.js';
+import {VMResourceManagerService} from '../../src/services/vm-resource-manager.js';
 
 describe('VMResourceManagerService', () => {
   const vmConfig = {

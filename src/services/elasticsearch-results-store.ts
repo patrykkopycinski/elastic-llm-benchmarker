@@ -1,4 +1,4 @@
-import { Client } from '@elastic/elasticsearch';
+import type { Client } from '@elastic/elasticsearch';
 import type {
   BenchmarkResult,
   BenchmarkMetrics,
@@ -10,6 +10,8 @@ import type {
 import { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
 import { createLogger } from '../utils/logger.js';
 import type { EvalSuiteResult } from './eval-suite-runner.js';
+import type { Stage2Result } from '../scheduler/pipeline-state.js';
+import type { Stage3Result } from '../scheduler/pipeline-state.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
@@ -704,7 +706,7 @@ export class ElasticsearchResultsStore {
     this.logger.info('Stored eval suite result', { modelId: result.modelId, index, status: result.status });
   }
 
-  async saveStage2Result(result: import('../scheduler/pipeline-state.js').Stage2Result): Promise<void> {
+  async saveStage2Result(result: Stage2Result): Promise<void> {
     const dateSuffix = result.startedAt.slice(0, 10);
     const index = `${INDEX_NAMES.BENCHMARKER_STAGE2}-${dateSuffix}`;
     const doc: Record<string, unknown> = {
@@ -731,7 +733,7 @@ export class ElasticsearchResultsStore {
     this.logger.info('Stored stage2 result', { modelId: result.modelId, index, status: result.status });
   }
 
-  async saveReasoningResult(result: import('../scheduler/pipeline-state.js').Stage3Result): Promise<void> {
+  async saveReasoningResult(result: Stage3Result): Promise<void> {
     const dateSuffix = result.startedAt.slice(0, 10);
     const index = `${INDEX_NAMES.BENCHMARKER_REASONING}-${dateSuffix}`;
     const doc: Record<string, unknown> = {

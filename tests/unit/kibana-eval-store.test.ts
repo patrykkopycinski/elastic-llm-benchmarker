@@ -4,7 +4,6 @@ import {
 } from '../../src/services/kibana-eval-store.js';
 import type {
   KibanaEvalReport,
-  KibanaEvalRunnerConfig,
 } from '../../src/types/kibana-eval.js';
 import { DEFAULT_KIBANA_EVAL_CONFIG } from '../../src/types/kibana-eval.js';
 

@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import type { KibanaConnectorConfig } from '../../src/types/config.js';
 import type {
-  KibanaEvalReport,
   KibanaEvalRunnerConfig,
 } from '../../src/types/kibana-eval.js';
 import { SEVERITY_WEIGHTS, DEFAULT_KIBANA_EVAL_CONFIG } from '../../src/types/kibana-eval.js';
@@ -355,7 +354,7 @@ describe('KibanaEvalRunner', () => {
 
     it('returns PARTIAL when score is below threshold but no critical failures', async () => {
       // Make critical tasks pass but important/nice-to-have tasks fail
-      let taskIndex = 0;
+      const _taskIndex = 0;
       mockFetch.mockImplementation(async (_url: string, options: { body?: string }) => {
         const body = options.body ? JSON.parse(options.body) : {};
         const subAction = body.params?.subAction;

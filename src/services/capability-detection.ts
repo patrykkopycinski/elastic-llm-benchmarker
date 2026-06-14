@@ -17,14 +17,14 @@ export class CapabilityDetectionService {
 
     return {
       toolCalling: {
-        supported: params.toolCallParser != null,
+        supported: params.toolCallParser !== null,
         parser: params.toolCallParser,
       },
       reasoning: {
         supported: this.detectReasoning(modelId),
         method: 'native',
       },
-      parallelToolCalls: params.toolCallParser != null,
+      parallelToolCalls: params.toolCallParser !== null,
     };
   }
 
