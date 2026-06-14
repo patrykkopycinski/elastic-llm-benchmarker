@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import dotenv from 'dotenv';
 import { ZodError } from 'zod';
+import YAML from 'yaml';
 import { appConfigSchema } from '../types/config.js';
 import type { AppConfig } from '../types/config.js';
 import { defaultHardwareProfileRegistry } from '../services/hardware-profiles.js';
@@ -20,8 +21,8 @@ export interface LoadConfigOptions {
 }
 
 /**
- * Loads a JSON configuration file from disk.
- * Returns an empty object if the file does not exist or cannot be parsed.
+ * Loads a configuration file from disk (JSON or YAML).
+ * Returns an empty object if the file does not exist.
  */
 export function loadConfigFile(configPath: string): Record<string, unknown> {
   const resolvedPath = resolve(configPath);
@@ -30,10 +31,17 @@ export function loadConfigFile(configPath: string): Record<string, unknown> {
   }
 
   const content = readFileSync(resolvedPath, 'utf-8');
-  const parsed: unknown = JSON.parse(content);
+  const ext = resolvedPath.toLowerCase();
+  let parsed: unknown;
+
+  if (ext.endsWith('.yaml') || ext.endsWith('.yml')) {
+    parsed = YAML.parse(content);
+  } else {
+    parsed = JSON.parse(content);
+  }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`Config file at ${resolvedPath} must contain a JSON object`);
+    throw new Error(`Config file at ${resolvedPath} must contain a JSON/YAML object`);
   }
 
   return parsed as Record<string, unknown>;
@@ -179,6 +187,58 @@ function buildEnvConfig(): Record<string, unknown> {
   if (process.env['ELASTIC_AGENT_MODE'] !== undefined)
     elasticAgent['mode'] = process.env['ELASTIC_AGENT_MODE'];
   if (Object.keys(elasticAgent).length > 0) env['elasticAgent'] = elasticAgent;
+
+  // Stage 2 thresholds from env vars
+  const stage2Thresholds: Record<string, unknown> = {};
+  if (process.env['STAGE2_MIN_ITL_P50_MS'] !== undefined)
+    stage2Thresholds['minItlP50Ms'] = Number(process.env['STAGE2_MIN_ITL_P50_MS']);
+  if (process.env['STAGE2_MIN_THROUGHPUT_TPS'] !== undefined)
+    stage2Thresholds['minThroughputTps'] = Number(process.env['STAGE2_MIN_THROUGHPUT_TPS']);
+  if (process.env['STAGE2_MAX_TTFT_MS'] !== undefined)
+    stage2Thresholds['maxTtftMs'] = Number(process.env['STAGE2_MAX_TTFT_MS']);
+  if (process.env['STAGE2_MIN_CONTEXT_WINDOW'] !== undefined)
+    stage2Thresholds['minContextWindow'] = Number(process.env['STAGE2_MIN_CONTEXT_WINDOW']);
+  if (Object.keys(stage2Thresholds).length > 0) env['stage2Thresholds'] = stage2Thresholds;
+
+  // Golden cluster configuration from env vars
+  const goldenCluster: Record<string, unknown> = {};
+  if (process.env['GOLDEN_CLUSTER_ENABLED'] !== undefined)
+    goldenCluster['enabled'] = process.env['GOLDEN_CLUSTER_ENABLED'] === 'true';
+  if (process.env['GOLDEN_CLUSTER_URL'] !== undefined)
+    goldenCluster['url'] = process.env['GOLDEN_CLUSTER_URL'];
+  if (process.env['GOLDEN_CLUSTER_API_KEY'] !== undefined)
+    goldenCluster['apiKey'] = process.env['GOLDEN_CLUSTER_API_KEY'];
+  if (process.env['GOLDEN_CLUSTER_FORWARD_TO_GOLDEN'] !== undefined)
+    goldenCluster['forwardToGolden'] = process.env['GOLDEN_CLUSTER_FORWARD_TO_GOLDEN'] === 'true';
+  if (Object.keys(goldenCluster).length > 0) env['goldenCluster'] = goldenCluster;
+
+  // EDOT collector configuration from env vars
+  const edotCollector: Record<string, unknown> = {};
+  if (process.env['EDOT_COLLECTOR_ENABLED'] !== undefined)
+    edotCollector['enabled'] = process.env['EDOT_COLLECTOR_ENABLED'] === 'true';
+  if (process.env['EDOT_COLLECTOR_OTLP_ENDPOINT'] !== undefined)
+    edotCollector['otlpEndpoint'] = process.env['EDOT_COLLECTOR_OTLP_ENDPOINT'];
+  if (process.env['EDOT_COLLECTOR_HEALTH_ENDPOINT'] !== undefined)
+    edotCollector['healthEndpoint'] = process.env['EDOT_COLLECTOR_HEALTH_ENDPOINT'];
+  if (process.env['EDOT_COLLECTOR_TRACE_INDEX_PATTERN'] !== undefined)
+    edotCollector['traceIndexPattern'] = process.env['EDOT_COLLECTOR_TRACE_INDEX_PATTERN'];
+  if (process.env['EDOT_COLLECTOR_SAMPLING_RATE'] !== undefined)
+    edotCollector['samplingRate'] = Number(process.env['EDOT_COLLECTOR_SAMPLING_RATE']);
+  if (Object.keys(edotCollector).length > 0) env['edotCollector'] = edotCollector;
+
+  // Kibana repository configuration from env vars
+  const kibanaRepo: Record<string, unknown> = {};
+  if (process.env['KIBANA_REPO_URL'] !== undefined)
+    kibanaRepo['url'] = process.env['KIBANA_REPO_URL'];
+  if (process.env['KIBANA_REPO_PIN_TO_COMMIT'] !== undefined)
+    kibanaRepo['pinToCommit'] = process.env['KIBANA_REPO_PIN_TO_COMMIT'];
+  if (process.env['KIBANA_REPO_PIN_TO_TAG'] !== undefined)
+    kibanaRepo['pinToTag'] = process.env['KIBANA_REPO_PIN_TO_TAG'];
+  if (process.env['KIBANA_REPO_CLONE_PATH'] !== undefined)
+    kibanaRepo['clonePath'] = process.env['KIBANA_REPO_CLONE_PATH'];
+  if (process.env['KIBANA_REPO_AUTO_PULL'] !== undefined)
+    kibanaRepo['autoPull'] = process.env['KIBANA_REPO_AUTO_PULL'] === 'true';
+  if (Object.keys(kibanaRepo).length > 0) env['kibanaRepo'] = kibanaRepo;
 
   // Kibana connector configuration from env vars
   const kibanaConnector: Record<string, unknown> = {};

@@ -200,11 +200,20 @@ export type {
   EngineFactoryOptions,
 } from './engines/engine-types.js';
 
-// Agent exports
-export { graph, createConfigurable, destroyConfigurable } from './agent/index.js';
-export type { BenchmarkConfigurable } from './agent/index.js';
-export { AgentAnnotation } from './agent/state.js';
-export type { GraphState, GraphStateUpdate, RecoveryRecord } from './agent/state.js';
+// Scheduler exports
+export { Scheduler } from './scheduler/index.js';
+export type {
+  SchedulerOptions,
+  PipelineStage,
+  PipelineRun,
+  HFCardResult,
+  DeploymentInfo,
+  Stage1Result,
+} from './scheduler/index.js';
+
+// Worker exports
+export { Stage1WorkerImpl } from './worker/index.js';
+export type { Stage1Worker, Stage1WorkerDependencies } from './worker/index.js';
 
 // Kibana evaluation runner exports
 export { KibanaEvalRunner, KIBANA_EVAL_TASKS } from './services/kibana-eval-runner.js';

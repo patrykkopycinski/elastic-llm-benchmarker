@@ -252,7 +252,7 @@ describe('loadConfigFile', () => {
     writeFileSync(configPath, JSON.stringify([1, 2, 3]));
 
     try {
-      expect(() => loadConfigFile(configPath)).toThrow('must contain a JSON object');
+      expect(() => loadConfigFile(configPath)).toThrow('must contain a JSON/YAML object');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

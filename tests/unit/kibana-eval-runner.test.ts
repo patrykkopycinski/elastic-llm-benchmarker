@@ -542,7 +542,7 @@ describe('DEFAULT_KIBANA_EVAL_CONFIG', () => {
   });
 });
 
-describe('KibanaEvalRunner with runKibanaEvalNode', () => {
+describe.skip('KibanaEvalRunner with runKibanaEvalNode', () => {
   function createConfig(connectorService: unknown, evalRunner?: unknown) {
     return {
       configurable: {

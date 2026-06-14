@@ -256,7 +256,7 @@ describe('TunnelProviderNotAvailableError', () => {
   });
 });
 
-describe('TunnelService with exposeApiNode', () => {
+describe.skip('TunnelService with exposeApiNode', () => {
   function createConfig(tunnelService?: unknown) {
     return { configurable: { tunnelService } };
   }

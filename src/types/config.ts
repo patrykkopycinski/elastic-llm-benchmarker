@@ -49,6 +49,16 @@ export const benchmarkThresholdsSchema = z.object({
 });
 
 /**
+ * Stage 2 thresholds for the gate between Stage 1 and Stage 2 benchmarks.
+ */
+export const stage2ThresholdsSchema = z.object({
+  minItlP50Ms: z.number().positive().default(20),
+  minThroughputTps: z.number().positive().default(10),
+  maxTtftMs: z.number().positive().default(5000),
+  minContextWindow: z.number().int().positive().default(128_000),
+});
+
+/**
  * VM hardware profile configuration describing the GCP VM resources
  */
 export const vmHardwareProfileSchema = z.object({
@@ -355,6 +365,38 @@ export const elasticAgentConfigSchema = z.object({
 });
 
 /**
+ * Golden cluster configuration for centralized tracking.
+ */
+export const goldenClusterConfigSchema = z.object({
+  enabled: z.boolean().default(false),
+  url: z.string().url().default('https://kbn-evals-serverless-ed035a.kb.us-central1.gcp.elastic.cloud'),
+  apiKey: z.string().optional(),
+  forwardToGolden: z.boolean().default(false),
+});
+
+/**
+ * EDOT collector configuration for OpenTelemetry trace collection.
+ */
+export const edotCollectorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  otlpEndpoint: z.string().url().default('http://localhost:4318'),
+  healthEndpoint: z.string().url().default('http://localhost:8080/healthz'),
+  traceIndexPattern: z.string().default('.benchmark-traces-*'),
+  samplingRate: z.number().min(0).max(1).default(1.0),
+});
+
+/**
+ * Kibana repository configuration for cloning the Kibana main repo.
+ */
+export const kibanaRepoConfigSchema = z.object({
+  url: z.string().url().default('https://github.com/elastic/kibana.git'),
+  pinToCommit: z.string().optional(),
+  pinToTag: z.string().optional(),
+  clonePath: z.string().default('./.kibana-cache'),
+  autoPull: z.boolean().default(true),
+});
+
+/**
  * Application configuration schema
  */
 export const appConfigSchema = z.object({
@@ -384,6 +426,14 @@ export const appConfigSchema = z.object({
   kibanaEval: kibanaEvalConfigSchema.default({}),
   elasticsearch: elasticsearchConfigSchema.default({}),
   elasticAgent: elasticAgentConfigSchema.default({}),
+  /** Stage 2 thresholds for the gate between Stage 1 and Stage 2 benchmarks. */
+  stage2Thresholds: stage2ThresholdsSchema.default({}),
+  /** Golden cluster configuration for centralized tracking. */
+  goldenCluster: goldenClusterConfigSchema.default({}),
+  /** EDOT collector configuration for OpenTelemetry trace collection. */
+  edotCollector: edotCollectorConfigSchema.default({}),
+  /** Kibana repository configuration for cloning the Kibana main repo. */
+  kibanaRepo: kibanaRepoConfigSchema.default({}),
 });
 
 export type SSHConfig = z.infer<typeof sshConfigSchema>;
@@ -430,3 +480,7 @@ export type WebhookChannelConfig = z.infer<typeof webhookChannelConfigSchema>;
 export type EmailChannelConfig = z.infer<typeof emailChannelConfigSchema>;
 export type ElasticsearchConfig = z.infer<typeof elasticsearchConfigSchema>;
 export type ElasticAgentConfig = z.infer<typeof elasticAgentConfigSchema>;
+export type Stage2Thresholds = z.infer<typeof stage2ThresholdsSchema>;
+export type GoldenClusterConfig = z.infer<typeof goldenClusterConfigSchema>;
+export type EdotCollectorConfig = z.infer<typeof edotCollectorConfigSchema>;
+export type KibanaRepoConfig = z.infer<typeof kibanaRepoConfigSchema>;

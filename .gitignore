@@ -63,3 +63,4 @@ failed-reports/
 *.jsonl
 data/checkpoints.db
 data/*.db
+.hf-cache/

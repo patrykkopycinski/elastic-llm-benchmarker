@@ -136,3 +136,10 @@ export type {
   OllamaBenchmarkRunResult,
   OllamaFullBenchmarkResult,
 } from './ollama-benchmark-runner.js';
+export { HFCardParser } from './hf-card-parser.js';
+export type {
+  HFCardParserOptions,
+  HFModelCard,
+  VllmConfigFlags,
+  ParsedHFCard,
+} from './hf-card-parser.js';

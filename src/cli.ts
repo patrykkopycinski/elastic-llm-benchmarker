@@ -19,14 +19,20 @@
 
 import { Command } from 'commander';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { resolve, dirname, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execSync } from 'node:child_process';
 import { Client } from '@elastic/elasticsearch';
 import { loadConfig } from './config/index.js';
 import { ElasticsearchResultsStore } from './services/elasticsearch-results-store.js';
 import { ResultsStore } from './services/results-store.js';
 import { QueueService } from './services/queue-service.js';
+import { Scheduler } from './scheduler/scheduler.js';
+import { Stage1WorkerImpl } from './worker/index.js';
+import { Lockfile } from './utils/lockfile.js';
+import { SSHClientPool } from './services/ssh-client.js';
+import { VllmEngine } from './engines/vllm-engine.js';
+import { createLogger } from './utils/logger.js';
 import { registerIngestPipelines } from './services/es-ingest-pipelines.js';
 import type { BenchmarkResult } from './types/benchmark.js';
 import type { ModelBenchmarkSummary } from './services/elasticsearch-results-store.js';
@@ -1052,6 +1058,174 @@ program
       await esClient.close();
     }
   });
+
+// ─── benchmarker-queue commands ───────────────────────────────────────────────
+
+const binaryName = basename(process.argv[1] ?? '');
+
+if (binaryName === 'benchmarker-queue') {
+  program.name('benchmarker-queue').description('LLM Benchmarker Queue Scheduler');
+
+  program
+    .command('start')
+    .description('Start the scheduler polling loop for pending queue entries')
+    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
+    .option('--poll-interval <ms>', 'Polling interval in milliseconds', '30000')
+    .action(async (opts) => {
+      const configPath = opts['config'] as string;
+      const pollInterval = parseInt(opts['pollInterval'] as string, 10);
+
+      // Lockfile check
+      const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
+      if (!lockfile.acquire()) {
+        console.error('Error: benchmarker-queue is already running (lockfile exists)');
+        process.exit(1);
+      }
+
+      // Pre-flight health check
+      try {
+        execSync('bash scripts/health-check.sh', { stdio: 'inherit' });
+      } catch {
+        lockfile.release();
+        console.error('Error: Health check failed. Fix issues and try again.');
+        process.exit(1);
+      }
+
+      // Load config
+      const config = loadAppConfig({ config: configPath, json: false });
+      if (!config) {
+        lockfile.release();
+        process.exit(1);
+      }
+
+      const logger = createLogger(config.logLevel ?? 'info');
+      logger.info('Config loaded successfully');
+
+      // Create ES client
+      const esClient = createEsClient(config);
+      if (!esClient) {
+        lockfile.release();
+        console.error('Error: Could not create Elasticsearch client');
+        process.exit(1);
+      }
+
+      // Create queue service
+      const queueService = new QueueService(esClient);
+      logger.info('Queue service ready');
+
+      // Create worker dependencies
+      const sshPool = new SSHClientPool({}, config.logLevel ?? 'info');
+      const resultsStore = new ElasticsearchResultsStore(esClient);
+      const vllmEngine = new VllmEngine(sshPool, config.logLevel ?? 'info');
+
+      // Create scheduler
+      const scheduler = new Scheduler(
+        queueService,
+        new Stage1WorkerImpl({
+          config,
+          queueService,
+          resultsStore,
+          vllmEngine,
+          logger,
+        }),
+        { pollIntervalMs: pollInterval, maxConcurrentRuns: 1 },
+      );
+
+      logger.info('Scheduler starting. Polling every %d ms...', pollInterval);
+      scheduler.start();
+
+      // Graceful shutdown
+      const shutdown = async (signal: string) => {
+        logger.info('Received %s. Stopping scheduler...', signal);
+        await scheduler.stop();
+        lockfile.release();
+        await resultsStore.close();
+        await esClient.close();
+        logger.info('Shutdown complete.');
+        process.exit(0);
+      };
+
+      process.on('SIGINT', () => shutdown('SIGINT'));
+      process.on('SIGTERM', () => shutdown('SIGTERM'));
+    });
+
+  program
+    .command('queue <modelId>')
+    .description('Add a model to the benchmark queue')
+    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
+    .option('-p, --priority <n>', 'Queue priority (higher runs first)', '5')
+    .option('-s, --source <source>', 'Queue entry source', 'user')
+    .action(async (modelId: string, opts) => {
+      const configPath = opts['config'] as string;
+      const priority = parseInt(opts['priority'] as string, 10);
+      const source = opts['source'] as string;
+
+      const config = loadAppConfig({ config: configPath, json: false });
+      if (!config) process.exit(1);
+
+      const esClient = createEsClient(config);
+      if (!esClient) {
+        console.error('Error: Could not create Elasticsearch client');
+        process.exit(1);
+      }
+
+      const queueService = new QueueService(esClient);
+
+      try {
+        const entry = await queueService.enqueue(modelId, source as 'user' | 'discovery', priority);
+        console.log(`Queued ${modelId} with ID ${entry.id} (priority: ${priority})`);
+      } catch (error) {
+        console.error('Error:', error instanceof Error ? error.message : String(error));
+        process.exit(1);
+      } finally {
+        await esClient.close();
+      }
+    });
+
+  program
+    .command('health-check')
+    .description('Run the health-check script for ES + EDOT + GPU VM')
+    .action(() => {
+      try {
+        execSync('bash scripts/health-check.sh', { stdio: 'inherit' });
+      } catch (err) {
+        process.exit((err as Error & { status?: number }).status ?? 1);
+      }
+    });
+
+  program
+    .command('setup-local')
+    .description('Start local ES + EDOT containers and configure ILM policies')
+    .action(() => {
+      try {
+        execSync('bash scripts/setup-local.sh', { stdio: 'inherit' });
+        execSync('bash scripts/setup-ilm.sh', { stdio: 'inherit' });
+        console.log('Local infrastructure ready.');
+      } catch (err) {
+        console.error('Setup failed:', (err as Error).message);
+        process.exit((err as Error & { status?: number }).status ?? 1);
+      }
+    });
+
+  program
+    .command('stop')
+    .description('Stop the running benchmarker-queue daemon')
+    .action(() => {
+      const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
+      const pid = lockfile.readPid();
+      if (!pid) {
+        console.log('benchmarker-queue is not running (no lockfile found)');
+        process.exit(0);
+      }
+      try {
+        process.kill(pid, 'SIGTERM');
+        console.log(`Sent SIGTERM to process ${pid}`);
+      } catch (err) {
+        console.error('Failed to stop process:', (err as Error).message);
+        process.exit(1);
+      }
+    });
+}
 
 // ─── Parse and Execute ─────────────────────────────────────────────────────────
 

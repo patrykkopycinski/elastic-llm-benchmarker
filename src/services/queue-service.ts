@@ -260,6 +260,16 @@ export class QueueService {
     }
   }
 
+  async findPending(limit: number = 10): Promise<QueueEntry[]> {
+    const res = await this.esClient.search<EsSource>({
+      index: INDEX,
+      query: { term: { status: 'pending' } },
+      sort: [{ priority: { order: 'desc' } }, { requested_at: { order: 'asc' } }],
+      size: limit,
+    });
+    return res.hits.hits.map((h) => toEntry(h._id!, h._source!));
+  }
+
   async hasPending(): Promise<boolean> {
     const res = await this.esClient.count({
       index: INDEX,

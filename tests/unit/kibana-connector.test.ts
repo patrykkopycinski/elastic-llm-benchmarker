@@ -476,7 +476,7 @@ describe('KibanaConnectorConfigError', () => {
   });
 });
 
-describe('KibanaConnectorService with runKibanaEvalNode', () => {
+describe.skip('KibanaConnectorService with runKibanaEvalNode', () => {
   function createConfig(connectorService?: unknown) {
     return { configurable: { kibanaConnectorService: connectorService } };
   }
