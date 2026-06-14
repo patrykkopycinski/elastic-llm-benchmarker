@@ -5,6 +5,8 @@ export const INDEX_NAMES = {
   BENCHMARKER_CHECKPOINTS: 'benchmarker-checkpoints',
   BENCHMARKER_MODELS: 'benchmarker-models',
   BENCHMARKER_ERRORS: 'benchmarker-errors',
+  BENCHMARKER_EVALUATIONS: 'benchmark-evaluations',
+  BENCHMARKER_STAGE2: 'benchmark-stage2',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -190,4 +192,114 @@ export const INDEX_MAPPINGS: Record<
       number_of_replicas: 1,
     },
   },
+  [INDEX_NAMES.BENCHMARKER_EVALUATIONS]: {
+    mappings: {
+      properties: {
+        '@timestamp': { type: 'date' },
+        model_id: { type: 'keyword' },
+        run_id: { type: 'keyword' },
+        endpoint_url: { type: 'keyword' },
+        status: { type: 'keyword' },
+        suite_results: {
+          type: 'nested',
+          properties: {
+            suite: { type: 'keyword' },
+            status: { type: 'keyword' },
+            score: { type: 'float' },
+            duration_ms: { type: 'long' },
+            error: { type: 'text' },
+            trace_id: { type: 'keyword' },
+          },
+        },
+        started_at: { type: 'date' },
+        completed_at: { type: 'date' },
+      },
+    },
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 1,
+    },
+  },
+  [INDEX_NAMES.BENCHMARKER_STAGE2]: {
+    mappings: {
+      properties: {
+        run_id: { type: 'keyword' },
+        model_id: { type: 'keyword' },
+        status: { type: 'keyword' },
+        scores: {
+          type: 'object',
+          enabled: false,
+        },
+        suite_results: {
+          type: 'nested',
+          properties: {
+            suite: { type: 'keyword' },
+            status: { type: 'keyword' },
+            score: { type: 'float' },
+            duration_ms: { type: 'long' },
+            error: { type: 'text' },
+            trace_id: { type: 'keyword' },
+          },
+        },
+        reason: { type: 'text' },
+        started_at: { type: 'date' },
+        completed_at: { type: 'date' },
+      },
+    },
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 1,
+    },
+  },
+};
+
+export const benchmarkEvaluationsMapping = {
+  '@timestamp': { type: 'date' },
+  model_id: { type: 'keyword' },
+  run_id: { type: 'keyword' },
+  endpoint_url: { type: 'keyword' },
+  status: { type: 'keyword' },
+  suite_results: {
+    type: 'nested',
+    properties: {
+      suite: { type: 'keyword' },
+      status: { type: 'keyword' },
+      score: { type: 'float' },
+      duration_ms: { type: 'long' },
+      error: { type: 'text' },
+      trace_id: { type: 'keyword' },
+    },
+  },
+  started_at: { type: 'date' },
+  completed_at: { type: 'date' },
+};
+
+export const benchmarkStage2Mapping = {
+  run_id: { type: 'keyword' },
+  model_id: { type: 'keyword' },
+  status: { type: 'keyword' },
+  scores: { type: 'object', enabled: false },
+  suite_results: {
+    type: 'nested',
+    properties: {
+      suite: { type: 'keyword' },
+      status: { type: 'keyword' },
+      score: { type: 'float' },
+      duration_ms: { type: 'long' },
+      error: { type: 'text' },
+      trace_id: { type: 'keyword' },
+    },
+  },
+  reason: { type: 'text' },
+  started_at: { type: 'date' },
+  completed_at: { type: 'date' },
+};
+
+export const benchmarkReasoningMapping = {
+  run_id: { type: 'keyword' },
+  model_id: { type: 'keyword' },
+  esql_query: { type: 'text' },
+  suggestions: { type: 'object', enabled: false },
+  status: { type: 'keyword' },
+  created_at: { type: 'date' },
 };

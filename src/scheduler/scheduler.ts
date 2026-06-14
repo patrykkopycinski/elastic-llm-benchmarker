@@ -1,6 +1,7 @@
 import { QueueService, QueueEntry } from '../services/queue-service.js';
 import { PipelineRun } from './pipeline-state.js';
-import type { Stage1Worker } from '../worker/index.js';
+import type { Stage1Worker, Stage2Worker } from '../worker/index.js';
+import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 
 export interface SchedulerOptions {
   pollIntervalMs: number;
@@ -16,6 +17,8 @@ export class Scheduler {
     private queueService: QueueService,
     private stage1Worker: Stage1Worker,
     private options: SchedulerOptions = { pollIntervalMs: 30000, maxConcurrentRuns: 1 },
+    private stage2Worker?: Stage2Worker,
+    private resultsStore?: ElasticsearchResultsStore,
   ) {}
 
   async start(): Promise<void> {
@@ -70,11 +73,29 @@ export class Scheduler {
     try {
       await this.queueService.updateStatus(entry.id, 'deploying');
       const result = await this.stage1Worker.execute(run);
-      await this.queueService.updateStatus(
-        entry.id,
-        result.status === 'success' ? 'completed' : 'failed',
-        result.error,
-      );
+      run.benchmarkResult = result;
+
+      if (result.status !== 'success') {
+        await this.queueService.updateStatus(entry.id, 'failed', result.error);
+        return;
+      }
+
+      // Stage 1 succeeded — optionally chain Stage 2
+      if (this.stage2Worker) {
+        const stage2Result = await this.stage2Worker.execute(run, result);
+        run.stage2Result = stage2Result;
+
+        if (this.resultsStore) {
+          await this.resultsStore.saveStage2Result(stage2Result);
+        }
+
+        if (stage2Result.status === 'error') {
+          await this.queueService.updateStatus(entry.id, 'failed', stage2Result.reason);
+          return;
+        }
+      }
+
+      await this.queueService.updateStatus(entry.id, 'completed');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.queueService.updateStatus(entry.id, 'failed', message);

@@ -12,6 +12,7 @@ export interface PipelineRun {
   hfCard?: HFCardResult;
   deployment?: DeploymentInfo;
   benchmarkResult?: Stage1Result;
+  stage2Result?: Stage2Result;
 }
 
 export interface HFCardResult {
@@ -49,6 +50,18 @@ export interface Stage1Result {
   } | null;
   rawOutput: string;
   error?: string;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface Stage2Result {
+  runId: string;
+  modelId: string;
+  status: 'success' | 'skipped' | 'failed' | 'error';
+  scores?: Record<string, number>;
+  suiteResults?: Array<{ suite: string; status: string; score?: number; error?: string }>;
+  tracesIndex?: string;
+  reason?: string;
   startedAt: string;
   completedAt: string;
 }

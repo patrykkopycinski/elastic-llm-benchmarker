@@ -393,7 +393,10 @@ export const kibanaRepoConfigSchema = z.object({
   pinToCommit: z.string().optional(),
   pinToTag: z.string().optional(),
   clonePath: z.string().default('./.kibana-cache'),
+  cacheDir: z.string().optional(),
+  branch: z.string().default('main'),
   autoPull: z.boolean().default(true),
+  bootstrapTimeoutMs: z.number().int().positive().default(1_800_000),
 });
 
 /**
@@ -428,6 +431,8 @@ export const appConfigSchema = z.object({
   elasticAgent: elasticAgentConfigSchema.default({}),
   /** Stage 2 thresholds for the gate between Stage 1 and Stage 2 benchmarks. */
   stage2Thresholds: stage2ThresholdsSchema.default({}),
+  /** Whether to enable the Stage 2 eval pipeline. */
+  enableStage2: z.boolean().default(false),
   /** Golden cluster configuration for centralized tracking. */
   goldenCluster: goldenClusterConfigSchema.default({}),
   /** EDOT collector configuration for OpenTelemetry trace collection. */

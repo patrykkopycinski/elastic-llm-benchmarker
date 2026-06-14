@@ -28,7 +28,9 @@ import { ElasticsearchResultsStore } from './services/elasticsearch-results-stor
 import { ResultsStore } from './services/results-store.js';
 import { QueueService } from './services/queue-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
-import { Stage1WorkerImpl } from './worker/index.js';
+import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate } from './worker/index.js';
+import { KibanaRepoService } from './services/kibana-repo-service.js';
+import { EvalSuiteRunner } from './services/eval-suite-runner.js';
 import { Lockfile } from './utils/lockfile.js';
 import { SSHClientPool } from './services/ssh-client.js';
 import { VllmEngine } from './engines/vllm-engine.js';
@@ -1059,6 +1061,24 @@ program
     }
   });
 
+// ─── bootstrap-kibana command ──────────────────────────────────────────────
+
+program
+  .command('bootstrap-kibana')
+  .description('Clone and bootstrap Kibana repository for evals')
+  .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
+  .action(async (opts) => {
+    const configPath = opts['config'] as string;
+    const config = loadAppConfig({ config: configPath, json: false });
+    if (!config) process.exit(1);
+
+    const logger = createLogger(config.logLevel ?? 'info');
+    const repoService = new KibanaRepoService({ config, logger });
+    await repoService.cloneOrPull();
+    await repoService.bootstrap();
+    logger.info(`Kibana ready at ${repoService.getRepoPath()}`);
+  });
+
 // ─── benchmarker-queue commands ───────────────────────────────────────────────
 
 const binaryName = basename(process.argv[1] ?? '');
@@ -1071,9 +1091,11 @@ if (binaryName === 'benchmarker-queue') {
     .description('Start the scheduler polling loop for pending queue entries')
     .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('--poll-interval <ms>', 'Polling interval in milliseconds', '30000')
+    .option('--stage2', 'Enable Stage 2 eval pipeline', false)
     .action(async (opts) => {
       const configPath = opts['config'] as string;
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
+      const enableStage2 = opts['stage2'] as boolean;
 
       // Lockfile check
       const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
@@ -1118,6 +1140,23 @@ if (binaryName === 'benchmarker-queue') {
       const resultsStore = new ElasticsearchResultsStore(esClient);
       const vllmEngine = new VllmEngine(sshPool, config.logLevel ?? 'info');
 
+      // Optionally create Stage 2 worker
+      const stage2Worker =
+        enableStage2 || config.enableStage2
+          ? new Stage2WorkerImpl({
+              config,
+              gate: new Stage2Gate(config),
+              repoService: new KibanaRepoService({ config, logger }),
+              evalRunner: new EvalSuiteRunner({ esStore: resultsStore, logger }),
+              resultsStore,
+              logger,
+            })
+          : undefined;
+
+      if (stage2Worker) {
+        logger.info('Stage 2 pipeline enabled');
+      }
+
       // Create scheduler
       const scheduler = new Scheduler(
         queueService,
@@ -1129,6 +1168,8 @@ if (binaryName === 'benchmarker-queue') {
           logger,
         }),
         { pollIntervalMs: pollInterval, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
       );
 
       logger.info('Scheduler starting. Polling every %d ms...', pollInterval);

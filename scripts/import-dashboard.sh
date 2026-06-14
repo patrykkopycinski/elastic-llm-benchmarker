@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NDJSON_FILE="${SCRIPT_DIR}/../dashboard/benchmarker-dashboard.ndjson"
+M2_NDJSON_FILE="${SCRIPT_DIR}/../dashboard/benchmarker-dashboard-m2.ndjson"
 
 KIBANA_URL=""
 API_KEY=""
@@ -71,6 +72,41 @@ if command -v jq >/dev/null 2>&1; then
   fi
 else
   echo "Response: ${BODY}"
+fi
+
+if [[ -f "${M2_NDJSON_FILE}" ]]; then
+  echo ""
+  echo "Importing M2 dashboard objects from ${M2_NDJSON_FILE} ..."
+
+  M2_RESPONSE=$(curl -sf -w "\n%{http_code}" \
+    "${KIBANA_URL}/api/saved_objects/_import?overwrite=true" \
+    -H "kbn-xsrf: true" \
+    -H "Authorization: ApiKey ${API_KEY}" \
+    --form "file=@${M2_NDJSON_FILE}" 2>/dev/null) || true
+
+  M2_HTTP_STATUS=$(echo "${M2_RESPONSE}" | tail -n 1)
+  M2_BODY=$(echo "${M2_RESPONSE}" | sed '$d')
+
+  if [[ "${M2_HTTP_STATUS}" != "200" ]]; then
+    echo "ERROR: M2 import failed with HTTP status ${M2_HTTP_STATUS}"
+    echo "Response: ${M2_BODY}"
+    exit 1
+  fi
+
+  echo "M2 import succeeded (HTTP 200)"
+
+  if command -v jq >/dev/null 2>&1; then
+    M2_ERRORS=$(echo "${M2_BODY}" | jq -r '.errors // empty')
+    if [[ -n "${M2_ERRORS}" ]] && [[ "${M2_ERRORS}" != "null" ]] && [[ "${M2_ERRORS}" != "[]" ]]; then
+      echo "WARN: Some M2 objects had import errors:"
+      echo "${M2_BODY}" | jq '.errors'
+    else
+      M2_SUCCESS_COUNT=$(echo "${M2_BODY}" | jq -r '.successCount // "unknown"')
+      echo "M2 objects imported successfully: ${M2_SUCCESS_COUNT}"
+    fi
+  else
+    echo "Response: ${M2_BODY}"
+  fi
 fi
 
 DASHBOARD_URL="${KIBANA_URL}/app/dashboards#/view/dashboard-llm-benchmarker-overview"

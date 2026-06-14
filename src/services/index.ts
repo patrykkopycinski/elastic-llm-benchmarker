@@ -10,7 +10,7 @@ export type {
 export { QueueService } from './queue-service.js';
 export type { QueueEntry } from './queue-service.js';
 export { ElasticAgentService } from './elastic-agent-service.js';
-export { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
+export { INDEX_NAMES, INDEX_MAPPINGS, benchmarkEvaluationsMapping, benchmarkStage2Mapping, benchmarkReasoningMapping } from './es-index-mappings.js';
 export { PIPELINE_NAME, registerIngestPipelines } from './es-ingest-pipelines.js';
 export { ModelDiscoveryService } from './model-discovery.js';
 export type { ModelDiscoveryOptions, DiscoveryResult } from './model-discovery.js';
@@ -143,3 +143,5 @@ export type {
   VllmConfigFlags,
   ParsedHFCard,
 } from './hf-card-parser.js';
+export { KibanaRepoService, KibanaRepoError } from './kibana-repo-service.js';
+export type { KibanaRepoServiceOptions } from './kibana-repo-service.js';

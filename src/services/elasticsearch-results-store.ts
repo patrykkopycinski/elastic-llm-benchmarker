@@ -9,6 +9,7 @@ import type {
 } from '../types/benchmark.js';
 import { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
 import { createLogger } from '../utils/logger.js';
+import type { EvalSuiteResult } from './eval-suite-runner.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
@@ -677,6 +678,57 @@ export class ElasticsearchResultsStore {
       success: h.success as boolean,
       nodeName: h.node_name as string,
     }));
+  }
+
+  async saveEvalResult(result: EvalSuiteResult): Promise<void> {
+    const dateSuffix = result.startedAt.slice(0, 10);
+    const index = `${INDEX_NAMES.BENCHMARKER_EVALUATIONS}-${dateSuffix}`;
+    const doc: Record<string, unknown> = {
+      '@timestamp': result.startedAt,
+      model_id: result.modelId,
+      run_id: `${result.modelId}:${result.startedAt}`,
+      endpoint_url: result.endpointUrl,
+      status: result.status,
+      suite_results: result.suiteResults.map((sr) => ({
+        suite: sr.suite,
+        status: sr.status,
+        score: sr.score ?? null,
+        duration_ms: sr.durationMs,
+        error: sr.error ?? null,
+        trace_id: sr.traceId ?? null,
+      })),
+      started_at: result.startedAt,
+      completed_at: result.completedAt,
+    };
+    await this.esClient.index({ index, document: doc });
+    this.logger.info('Stored eval suite result', { modelId: result.modelId, index, status: result.status });
+  }
+
+  async saveStage2Result(result: import('../scheduler/pipeline-state.js').Stage2Result): Promise<void> {
+    const dateSuffix = result.startedAt.slice(0, 10);
+    const index = `${INDEX_NAMES.BENCHMARKER_STAGE2}-${dateSuffix}`;
+    const doc: Record<string, unknown> = {
+      run_id: result.runId,
+      model_id: result.modelId,
+      status: result.status,
+      scores: result.scores ?? null,
+      suite_results: (result.suiteResults ?? []).map((sr) => ({
+        suite: sr.suite,
+        status: sr.status,
+        score: sr.score ?? null,
+        duration_ms: null,
+        error: sr.error ?? null,
+        trace_id: null,
+      })),
+      reason: result.reason ?? null,
+      started_at: result.startedAt,
+      completed_at: result.completedAt,
+    };
+    await this.esClient.index({
+      index,
+      document: doc,
+    });
+    this.logger.info('Stored stage2 result', { modelId: result.modelId, index, status: result.status });
   }
 
   async close(): Promise<void> {
