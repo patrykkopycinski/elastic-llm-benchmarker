@@ -1,5 +1,10 @@
-# Elastic Stack for elastic-llm-benchmarker local development
-# Usage: docker compose --env-file .env.docker up -d elasticsearch kibana
+# Elastic Stack + Benchmarker for elastic-llm-benchmarker local development
+# Usage:
+#   Infra only:   docker compose --env-file .env.docker up -d elasticsearch kibana
+#   With app:     docker compose --env-file .env.docker up -d
+#   With fleet:   docker compose --env-file .env.docker --profile fleet up -d
+#   With vLLM:    docker compose --env-file .env.docker --profile vllm up -d
+#   Reset:        docker compose --env-file .env.docker down -v
 
 services:
   elasticsearch:
@@ -179,8 +184,46 @@ services:
       start_period: 30s
     mem_limit: 536870912
 
+  benchmarker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: benchmarker-app
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=3100
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - SSH_HOST=${SSH_HOST:-}
+      - SSH_PORT=${SSH_PORT:-22}
+      - SSH_USERNAME=${SSH_USERNAME:-}
+      - SSH_PASSWORD=${SSH_PASSWORD:-}
+      - SSH_PRIVATE_KEY_PATH=${SSH_PRIVATE_KEY_PATH:-/app/.ssh/id_rsa}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+    ports:
+      - "${BENCHMARKER_PORT:-3100}:3100"
+    volumes:
+      - ./config:/app/config:ro
+      - benchmarker-results:/app/results
+      - benchmarker-data:/app/data
+      - ${SSH_PRIVATE_KEY_PATH:-./.ssh/id_rsa}:/app/.ssh/id_rsa:ro
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3100/health', (r) => r.statusCode===200 ? process.exit(0) : process.exit(1))\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
 volumes:
   es-data:
   kibana-data:
   fleet-data:
   init-kibana-flag:
+  benchmarker-results:
+  benchmarker-data:
