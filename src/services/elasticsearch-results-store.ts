@@ -10,8 +10,7 @@ import type {
 import { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
 import { createLogger } from '../utils/logger.js';
 import type { EvalSuiteResult } from './eval-suite-runner.js';
-import type { Stage2Result } from '../scheduler/pipeline-state.js';
-import type { Stage3Result } from '../scheduler/pipeline-state.js';
+import type { Stage2Result, Stage3Result, Stage3Suggestion } from '../scheduler/pipeline-state.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
@@ -753,6 +752,61 @@ export class ElasticsearchResultsStore {
       document: doc,
     });
     this.logger.info('Stored reasoning result', { modelId: result.modelId, index, status: result.status });
+  }
+
+  async getLatestReasoningResult(modelId: string): Promise<Stage3Result | null> {
+    const res = await this.esClient.search({
+      index: `${INDEX_NAMES.BENCHMARKER_REASONING}-*`,
+      size: 1,
+      sort: [{ started_at: { order: 'desc' } }],
+      query: {
+        bool: {
+          must: [
+            { term: { model_id: modelId } },
+            { term: { status: 'success' } },
+          ],
+        },
+      },
+    });
+
+    const hits = res.hits.hits;
+    if (!hits || hits.length === 0) return null;
+
+    const src = hits[0]!._source as Record<string, unknown> | undefined;
+    if (!src) return null;
+
+    const parseSuggestions = (raw: unknown): Stage3Suggestion[] | undefined => {
+      if (!Array.isArray(raw)) return undefined;
+      return raw
+        .map((s: unknown) => {
+          if (!s || typeof s !== 'object') return null;
+          const obj = s as Record<string, unknown>;
+          const cat = String(obj.category ?? '');
+          const impact = String(obj.estimatedImpact ?? '');
+          return {
+            category: ['config', 'quantization', 'hardware', 'other'].includes(cat)
+              ? (cat as Stage3Suggestion['category'])
+              : 'other',
+            title: String(obj.title ?? ''),
+            description: String(obj.description ?? ''),
+            estimatedImpact: ['high', 'medium', 'low'].includes(impact)
+              ? (impact as Stage3Suggestion['estimatedImpact'])
+              : 'medium',
+          };
+        })
+        .filter((s): s is Stage3Suggestion => s !== null);
+    };
+
+    return {
+      runId: String(src.run_id ?? ''),
+      modelId: String(src.model_id ?? ''),
+      status: 'success',
+      suggestions: parseSuggestions(src.suggestions),
+      traceSummary: src.trace_summary as Stage3Result['traceSummary'] ?? undefined,
+      rawResponse: src.raw_response ? String(src.raw_response) : undefined,
+      startedAt: String(src.started_at ?? ''),
+      completedAt: String(src.completed_at ?? ''),
+    };
   }
 
   async close(): Promise<void> {

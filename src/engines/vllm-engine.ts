@@ -100,6 +100,7 @@ export class VllmEngine implements InferenceEngine {
     sshConfig: SSHConfig,
     model: ModelInfo,
     hardwareProfile: VMHardwareProfile,
+    deploymentOverrides?: VllmDeploymentOptions,
   ): Promise<EngineDeploymentResult> {
     this.logger.info(`[vLLM] Deploying model: ${model.id}`);
 
@@ -107,6 +108,7 @@ export class VllmEngine implements InferenceEngine {
       sshConfig,
       model,
       hardwareProfile,
+      deploymentOverrides,
     );
 
     // Map vLLM-specific DeploymentResult to engine-agnostic EngineDeploymentResult

@@ -9,9 +9,58 @@ import { HFCardParser } from '../services/hf-card-parser.js';
 import type { VllmEngine } from '../engines/vllm-engine.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import type { QueueService } from '../services/queue-service.js';
+import type { VllmDeploymentOptions } from '../services/vllm-deployment.js';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
 import type { EngineDeploymentResult } from '../engines/engine-types.js';
+import type { Stage3Suggestion } from '../scheduler/pipeline-state.js';
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Scans Stage 3 reasoning suggestions for vLLM deployment flag overrides.
+ * Looks for CLI flags like `--gpu-memory-utilization 0.95` in suggestion
+ * descriptions and maps them to VllmDeploymentOptions.
+ */
+function parseVllmOverridesFromSuggestions(
+  suggestions: Stage3Suggestion[] | undefined,
+): VllmDeploymentOptions | undefined {
+  if (!suggestions || suggestions.length === 0) return undefined;
+
+  const overrides: VllmDeploymentOptions = {};
+  const extraArgs: string[] = [];
+
+  for (const sug of suggestions) {
+    const text = `${sug.title} ${sug.description}`;
+
+    // --gpu-memory-utilization <float>
+    const gpuMem = text.match(/--gpu-memory-utilization\s+(\d*(?:\.\d+)?)/);
+    if (gpuMem) overrides.gpuMemoryUtilization = parseFloat(gpuMem[1]!);
+
+    // --max-model-len <int>
+    const maxLen = text.match(/--max-model-len\s+(\d+)/);
+    if (maxLen) overrides.maxModelLen = parseInt(maxLen[1]!, 10);
+
+    // --max-num-seqs <int>
+    const maxSeqs = text.match(/--max-num-seqs\s+(\d+)/);
+    if (maxSeqs) extraArgs.push(`--max-num-seqs ${maxSeqs[1]}`);
+
+    // --dtype <str>
+    const dtype = text.match(/--dtype\s+(\w+)/);
+    if (dtype) extraArgs.push(`--dtype ${dtype[1]}`);
+
+    // --chat-template <str>
+    const chatTpl = text.match(/--chat-template\s+(\S+)/);
+    if (chatTpl) overrides.chatTemplate = chatTpl[1]!;
+  }
+
+  if (extraArgs.length > 0) {
+    overrides.additionalDockerArgs = extraArgs;
+  }
+
+  // Only return if at least one override was found
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
 
 /**
  * Interface for Stage 1 workers that execute the HF parse → deploy → benchmark
@@ -112,12 +161,38 @@ export class Stage1WorkerImpl implements Stage1Worker {
       });
       await this.queueService.updateStatus(run.queueEntryId, 'benchmarking');
 
-      // f. Deploy
+      // f. Query previous reasoning feedback and deploy with any overrides
+      this.logger.info('Stage 1: checking for previous reasoning feedback', {
+        modelId: run.modelId,
+      });
+      let deploymentOverrides: VllmDeploymentOptions | undefined;
+      try {
+        const previousReasoning =
+          await this.resultsStore.getLatestReasoningResult(run.modelId);
+        if (previousReasoning?.suggestions) {
+          deploymentOverrides = parseVllmOverridesFromSuggestions(
+            previousReasoning.suggestions,
+          );
+          if (deploymentOverrides) {
+            this.logger.info('Stage 1: applying reasoning overrides', {
+              modelId: run.modelId,
+              overrides: Object.keys(deploymentOverrides),
+            });
+          }
+        }
+      } catch (feedbackErr) {
+        this.logger.warn('Stage 1: failed to load reasoning feedback', {
+          modelId: run.modelId,
+          error: feedbackErr instanceof Error ? feedbackErr.message : String(feedbackErr),
+        });
+      }
+
       this.logger.info('Stage 1: deploying model', { modelId: run.modelId });
       deployment = await this.vllmEngine.deploy(
         this.config.ssh,
         modelInfo,
         hardwareProfile,
+        deploymentOverrides,
       );
       this.logger.info('Stage 1: model deployed', {
         deploymentName: deployment.deploymentName,

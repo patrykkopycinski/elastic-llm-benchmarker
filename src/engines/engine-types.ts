@@ -133,6 +133,7 @@ export interface InferenceEngine {
     sshConfig: SSHConfig,
     model: ModelInfo,
     hardwareProfile: VMHardwareProfile,
+    deploymentOptions?: unknown,
   ): Promise<EngineDeploymentResult>;
 
   /**

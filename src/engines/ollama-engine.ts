@@ -102,6 +102,7 @@ export class OllamaEngine implements InferenceEngine {
     sshConfig: SSHConfig,
     model: ModelInfo,
     hardwareProfile: VMHardwareProfile,
+    _deploymentOptions?: unknown,
   ): Promise<EngineDeploymentResult> {
     this.logger.info(`[Ollama] Deploying model: ${model.id}`);
 

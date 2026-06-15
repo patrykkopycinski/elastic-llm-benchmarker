@@ -324,6 +324,7 @@ export class VllmDeploymentService {
     sshConfig: SSHConfig,
     model: ModelInfo,
     hardwareProfile: VMHardwareProfile,
+    deploymentOverrides?: VllmDeploymentOptions,
   ): Promise<DeploymentResult> {
     const containerName = this.generateContainerName(model.id);
     const tensorParallelSize = hardwareProfile.gpuCount;
@@ -365,7 +366,12 @@ export class VllmDeploymentService {
     await this.pullImage(sshConfig, model.id);
 
     // Step 3: Build and execute the docker run command (uses vllmParams)
-    const dockerCommand = this.buildDockerRunCommand(model, containerName, tensorParallelSize);
+    const dockerCommand = this.buildDockerRunCommand(
+      model,
+      containerName,
+      tensorParallelSize,
+      deploymentOverrides,
+    );
 
     this.logger.info(`Launching vLLM container: ${containerName}`, {
       command: dockerCommand,
@@ -556,35 +562,37 @@ export class VllmDeploymentService {
     model: ModelInfo,
     containerName: string,
     tensorParallelSize: number,
+    overrides?: VllmDeploymentOptions,
   ): string {
+    const opts = { ...this.options, ...overrides };
     const params = getVllmParamsForModel(model.id, model.architecture);
     const args: string[] = [
       'docker run -d',
       `--name ${containerName}`,
       '--gpus all',
       '--shm-size=16g',
-      `-p ${this.options.apiPort}:8000`,
-      `-e HF_TOKEN=${this.options.huggingfaceToken ?? '${HF_TOKEN}'}`,
-      this.options.dockerImage,
+      `-p ${opts.apiPort}:8000`,
+      `-e HF_TOKEN=${opts.huggingfaceToken ?? '${HF_TOKEN}'}`,
+      opts.dockerImage,
       `--model ${model.id}`,
       `--tensor-parallel-size ${tensorParallelSize}`,
-      `--gpu-memory-utilization ${this.options.gpuMemoryUtilization}`,
-      `--max-model-len ${this.options.maxModelLen ?? 'auto'}`,
+      `--gpu-memory-utilization ${opts.gpuMemoryUtilization}`,
+      `--max-model-len ${opts.maxModelLen ?? 'auto'}`,
     ];
 
     if (params.toolCallParser) {
       args.push(`--tool-call-parser ${params.toolCallParser}`);
       args.push('--enable-auto-tool-choice');
-      const chatTemplate = this.options.chatTemplate ?? params.chatTemplate;
+      const chatTemplate = opts.chatTemplate ?? params.chatTemplate;
       if (chatTemplate) args.push(`--chat-template ${chatTemplate}`);
       for (const arg of params.extraArgs) args.push(arg);
     }
 
-    if (this.options.otlpTracesEndpoint) {
-      args.push(`--otlp-traces-endpoint ${this.options.otlpTracesEndpoint}`);
+    if (opts.otlpTracesEndpoint) {
+      args.push(`--otlp-traces-endpoint ${opts.otlpTracesEndpoint}`);
     }
 
-    for (const arg of this.options.additionalDockerArgs) {
+    for (const arg of opts.additionalDockerArgs) {
       args.push(arg);
     }
 
