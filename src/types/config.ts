@@ -194,10 +194,9 @@ export const kibanaEvalConfigSchema = z.object({
 
 /**
  * Supported inference engine type.
- * - 'vllm': VLLM Docker-based deployment (default, production-ready)
- * - 'ollama': Ollama model serving (simpler setup, limited tool calling)
+ * VLLM Docker-based deployment (default, production-ready).
  */
-export const engineTypeSchema = z.enum(['vllm', 'ollama']);
+export const engineTypeSchema = z.enum(['vllm']);
 
 /**
  * Engine-specific configuration schema.
@@ -208,14 +207,10 @@ export const engineTypeSchema = z.enum(['vllm', 'ollama']);
 export const engineConfigSchema = z.object({
   /** Inference engine type to use. Defaults to 'vllm'. */
   type: engineTypeSchema.default('vllm'),
-  /** API port for the inference engine (default: engine-dependent — vLLM=8000, Ollama=11434) */
+  /** API port for the inference engine (default: 8000) */
   apiPort: z.number().int().positive().optional(),
   /** Docker image override for the engine */
   dockerImage: z.string().optional(),
-  /** Whether to use Docker for Ollama deployment (only for Ollama engine) */
-  ollamaUseDocker: z.boolean().default(false),
-  /** Number of GPU layers for Ollama (-1 = all, default: -1) */
-  ollamaNumGpuLayers: z.number().int().default(-1),
   /** GPU memory utilization fraction for vLLM (default: 0.90) */
   vllmGpuMemoryUtilization: z.number().min(0).max(1).default(0.9),
   /** Maximum model length override (optional, engine auto-detects) */

@@ -47,7 +47,6 @@ import type { AppConfig } from './types/config.js';
 import { ToolCallBenchmarkService } from './services/tool-call-benchmark.js';
 import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js';
 import { ConfigResearcherService } from './services/config-researcher.js';
-import { VMResourceManagerService } from './services/vm-resource-manager.js';
 import { runEnqueue } from './cli/enqueue-handler.js';
 import { SystemHealthChecker } from './services/system-health-check.js';
 
@@ -999,67 +998,6 @@ program
           });
         }
       }
-    } catch (error) {
-      console.error('Error:', error instanceof Error ? error.message : String(error));
-      process.exit(1);
-    } finally {
-      await esClient.close();
-    }
-  });
-
-// ─── vm-status command ─────────────────────────────────────────────────────
-
-program
-  .command('vm-status')
-  .description('Check GPU VM availability and queue length')
-  .action(async (options) => {
-    const config = loadAppConfig(options);
-    if (!config) process.exit(1);
-
-    const esClient = createEsClient(config);
-    if (!esClient) {
-      console.error('Error: Could not create Elasticsearch client');
-      process.exit(1);
-    }
-
-    try {
-      // Create VM manager (simplified - using config values)
-      const vmManager = new VMResourceManagerService([{
-        id: 'vm-1',
-        host: config.ssh.host,
-        port: config.ssh.port,
-        username: config.ssh.username,
-        useSudo: config.ssh.useSudo,
-        gpus: `${config.vmHardwareProfile.gpuCount}x${config.vmHardwareProfile.gpuType}`,
-      }]);
-
-      const status = vmManager.getVMStatus();
-
-      console.log('GPU VM Status\n');
-
-      if (status.available.length > 0) {
-        console.log('✅ AVAILABLE');
-        status.available.forEach(vm => {
-          console.log(`  ${vm.id}: ${vm.gpus}`);
-        });
-      } else {
-        console.log('🔴 BUSY');
-        status.busy.forEach(vm => {
-          console.log(`  ${vm.id}: Running ${vm.modelId}`);
-          console.log(`  Started: ${vm.startedAt}`);
-        });
-      }
-
-      // Get queue info
-      const queueService = new QueueService(esClient);
-      const allEntries = await queueService.getQueue();
-
-      console.log(`\nQueue Status:`);
-      console.log(`  Total entries: ${allEntries.length}`);
-      console.log(`  Pending: ${allEntries.filter(e => e.status === 'pending').length}`);
-      console.log(`  Active: ${allEntries.filter(e => e.status === 'deploying' || e.status === 'benchmarking').length}`);
-      console.log(`  Completed: ${allEntries.filter(e => e.status === 'completed').length}`);
-
     } catch (error) {
       console.error('Error:', error instanceof Error ? error.message : String(error));
       process.exit(1);

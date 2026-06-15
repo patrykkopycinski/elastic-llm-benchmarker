@@ -124,25 +124,6 @@ export type {
   TunnelServiceOptions,
   TunnelStatus,
 } from './tunnel-service.js';
-export {
-  OllamaDeploymentService,
-  OllamaDeploymentError,
-  OllamaModelPullError,
-  OllamaServiceError,
-} from './ollama-deployment.js';
-export type {
-  OllamaDeploymentOptions,
-  OllamaDeploymentResult,
-} from './ollama-deployment.js';
-export {
-  OllamaBenchmarkRunnerService,
-  OllamaBenchmarkRunnerError,
-} from './ollama-benchmark-runner.js';
-export type {
-  OllamaBenchmarkRunnerOptions,
-  OllamaBenchmarkRunResult,
-  OllamaFullBenchmarkResult,
-} from './ollama-benchmark-runner.js';
 export { HFCardParser } from './hf-card-parser.js';
 export type {
   HFCardParserOptions,

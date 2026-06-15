@@ -129,14 +129,10 @@ async function main() {
     deployment: {
       apiPort: eng.apiPort,
       dockerImage: eng.dockerImage,
-      ...(eng.type === 'ollama'
-        ? { useDocker: eng.ollamaUseDocker, numGpuLayers: eng.ollamaNumGpuLayers }
-        : {
-            gpuMemoryUtilization: eng.vllmGpuMemoryUtilization,
-            maxModelLen: eng.maxModelLen,
-            huggingfaceToken: config.huggingfaceToken,
-            useSudo: config.ssh.useSudo,
-          }),
+      gpuMemoryUtilization: eng.vllmGpuMemoryUtilization,
+      maxModelLen: eng.maxModelLen,
+      huggingfaceToken: config.huggingfaceToken,
+      useSudo: config.ssh.useSudo,
     },
   });
 

@@ -160,27 +160,6 @@ export type {
   KibanaConnectorStatus,
 } from './services/kibana-connector.js';
 
-// Ollama service exports
-export {
-  OllamaDeploymentService,
-  OllamaDeploymentError,
-  OllamaModelPullError,
-  OllamaServiceError,
-} from './services/ollama-deployment.js';
-export type {
-  OllamaDeploymentOptions,
-  OllamaDeploymentResult,
-} from './services/ollama-deployment.js';
-export {
-  OllamaBenchmarkRunnerService,
-  OllamaBenchmarkRunnerError,
-} from './services/ollama-benchmark-runner.js';
-export type {
-  OllamaBenchmarkRunnerOptions,
-  OllamaBenchmarkRunResult,
-  OllamaFullBenchmarkResult,
-} from './services/ollama-benchmark-runner.js';
-
 // Engine abstraction layer exports
 export {
   EngineFactory,
@@ -189,8 +168,6 @@ export {
 } from './engines/engine-factory.js';
 export { VllmEngine } from './engines/vllm-engine.js';
 export type { VllmEngineOptions } from './engines/vllm-engine.js';
-export { OllamaEngine } from './engines/ollama-engine.js';
-export type { OllamaEngineOptions } from './engines/ollama-engine.js';
 export type {
   EngineType,
   InferenceEngine,

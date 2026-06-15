@@ -6,11 +6,10 @@ import type { HealthCheckResult } from '../services/health-check.js';
 // ─── Engine Type Identifier ──────────────────────────────────────────────────
 
 /**
- * Supported inference engine types.
- * - 'vllm': VLLM (OpenAI-compatible API via Docker)
- * - 'ollama': Ollama (local model serving with simplified setup)
+ * Supported inference engine type.
+ * 'vllm': VLLM (OpenAI-compatible API via Docker)
  */
-export type EngineType = 'vllm' | 'ollama';
+export type EngineType = 'vllm';
 
 // ─── Engine Deployment Result ────────────────────────────────────────────────
 

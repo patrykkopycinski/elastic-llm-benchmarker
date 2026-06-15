@@ -18,7 +18,3 @@ export {
 // vLLM engine adapter
 export { VllmEngine } from './vllm-engine.js';
 export type { VllmEngineOptions } from './vllm-engine.js';
-
-// Ollama engine adapter
-export { OllamaEngine } from './ollama-engine.js';
-export type { OllamaEngineOptions } from './ollama-engine.js';

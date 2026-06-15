@@ -2,8 +2,6 @@ import type { SSHClientPool } from '../services/ssh-client.js';
 import type { InferenceEngine, EngineType, EngineFactoryOptions } from './engine-types.js';
 import { VllmEngine } from './vllm-engine.js';
 import type { VllmEngineOptions } from './vllm-engine.js';
-import { OllamaEngine } from './ollama-engine.js';
-import type { OllamaEngineOptions } from './ollama-engine.js';
 import { createLogger } from '../utils/logger.js';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
@@ -32,7 +30,6 @@ export class UnsupportedEngineError extends Error {
  *
  * **Supported Engines:**
  * - `vllm`: VLLM (OpenAI-compatible API via Docker) — full-featured, production-ready
- * - `ollama`: Ollama (simplified model serving) — easier setup, limited tool calling
  *
  * @example
  * ```typescript
@@ -40,11 +37,6 @@ export class UnsupportedEngineError extends Error {
  *
  * // Create a vLLM engine
  * const vllmEngine = factory.create('vllm', sshPool, 'info');
- *
- * // Create an Ollama engine
- * const ollamaEngine = factory.create('ollama', sshPool, 'info', {
- *   deployment: { useDocker: true },
- * });
  *
  * // Or use the options-based API
  * const engine = factory.createFromOptions({
@@ -58,7 +50,7 @@ export class EngineFactory {
   private readonly logger;
 
   /** List of all supported engine types */
-  static readonly SUPPORTED_ENGINES: ReadonlyArray<EngineType> = ['vllm', 'ollama'];
+  static readonly SUPPORTED_ENGINES: ReadonlyArray<EngineType> = ['vllm'];
 
   constructor(logLevel: string = 'info') {
     this.logger = createLogger(logLevel);
@@ -67,7 +59,7 @@ export class EngineFactory {
   /**
    * Creates an inference engine instance by type.
    *
-   * @param engineType - The engine type to create ('vllm' or 'ollama')
+   * @param engineType - The engine type to create ('vllm')
    * @param sshPool - SSH client pool for remote command execution
    * @param logLevel - Winston log level (default: 'info')
    * @param options - Engine-specific configuration options
@@ -78,16 +70,13 @@ export class EngineFactory {
     engineType: EngineType,
     sshPool: SSHClientPool,
     logLevel: string = 'info',
-    options?: VllmEngineOptions | OllamaEngineOptions,
+    options?: VllmEngineOptions,
   ): InferenceEngine {
     this.logger.info(`Creating engine: ${engineType}`);
 
     switch (engineType) {
       case 'vllm':
-        return new VllmEngine(sshPool, logLevel, options as VllmEngineOptions);
-
-      case 'ollama':
-        return new OllamaEngine(sshPool, logLevel, options as OllamaEngineOptions);
+        return new VllmEngine(sshPool, logLevel, options);
 
       default:
         throw new UnsupportedEngineError(
@@ -109,7 +98,7 @@ export class EngineFactory {
       factoryOptions.engineType,
       factoryOptions.sshPool,
       factoryOptions.logLevel,
-      factoryOptions.engineOptions as VllmEngineOptions | OllamaEngineOptions,
+      factoryOptions.engineOptions as VllmEngineOptions,
     );
   }
 
@@ -145,7 +134,7 @@ export class EngineFactory {
  * Convenience function to create an inference engine without instantiating
  * the factory directly.
  *
- * @param engineType - The engine type ('vllm' or 'ollama')
+ * @param engineType - The engine type ('vllm')
  * @param sshPool - SSH client pool
  * @param logLevel - Log level (default: 'info')
  * @param options - Engine-specific options
@@ -155,7 +144,7 @@ export function createEngine(
   engineType: EngineType,
   sshPool: SSHClientPool,
   logLevel: string = 'info',
-  options?: VllmEngineOptions | OllamaEngineOptions,
+  options?: VllmEngineOptions,
 ): InferenceEngine {
   const factory = new EngineFactory(logLevel);
   return factory.create(engineType, sshPool, logLevel, options);

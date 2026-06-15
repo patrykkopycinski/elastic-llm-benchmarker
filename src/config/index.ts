@@ -158,10 +158,6 @@ function buildEnvConfig(): Record<string, unknown> {
     engine['apiPort'] = Number(process.env['ENGINE_API_PORT']);
   if (process.env['ENGINE_DOCKER_IMAGE'] !== undefined)
     engine['dockerImage'] = process.env['ENGINE_DOCKER_IMAGE'];
-  if (process.env['OLLAMA_USE_DOCKER'] !== undefined)
-    engine['ollamaUseDocker'] = process.env['OLLAMA_USE_DOCKER'] === 'true';
-  if (process.env['OLLAMA_NUM_GPU_LAYERS'] !== undefined)
-    engine['ollamaNumGpuLayers'] = Number(process.env['OLLAMA_NUM_GPU_LAYERS']);
   if (process.env['VLLM_GPU_MEMORY_UTILIZATION'] !== undefined)
     engine['vllmGpuMemoryUtilization'] = Number(process.env['VLLM_GPU_MEMORY_UTILIZATION']);
   if (process.env['ENGINE_MAX_MODEL_LEN'] !== undefined)
