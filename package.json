@@ -1,7 +1,7 @@
 {
   "name": "elastic-llm-benchmarker",
   "version": "0.1.0",
-  "description": "Automated LLM discovery, deployment, and benchmarking agent using LangGraph.js",
+  "description": "Automated LLM discovery, deployment, and benchmarking for Elastic Agent Builder qualification",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,10 +14,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "npx @langchain/langgraph-cli dev",
-    "up": "npx @langchain/langgraph-cli up",
-    "build": "npx @langchain/langgraph-cli build -t langgraph-elastic-llm-benchmarker:latest",
-    "build:ts": "tsup",
+    "build": "tsup",
     "start": "node dist/index.js",
     "cli": "tsx src/cli.ts",
     "api": "tsx src/api/queue-server.ts",
@@ -32,7 +29,7 @@
     "setup": "bash scripts/setup-local.sh && bash scripts/setup-ilm.sh",
     "clean": "rm -rf dist",
     "import-mock": "tsx src/scripts/import-mock-benchmarks.ts",
-    "prepublishOnly": "npm run build:ts",
+    "prepublishOnly": "npm run build",
     "infra:up": "docker compose --env-file .env.docker up -d elasticsearch kibana",
     "infra:down": "docker compose --env-file .env.docker down",
     "infra:reset": "docker compose --env-file .env.docker down -v",
@@ -42,7 +39,6 @@
     "llm",
     "benchmark",
     "vllm",
-    "langgraph",
     "elastic",
     "ai"
   ],
@@ -50,9 +46,6 @@
   "dependencies": {
     "@elastic/elasticsearch": "^8.17.0",
     "@huggingface/hub": "^2.11.0",
-    "@langchain/core": "^0.3.0",
-    "@langchain/langgraph": "^0.2.0",
-    "@langchain/openai": "^0.3.0",
     "@octokit/rest": "^22.0.1",
     "async-mutex": "^0.5.0",
     "async-retry": "^1.3.3",
@@ -69,7 +62,6 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
-    "@langchain/langgraph-cli": "^0.0.1",
     "@types/async-retry": "^1.4.9",
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.6",
@@ -89,6 +81,6 @@
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.9"
   }
 }

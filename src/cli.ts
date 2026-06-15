@@ -221,12 +221,12 @@ program
 
 program
   .command('start')
-  .description('Start the benchmarking daemon (deprecated: use LangGraph instead)')
+  .description('Start the benchmarking daemon (deprecated: use benchmarker-queue start instead)')
   .action(() => {
     const globalOpts = program.opts();
     const jsonOutput = globalOpts['json'] as boolean;
     const msg =
-      'Daemon removed. Run the agent with LangGraph: langgraph dev (see langgraph.json)';
+      'Daemon removed. Run: benchmarker-queue start (see README for setup)';
     if (jsonOutput) {
       output({ error: msg }, true);
     } else {
@@ -283,11 +283,11 @@ program
 
 program
   .command('benchmark')
-  .description('Trigger an immediate benchmark run (deprecated: use LangGraph graph instead)')
+  .description('Trigger an immediate benchmark run (deprecated: use queue enqueue instead)')
   .action(() => {
     const globalOpts = program.opts();
     const jsonOutput = globalOpts['json'] as boolean;
-    const msg = 'Benchmark via CLI removed. Use the graph with LangGraph: langgraph dev';
+    const msg = 'Benchmark via CLI removed. Use: benchmarker-queue enqueue <modelId> (see README)';
     if (jsonOutput) {
       output({ error: msg }, true);
     } else {
