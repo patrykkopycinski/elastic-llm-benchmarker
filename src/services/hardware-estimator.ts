@@ -61,6 +61,7 @@ export interface ProfileFitResult {
 const GPU_VRAM_GB: Record<string, number> = {
   'nvidia-l4': 24,
   'nvidia-a100-80gb': 80,
+  'nvidia-a100-sxm4-80gb': 80,
   'nvidia-a100-40gb': 40,
   'nvidia-t4': 16,
   'nvidia-v100': 32,

@@ -912,4 +912,129 @@ describe('ModelDiscoveryService', () => {
       expect(result.models[0]!.name).toBe('Llama-3.1-70B-Instruct');
     });
   });
+
+  describe('hardware-aware discovery (M2)', () => {
+    const a100Profile = {
+      gpuType: 'nvidia-a100-80gb',
+      gpuCount: 2,
+      ramGb: 340,
+      cpuCores: 24,
+      diskGb: 500,
+      machineType: 'a2-ultragpu-2g',
+    };
+
+    it('should fast-reject models whose type is not in the whitelist', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/gpt2-7b',
+        config: { model_type: 'gpt2', architectures: ['GPT2LMHeadModel'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error', a100Profile);
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+      expect(result.totalScanned).toBe(1);
+    });
+
+    it('should fast-reject models that exceed target VRAM', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/llama-200b',
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error', a100Profile);
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+      expect(result.totalScanned).toBe(1);
+    });
+
+    it('should pass fast-reject for whitelisted models within VRAM budget', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/llama-7b',
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        max_position_embeddings: 8192,
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map([['org/llama-7b', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error', a100Profile);
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.id).toBe('org/llama-7b');
+    });
+
+    it('should stop fetching after limit is reached (early exit)', async () => {
+      const m1 = createMockHFModel({ id: 'org/llama-1', config: { model_type: 'llama' } });
+      const m2 = createMockHFModel({ id: 'org/llama-2', config: { model_type: 'llama' } });
+      const m3 = createMockHFModel({ id: 'org/llama-3', config: { model_type: 'llama' } });
+
+      const searchResults = [[m1], [m2], [m3]];
+      const configs = new Map([
+        ['org/llama-1', createMockConfig()],
+        ['org/llama-2', createMockConfig()],
+        ['org/llama-3', createMockConfig()],
+      ]);
+
+      global.fetch = setupFetchMock({ searchResults, configs }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({ limit: 1 });
+
+      expect(result.models).toHaveLength(1);
+      expect(result.totalScanned).toBe(1);
+    });
+
+    it('should deep-reject models that fail HardwareEstimator.dryRunCheck', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/llama-7b',
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        max_position_embeddings: 8192,
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map([['org/llama-7b', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const { HardwareEstimator } = await import('../../src/services/hardware-estimator.js');
+      vi.spyOn(HardwareEstimator.prototype, 'dryRunCheck').mockReturnValue({
+        fits: false,
+        reason: 'Mocked too big',
+        required: 1000,
+        available: 100,
+      } as unknown as ReturnType<HardwareEstimator['dryRunCheck']>);
+
+      const service = new ModelDiscoveryService('test-token', [], 'error', a100Profile);
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+      expect(result.totalScanned).toBe(1);
+
+      vi.restoreAllMocks();
+    });
+  });
 });
