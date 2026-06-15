@@ -2,19 +2,34 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../services/queue-service.js';
+import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import { createLogger } from '../utils/logger.js';
+import { createHash } from 'node:crypto';
 
+// ─── Constants ──────────────────────────────────────────────────────
 const MODEL_ID_PATTERN = /^[\w\-./]+$/;
 const MODEL_ID_MAX_LENGTH = 256;
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 100;
 
+// ─── Types ──────────────────────────────────────────────────────────
 export interface QueueServerConfig {
   port?: number;
   esUrl?: string;
   esApiKey?: string;
   esUsername?: string;
   esPassword?: string;
+  esClient?: Client;
+  apiKeys?: string[];
+  requireAuth?: boolean;
 }
 
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+
+// ─── ES Client ──────────────────────────────────────────────────────
 function createEsClient(config: QueueServerConfig): Client {
   const node = config.esUrl ?? process.env.ES_URL ?? 'http://localhost:9200';
   const apiKey = config.esApiKey ?? process.env.ES_API_KEY;
@@ -30,32 +45,312 @@ function createEsClient(config: QueueServerConfig): Client {
   return new Client({ node, ...(auth ? { auth } : {}) });
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────
+function sha256(input: string): string {
+  return createHash('sha256').update(input).digest('hex');
+}
+
 function sanitizeForLog(value: string): string {
   return value.replace(/[<>&"']/g, '');
 }
 
-export function createQueueServer(config: QueueServerConfig = {}) {
+// ─── Auth & Rate Limit ──────────────────────────────────────────────
+class ApiMiddleware {
+  private rateLimits = new Map<string, RateLimitEntry>();
+
+  constructor(
+    private readonly esClient: Client,
+    private readonly fallbackKeys: Set<string>,
+    private readonly requireAuth: boolean,
+    private readonly logger: ReturnType<typeof createLogger>,
+  ) { }
+
+  async isValidKey(token: string): Promise<boolean> {
+    const hash = sha256(token);
+
+    // Fast path: fallback keys (env var)
+    if (this.fallbackKeys.has(hash)) return true;
+
+    // ES-backed key lookup
+    try {
+      const res = await this.esClient.search({
+        index: 'benchmarker-api-keys',
+        query: { term: { key_hash: hash } },
+        size: 1,
+      });
+      const hit = res.hits.hits[0];
+      if (!hit) return false;
+      const source = hit._source as Record<string, unknown> | undefined;
+      if (source?.enabled === false) return false;
+      return true;
+    } catch (err) {
+      this.logger.warn('API key ES lookup failed', { err });
+      return false;
+    }
+  }
+
+  auth = async (req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> => {
+    if (!this.requireAuth) {
+      next();
+      return;
+    }
+
+    const header = req.headers.authorization ?? '';
+    const match = header.match(/^Bearer\s+(\S+)$/i);
+    if (!match) {
+      res.status(401).json({ error: 'Unauthorized: missing or invalid Bearer token' });
+      return;
+    }
+
+    const token = match[1]!;
+    const valid = await this.isValidKey(token);
+    if (!valid) {
+      res.status(403).json({ error: 'Forbidden: invalid API key' });
+      return;
+    }
+
+    // Rate limit by token hash (prevents leaking token length)
+    const keyHash = sha256(token);
+    const now = Date.now();
+    const entry = this.rateLimits.get(keyHash);
+
+    if (!entry || now > entry.resetAt) {
+      this.rateLimits.set(keyHash, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+    } else {
+      entry.count++;
+      if (entry.count > RATE_LIMIT_MAX) {
+        res.status(429).json({ error: 'Rate limit exceeded: 100 req/min' });
+        return;
+      }
+    }
+
+    next();
+  };
+}
+
+// ─── Server Factory ─────────────────────────────────────────────────
+export function createQueueServer(config: QueueServerConfig & {
+  queueService?: QueueService;
+  resultsStore?: ElasticsearchResultsStore;
+} = {}) {
   const logger = createLogger();
-  const esClient = createEsClient(config);
-  const queueService = new QueueService(esClient);
+  const esClient = config.esClient ?? createEsClient(config);
+  const queueService = config.queueService ?? new QueueService(esClient);
+  const resultsStore = config.resultsStore ?? new ElasticsearchResultsStore(esClient);
+
+  const fallbackEnv = process.env.API_KEYS ?? '';
+  const configKeys = (config.apiKeys ?? []).map((k) => k.trim()).filter(Boolean);
+  const fallbackKeys = new Set(
+    [
+      ...fallbackEnv.split(',').map((k) => k.trim()).filter(Boolean),
+      ...configKeys,
+    ],
+  );
+  const requireAuth = config.requireAuth ?? Boolean(fallbackKeys.size || process.env.REQUIRE_AUTH === 'true');
+
+  const middleware = new ApiMiddleware(esClient, fallbackKeys, requireAuth, logger);
 
   const app = express();
   app.use(express.json({ limit: '10kb' }));
 
+  // CORS
   app.use((_req, res, next) => {
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     next();
   });
-
   app.options('/{*path}', (_req, res) => res.sendStatus(204));
 
+  // Request logging
   app.use((req, _res, next) => {
     logger.info(`${req.method} ${req.path}`);
     next();
   });
 
+  // ─── Health ───────────────────────────────────────────────────────
+  app.get('/healthz', async (_req, res) => {
+    try {
+      const esHealth = await esClient.cluster.health({ timeout: '5s' }).catch(() => null);
+      if (!esHealth || esHealth.status === 'red') {
+        res.status(503).json({ status: 'unhealthy', elasticsearch: esHealth?.status ?? 'unknown' });
+        return;
+      }
+      res.json({ status: 'healthy', elasticsearch: esHealth.status });
+    } catch {
+      res.status(503).json({ status: 'unhealthy' });
+    }
+  });
+
+  // ─── v1 Routes ────────────────────────────────────────────────────
+  const v1 = express.Router();
+  v1.use(middleware.auth);
+
+  // POST /api/v1/evaluate  → queue a model
+  v1.post('/evaluate', async (req, res) => {
+    try {
+      const { modelId, priority, requestedBy, skipReasoning, configOverrides } = req.body ?? {};
+      if (!modelId || typeof modelId !== 'string') {
+        res.status(400).json({ error: 'modelId is required' });
+        return;
+      }
+      if (modelId.length > MODEL_ID_MAX_LENGTH || !MODEL_ID_PATTERN.test(modelId)) {
+        res.status(400).json({
+          error:
+            'modelId must be alphanumeric with dashes, dots, underscores, and slashes (max 256 chars)',
+        });
+        return;
+      }
+
+      const entry = await queueService.enqueue(
+        modelId,
+        'user',
+        typeof priority === 'number' ? priority : undefined,
+        typeof requestedBy === 'string' ? requestedBy : undefined,
+        {
+          skipReasoning: Boolean(skipReasoning),
+          configOverrides: configOverrides && typeof configOverrides === 'object'
+            ? {
+              tensorParallelSize: typeof configOverrides.tensorParallelSize === 'number'
+                ? configOverrides.tensorParallelSize : undefined,
+              maxModelLen: typeof configOverrides.maxModelLen === 'number'
+                ? configOverrides.maxModelLen : undefined,
+            }
+            : undefined,
+        },
+      );
+      res.status(201).json({ id: entry.id, status: entry.status, requestedAt: entry.requestedAt });
+    } catch (err) {
+      logger.error('POST /api/v1/evaluate failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/v1/evaluate/:id  → check evaluation status
+  v1.get('/evaluate/:id', async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!id || typeof id !== 'string') {
+        res.status(400).json({ error: 'Invalid id parameter' });
+        return;
+      }
+      const entry = await queueService.getById(id);
+      if (!entry) {
+        res.status(404).json({ error: 'Evaluation not found' });
+        return;
+      }
+      res.json({
+        id: entry.id,
+        modelId: entry.modelId,
+        status: entry.status,
+        source: entry.source,
+        requestedAt: entry.requestedAt,
+        startedAt: entry.startedAt,
+        completedAt: entry.completedAt,
+        errorMessage: entry.errorMessage,
+        requestedBy: entry.requestedBy,
+      });
+    } catch (err) {
+      logger.error(`GET /api/v1/evaluate/${sanitizeForLog(req.params.id)} failed`, { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/v1/models  → list models + latest results
+  v1.get('/models', async (req, res) => {
+    try {
+      const architecture = typeof req.query.architecture === 'string' ? req.query.architecture : undefined;
+      const source = typeof req.query.source === 'string' ? req.query.source : undefined;
+      const withSummaries = req.query.summaries === 'true';
+
+      const models = await resultsStore.queryModels({ architecture, source });
+
+      if (!withSummaries) {
+        res.json({ models, total: models.length });
+        return;
+      }
+
+      const summaries = await Promise.all(
+        models.map(async (m) => {
+          const summary = await resultsStore.getModelSummary(m.modelId);
+          return { ...m, summary };
+        }),
+      );
+      res.json({ models: summaries, total: summaries.length });
+    } catch (err) {
+      logger.error('GET /api/v1/models failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/v1/queue  → view queue status with counts
+  v1.get('/queue', async (req, res) => {
+    try {
+      const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+      const source = typeof req.query.source === 'string' ? req.query.source : undefined;
+      const entries = await queueService.getQueue({ status, source });
+      const pendingCount = await queueService.getPending();
+      const current = await queueService.getCurrent();
+      res.json({ entries, pendingCount, current });
+    } catch (err) {
+      logger.error('GET /api/v1/queue failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // DELETE /api/v1/queue/:id  → cancel a pending evaluation
+  v1.delete('/queue/:id', async (req, res) => {
+    try {
+      const id = req.params.id;
+      if (!id || typeof id !== 'string') {
+        res.status(400).json({ error: 'Invalid id parameter' });
+        return;
+      }
+      const cancelled = await queueService.cancel(id);
+      if (cancelled === null) {
+        res.status(404).json({ error: 'Queue entry not found' });
+      } else if (cancelled) {
+        res.status(200).json({ ok: true });
+      } else {
+        res.status(409).json({ error: 'Entry not in pending status' });
+      }
+    } catch (err) {
+      logger.error(`DELETE /api/v1/queue/${sanitizeForLog(req.params.id)} failed`, { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/v1/queue/events  → SSE stream
+  v1.get('/queue/events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Content', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const sendState = async () => {
+      try {
+        const [entries, current, pendingCount] = await Promise.all([
+          queueService.getQueue(),
+          queueService.getCurrent(),
+          queueService.getPending(),
+        ]);
+        res.write(`data: ${JSON.stringify({ entries, current, pendingCount })}\n\n`);
+      } catch (err) {
+        logger.error('SSE state fetch failed', { err });
+      }
+    };
+
+    sendState();
+    const interval = setInterval(sendState, 5000);
+
+    req.on('close', () => {
+      clearInterval(interval);
+    });
+  });
+
+  app.use('/api/v1', v1);
+
+  // Legacy routes (no auth, backward compat for internal UI)
   app.post('/api/queue', async (req, res) => {
     try {
       const { modelId, priority, requestedBy } = req.body ?? {};
@@ -121,9 +416,7 @@ export function createQueueServer(config: QueueServerConfig = {}) {
         res.status(409).json({ error: 'Entry not in pending status' });
       }
     } catch (err) {
-      logger.error(`DELETE /api/queue/${sanitizeForLog(req.params.id)} failed`, {
-        err,
-      });
+      logger.error(`DELETE /api/queue/${sanitizeForLog(req.params.id)} failed`, { err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -154,6 +447,7 @@ export function createQueueServer(config: QueueServerConfig = {}) {
     });
   });
 
+  // 404 handler
   app.use((_req, res) => {
     res.status(404).json({ error: 'Not found' });
   });
@@ -161,6 +455,7 @@ export function createQueueServer(config: QueueServerConfig = {}) {
   return app;
 }
 
+// ─── Starter ────────────────────────────────────────────────────────
 export function startQueueServer(config: QueueServerConfig = {}) {
   const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : 3100);
   const app = createQueueServer(config);
@@ -171,6 +466,7 @@ export function startQueueServer(config: QueueServerConfig = {}) {
   return server;
 }
 
+// ─── CLI entrypoint ─────────────────────────────────────────────────
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startQueueServer({
     port: Number(process.env.PORT) || 3100,
@@ -178,5 +474,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     esApiKey: process.env.ES_API_KEY,
     esUsername: process.env.ES_USERNAME,
     esPassword: process.env.ES_PASSWORD,
+    apiKeys: process.env.API_KEYS?.split(',').map((k) => k.trim()).filter(Boolean),
+    requireAuth: process.env.REQUIRE_AUTH === 'true',
   });
 }
