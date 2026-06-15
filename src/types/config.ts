@@ -11,6 +11,7 @@ export const sshConfigSchema = z
     username: z.string().min(1, 'SSH username is required'),
     password: z.string().min(1).optional(),
     privateKeyPath: z.string().min(1).optional(),
+    passphrase: z.string().min(1).optional(),
     /** Whether to run Docker commands with sudo (default: false) */
     useSudo: z.boolean().default(false),
   })

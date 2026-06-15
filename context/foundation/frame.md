@@ -64,12 +64,18 @@ with a richer evaluation pipeline:
 
 ## Reframed Problem Statement
 
-> **The actual problem**: The team needs an autonomous evaluation pipeline
-> that continuously discovers promising open-source LLMs, gauge-tests them
-> with `vllm bench serve`, runs a deeper Kibana eval suite ONLY on
-> passing models, reasons about the combined results, and reports
-> performance + improvement suggestions — all while preserving the team's
-> ability to manually queue models.
+> **Phase 1 (now):** Elastic product teams need an autonomous model qualification
+> pipeline that evaluates open-source LLMs against official Agent Builder eval
+> suites and produces a structured **recommendation report** — so PMs can make
+> model-support decisions in minutes, not days.
+>
+> **Phase 2 (later):** External users with their own GPU hardware want to run the
+> same pipeline to answer "what model works for my setup?" and get self-hosting
+> guidance.
+>
+> The current codebase has the plumbing (vLLM, ES, queue, EDOT) but lacks the
+> **recommendation report artifact** — the bridge from raw metrics to a support
+> decision. This is the critical gap to close first.
 
 The current repo conflated the two eval stages into one, and never wired
 Kibana evals to run conditionally. The reframe makes the pipeline a

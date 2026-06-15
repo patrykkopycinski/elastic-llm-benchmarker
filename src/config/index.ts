@@ -64,6 +64,8 @@ function buildEnvConfig(): Record<string, unknown> {
     ssh['privateKeyPath'] = process.env['SSH_PRIVATE_KEY_PATH'];
   if (process.env['SSH_USE_SUDO'])
     ssh['useSudo'] = process.env['SSH_USE_SUDO'] === 'true';
+  if (process.env['SSH_PASSPHRASE'])
+    ssh['passphrase'] = process.env['SSH_PASSPHRASE'];
   if (Object.keys(ssh).length > 0) env['ssh'] = ssh;
 
   // HuggingFace token

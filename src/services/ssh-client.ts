@@ -772,6 +772,9 @@ export class SSHClientPool {
       if (config.privateKeyPath) {
         try {
           connectConfig.privateKey = fs.readFileSync(config.privateKeyPath);
+          if (config.passphrase) {
+            connectConfig.passphrase = config.passphrase;
+          }
         } catch (err) {
           reject(
             new SSHError(
