@@ -27,6 +27,7 @@ function createMockQueueService(): QueueService {
 function createMockResultsStore(): ElasticsearchResultsStore {
   const store = {
     saveStage2Result: vi.fn().mockResolvedValue(undefined),
+    saveReasoningResult: vi.fn().mockResolvedValue(undefined),
   };
   return store as unknown as ElasticsearchResultsStore;
 }

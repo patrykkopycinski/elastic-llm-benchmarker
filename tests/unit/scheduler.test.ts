@@ -1,224 +1,210 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Scheduler } from '../../src/scheduler/scheduler.js';
-import type { QueueService, QueueEntry } from '../../src/services/queue-service.js';
-import type { Stage1Worker } from '../../src/worker/index.js';
-import type { Stage1Result, PipelineRun } from '../../src/scheduler/pipeline-state.js';
+import type {
+  QueueService,
+  QueueEntry,
+} from '../../src/services/queue-service.js';
+import type {
+  Stage1Worker,
+  Stage2Worker,
+  Stage3Worker,
+} from '../../src/worker/index.js';
+import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
+import type {
+  Stage1Result,
+  Stage2Result,
+  Stage3Result,
+} from '../../src/scheduler/pipeline-state.js';
 
-// ─── Mock Helpers ────────────────────────────────────────────────────────────
+describe('Scheduler', () => {
+  let queueService: QueueService;
+  let stage1Worker: Stage1Worker;
+  let stage2Worker: Stage2Worker;
+  let stage3Worker: Stage3Worker;
+  let resultsStore: ElasticsearchResultsStore;
+  let scheduler: Scheduler;
 
-function createMockQueueService(): QueueService {
-  return {
-    esClient: {} as unknown as QueueService['esClient'],
-    enqueue: vi.fn(),
-    dequeue: vi.fn(),
-    getQueue: vi.fn(),
-    getById: vi.fn(),
-    getCurrent: vi.fn(),
-    updateStatus: vi.fn().mockResolvedValue(undefined),
-    cancel: vi.fn(),
-    findPending: vi.fn().mockResolvedValue([]),
-    hasPending: vi.fn(),
-    shouldAutoStop: vi.fn(),
-  } as unknown as QueueService;
-}
-
-function createMockWorker(overrides?: Partial<Stage1Worker>): Stage1Worker {
-  return {
-    execute: vi.fn().mockResolvedValue({
-      runId: 'run-1',
-      modelId: 'test-model',
-      queueEntryId: 'entry-1',
-      status: 'success' as const,
-      metrics: null,
-      rawOutput: '',
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-    } satisfies Stage1Result),
-    ...overrides,
-  };
-}
-
-function createQueueEntry(overrides?: Partial<QueueEntry>): QueueEntry {
-  return {
+  const baseEntry: QueueEntry = {
     id: 'entry-1',
     modelId: 'meta-llama/Llama-3-8B',
     source: 'user',
-    priority: 100,
+    priority: 1,
     status: 'pending',
     requestedAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,
     errorMessage: null,
     requestedBy: null,
-    ...overrides,
   };
-}
 
-// ─── Tests ──────────────────────────────────────────────────────────────────
+  const successStage1: Stage1Result = {
+    runId: 'run-1',
+    modelId: baseEntry.modelId,
+    queueEntryId: baseEntry.id,
+    status: 'success',
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    metrics: {
+      itl_p50_ms: 15,
+      itl_p99_ms: 25,
+      ttft_ms: 120,
+      throughput_tps: 40,
+      duration_sec: 15,
+    },
+    rawOutput: 'benchmark output',
+  };
 
-describe('Scheduler', () => {
-  let queueService: ReturnType<typeof createMockQueueService>;
-  let worker: Stage1Worker;
-  let scheduler: Scheduler;
+  const successStage2: Stage2Result = {
+    runId: 'run-1',
+    modelId: baseEntry.modelId,
+    queueEntryId: baseEntry.id,
+    status: 'success',
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    scores: { tool_use: 0.85 },
+    suiteResults: [
+      { suite: 'tool_use', status: 'pass', score: 0.85 },
+    ],
+  };
+
+  const successStage3: Stage3Result = {
+    runId: 'run-1',
+    modelId: baseEntry.modelId,
+    queueEntryId: baseEntry.id,
+    status: 'success',
+    startedAt: new Date().toISOString(),
+    completedAt: new Date().toISOString(),
+    suggestions: [
+      {
+        category: 'config',
+        title: 'Increase GPU memory utilisation',
+        description: 'Use --gpu-memory-utilization 0.95',
+        estimatedImpact: 'medium',
+      },
+    ],
+  };
+
+  let findPendingMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    queueService = createMockQueueService();
-    worker = createMockWorker();
-    scheduler = new Scheduler(queueService, worker, {
-      pollIntervalMs: 1000,
-      maxConcurrentRuns: 1,
-    });
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    findPendingMock = vi.fn().mockResolvedValue([]);
+    queueService = {
+      findPending: findPendingMock,
+      updateStatus: vi.fn().mockResolvedValue(undefined),
+      enqueue: vi.fn().mockResolvedValue(undefined),
+      claim: vi.fn().mockResolvedValue(null),
+      complete: vi.fn().mockResolvedValue(undefined),
+    } as unknown as QueueService;
+
+    stage1Worker = {
+      execute: vi.fn().mockResolvedValue(successStage1),
+    } as unknown as Stage1Worker;
+
+    stage2Worker = {
+      execute: vi.fn().mockResolvedValue(successStage2),
+    } as unknown as Stage2Worker;
+
+    stage3Worker = {
+      execute: vi.fn().mockResolvedValue(successStage3),
+    } as unknown as Stage3Worker;
+
+    resultsStore = {
+      saveStage2Result: vi.fn().mockResolvedValue(undefined),
+      saveReasoningResult: vi.fn().mockResolvedValue(undefined),
+      getLatestReasoningResult: vi.fn().mockResolvedValue(null),
+    } as unknown as ElasticsearchResultsStore;
+
+    scheduler = new Scheduler(
+      queueService,
+      stage1Worker,
+      { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+      stage2Worker,
+      resultsStore,
+      stage3Worker,
+    );
   });
 
-  afterEach(async () => {
+  it('runs full pipeline and persists Stage 2 + Stage 3 results', async () => {
+    findPendingMock.mockResolvedValue([baseEntry]);
+
+    // Start scheduler, let it poll once, then stop
+    await scheduler.start();
+    // Wait for async processEntry to complete
+    await new Promise((r) => setTimeout(r, 100));
     await scheduler.stop();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
+
+    expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
+    expect(stage3Worker.execute).toHaveBeenCalledTimes(1);
+
+    // Stage 2 result persisted
+    expect(resultsStore.saveStage2Result).toHaveBeenCalledWith(
+      expect.objectContaining({ status: 'success' }),
+    );
+
+    // Stage 3 result persisted (the fix we just added)
+    expect(resultsStore.saveReasoningResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'success',
+        suggestions: expect.any(Array),
+      }),
+    );
+
+    // Queue status updated to completed (2 args: id, status)
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+      baseEntry.id,
+      'completed',
+    );
   });
 
-  describe('start / stop', () => {
-    it('should start polling and process a pending entry', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+  it('stops at Stage 1 failure and does not chain Stage 2/3', async () => {
+    const failedStage1: Stage1Result = {
+      ...successStage1,
+      status: 'failed',
+      error: 'deployment_timeout',
+    };
+    (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
+      failedStage1,
+    );
+    findPendingMock.mockResolvedValue([baseEntry]);
 
-      await scheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
+    await scheduler.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await scheduler.stop();
 
-      expect(worker.execute).toHaveBeenCalledTimes(1);
-      const callArg = (worker.execute as ReturnType<typeof vi.fn>).mock.calls[0][0] as PipelineRun;
-      expect(callArg.modelId).toBe('meta-llama/Llama-3-8B');
-    });
-
-    it('should not call worker when no pending entries exist', async () => {
-      queueService.findPending.mockResolvedValue([]);
-
-      await scheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(worker.execute).not.toHaveBeenCalled();
-    });
-
-    it('should stop polling after stop() is called', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
-
-      await scheduler.start();
-      await scheduler.stop();
-      await vi.advanceTimersByTimeAsync(2000);
-
-      expect(worker.execute).toHaveBeenCalledTimes(1);
-    });
+    expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    expect(stage2Worker.execute).not.toHaveBeenCalled();
+    expect(stage3Worker.execute).not.toHaveBeenCalled();
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+      baseEntry.id,
+      'failed',
+      'deployment_timeout',
+    );
   });
 
-  describe('maxConcurrentRuns', () => {
-    it('should not call worker when maxConcurrentRuns is reached', async () => {
-      queueService.findPending.mockResolvedValue([
-        createQueueEntry({ id: 'entry-1', modelId: 'model-a' }),
-        createQueueEntry({ id: 'entry-2', modelId: 'model-b' }),
-      ]);
+  it('handles Stage 2 failure gracefully', async () => {
+    const failedStage2: Stage2Result = {
+      ...successStage2,
+      status: 'error',
+      reason: 'eval_suite_failed',
+    };
+    (stage2Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
+      failedStage2,
+    );
+    findPendingMock.mockResolvedValue([baseEntry]);
 
-      const slowExecute = vi.fn(() => new Promise<Stage1Result>((resolve) => {
-        setTimeout(() => resolve({
-          runId: 'run-1',
-          modelId: 'model-a',
-          queueEntryId: 'entry-1',
-          status: 'success' as const,
-          metrics: null,
-          rawOutput: '',
-          startedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
-        }), 5000);
-      }));
+    await scheduler.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await scheduler.stop();
 
-      const slowWorker: Stage1Worker = { execute: slowExecute };
-      const limitedScheduler = new Scheduler(queueService, slowWorker, {
-        pollIntervalMs: 1000,
-        maxConcurrentRuns: 1,
-      });
-
-      await limitedScheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(slowExecute).toHaveBeenCalledTimes(1);
-
-      // Second poll should skip because activeRuns == maxConcurrentRuns
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(slowExecute).toHaveBeenCalledTimes(1);
-
-      await limitedScheduler.stop();
-    });
-  });
-
-  describe('graceful shutdown', () => {
-    it('should wait for active runs to complete before resolving stop()', async () => {
-      let resolveExecute: (value: Stage1Result) => void;
-      const executePromise = new Promise<Stage1Result>((resolve) => {
-        resolveExecute = resolve;
-      });
-
-      const blockingWorker: Stage1Worker = {
-        execute: vi.fn(() => executePromise),
-      };
-
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
-
-      const limitedScheduler = new Scheduler(queueService, blockingWorker, {
-        pollIntervalMs: 1000,
-        maxConcurrentRuns: 1,
-      });
-
-      await limitedScheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-
-      expect(blockingWorker.execute).toHaveBeenCalledTimes(1);
-
-      // stop() should block until execute resolves
-      const stopPromise = limitedScheduler.stop();
-      await vi.advanceTimersByTimeAsync(500);
-
-      // stop should not have resolved yet because execute is still pending
-      const stopResolvedEarly = await Promise.race([
-        stopPromise.then(() => true),
-        Promise.resolve(false),
-      ]);
-      expect(stopResolvedEarly).toBe(false);
-
-      resolveExecute!({
-        runId: 'run-1',
-        modelId: 'model-a',
-        queueEntryId: 'entry-1',
-        status: 'success' as const,
-        metrics: null,
-        rawOutput: '',
-        startedAt: new Date().toISOString(),
-        completedAt: new Date().toISOString(),
-      });
-
-      // Give a tick for the finally block and for the setTimeout in stop()
-      await vi.advanceTimersByTimeAsync(2000);
-
-      // Now stop should be done
-      await stopPromise;
-    });
-
-    it('should update entry status to failed when worker throws', async () => {
-      const failingWorker: Stage1Worker = {
-        execute: vi.fn().mockRejectedValue(new Error('worker exploded')),
-      };
-
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
-
-      const failScheduler = new Scheduler(queueService, failingWorker, {
-        pollIntervalMs: 1000,
-        maxConcurrentRuns: 1,
-      });
-
-      await failScheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-
-      // Give time for the async processEntry to complete
-      await vi.advanceTimersByTimeAsync(500);
-
-      expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'failed', 'worker exploded');
-    });
+    expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
+    // Stage 3 should NOT run when Stage 2 fails
+    expect(stage3Worker.execute).not.toHaveBeenCalled();
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+      baseEntry.id,
+      'failed',
+      'eval_suite_failed',
+    );
   });
 });

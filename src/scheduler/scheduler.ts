@@ -100,6 +100,9 @@ export class Scheduler {
       if (this.stage3Worker) {
         const stage3Result = await this.stage3Worker.execute(run);
         run.stage3Result = stage3Result;
+        if (this.resultsStore) {
+          await this.resultsStore.saveReasoningResult(stage3Result);
+        }
         if (stage3Result.status === 'error') {
           await this.queueService.updateStatus(entry.id, 'failed', stage3Result.error);
           return;
