@@ -9,8 +9,8 @@ export const sshConfigSchema = z
     host: z.string().min(1, 'SSH host is required'),
     port: z.number().int().positive().default(22),
     username: z.string().min(1, 'SSH username is required'),
-    password: z.string().optional(),
-    privateKeyPath: z.string().optional(),
+    password: z.string().min(1).optional(),
+    privateKeyPath: z.string().min(1).optional(),
     /** Whether to run Docker commands with sudo (default: false) */
     useSudo: z.boolean().default(false),
   })

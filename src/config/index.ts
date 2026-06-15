@@ -56,13 +56,13 @@ function buildEnvConfig(): Record<string, unknown> {
 
   // SSH config from env vars
   const ssh: Record<string, unknown> = {};
-  if (process.env['SSH_HOST'] !== undefined) ssh['host'] = process.env['SSH_HOST'];
-  if (process.env['SSH_PORT'] !== undefined) ssh['port'] = Number(process.env['SSH_PORT']);
-  if (process.env['SSH_USERNAME'] !== undefined) ssh['username'] = process.env['SSH_USERNAME'];
-  if (process.env['SSH_PASSWORD'] !== undefined) ssh['password'] = process.env['SSH_PASSWORD'];
-  if (process.env['SSH_PRIVATE_KEY_PATH'] !== undefined)
+  if (process.env['SSH_HOST']) ssh['host'] = process.env['SSH_HOST'];
+  if (process.env['SSH_PORT']) ssh['port'] = Number(process.env['SSH_PORT']);
+  if (process.env['SSH_USERNAME']) ssh['username'] = process.env['SSH_USERNAME'];
+  if (process.env['SSH_PASSWORD']) ssh['password'] = process.env['SSH_PASSWORD'];
+  if (process.env['SSH_PRIVATE_KEY_PATH'])
     ssh['privateKeyPath'] = process.env['SSH_PRIVATE_KEY_PATH'];
-  if (process.env['SSH_USE_SUDO'] !== undefined)
+  if (process.env['SSH_USE_SUDO'])
     ssh['useSudo'] = process.env['SSH_USE_SUDO'] === 'true';
   if (Object.keys(ssh).length > 0) env['ssh'] = ssh;
 

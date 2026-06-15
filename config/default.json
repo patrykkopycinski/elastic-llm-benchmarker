@@ -3,8 +3,7 @@
   "ssh": {
     "host": "",
     "port": 22,
-    "username": "",
-    "privateKeyPath": ""
+    "username": ""
   },
   "huggingfaceToken": "",
   "benchmarkThresholds": {
