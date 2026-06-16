@@ -5,6 +5,9 @@ import express from 'express';
 import { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../services/queue-service.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
+import { SystemHealthChecker } from '../services/system-health-check.js';
+import { HealthMonitor } from '../services/health-monitor.js';
+import { monitoring } from '../services/monitoring-integration.js';
 import { createLogger } from '../utils/logger.js';
 import { createHash } from 'node:crypto';
 
@@ -510,6 +513,58 @@ export function createQueueServer(config: QueueServerConfig & {
 
     req.on('close', () => {
       clearInterval(interval);
+    });
+  });
+
+  // ─── Monitoring endpoints ────────────────────────────────────────
+  // Prometheus scrape target
+  app.get('/metrics', monitoring.prometheusHandler());
+  // JSON metrics for custom integrations
+  app.get('/metrics/json', monitoring.jsonHandler());
+
+  // Comprehensive health endpoint with history + alerting state
+  const healthChecker = new SystemHealthChecker({ queueService });
+  const healthMonitor = new HealthMonitor(healthChecker);
+  // Start periodic checks every 30s
+  healthMonitor.start(30_000);
+
+  app.get('/api/v1/health', async (_req, res) => {
+    try {
+      const latest = healthMonitor.getLatest();
+      const summary = healthMonitor.getSummary();
+      const failureCounts = healthMonitor.getFailureCounts();
+
+      // If no snapshot yet, run one now
+      const snapshot = latest ?? (await healthMonitor.tick());
+
+      res.status(snapshot.ok ? 200 : 503).json({
+        status: snapshot.ok ? 'healthy' : 'degraded',
+        timestamp: snapshot.timestamp,
+        checks: snapshot.checks,
+        uptime: {
+          seconds: snapshot.uptimeSeconds,
+          memoryMB: snapshot.memoryMB,
+        },
+        monitoring: {
+          ...summary,
+          failureCounts,
+          historySize: healthMonitor.getHistory().length,
+        },
+      });
+    } catch (err) {
+      res.status(500).json({
+        status: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // Health history endpoint
+  app.get('/api/v1/health/history', (_req, res) => {
+    const limit = Math.min(Number(_req.query.limit) || 20, 100);
+    res.json({
+      history: healthMonitor.getHistory(limit),
+      summary: healthMonitor.getSummary(),
     });
   });
 

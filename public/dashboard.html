@@ -507,8 +507,21 @@
       });
     }
 
+    function loadHealth() {
+      // Read the body regardless of status so we can tell "API up but ES down"
+      // (503 + JSON) apart from "API unreachable" (network error).
+      return fetch("/healthz", { headers: { Accept: "application/json" } })
+        .then(function (r) {
+          return r.json().then(
+            function (body) { setHealth(body, true); },
+            function () { setHealth({ status: "unhealthy" }, true); }
+          );
+        })
+        .catch(function () { setHealth(null, false); });
+    }
+
     function loadAll() {
-      var p1 = getJSON("/healthz").then(setHealth).catch(function () { setHealth(null); });
+      var p1 = loadHealth();
       var p2 = getJSON("/api/stats").then(function (d) { state.stats = d; }).catch(function () {});
       var p3 = getJSON("/api/models?summaries=true").then(function (d) {
         state.models = (d && d.models) || [];
@@ -523,16 +536,21 @@
     }
 
     // ── Health ─────────────────────────────────────────
-    function setHealth(h) {
+    // reachable=false  → the API server itself didn't respond.
+    // reachable=true   → API responded; `h.status` reflects Elasticsearch.
+    function setHealth(h, reachable) {
       var el = $("health");
       var txt = $("health-text");
       el.classList.remove("ok", "bad");
       if (h && h.status === "healthy") {
         el.classList.add("ok");
         txt.textContent = "ES " + (h.elasticsearch || "healthy");
+      } else if (reachable) {
+        el.classList.add("bad");
+        txt.textContent = "ES " + (h && h.elasticsearch ? h.elasticsearch : "unavailable");
       } else {
         el.classList.add("bad");
-        txt.textContent = h ? "Unhealthy" : "Unreachable";
+        txt.textContent = "API unreachable";
       }
     }
 
