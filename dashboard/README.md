@@ -1,6 +1,42 @@
 # LLM Benchmarker Dashboard
 
-Kibana saved objects that visualize benchmark results from the `elastic-llm-benchmarker` project.
+Two ways to visualize benchmark results from the `elastic-llm-benchmarker` project:
+
+1. **Built-in web dashboard** (no Kibana required) — served by the daemon's REST API.
+2. **Kibana saved objects** (this folder) — richer ad-hoc exploration inside Kibana.
+
+## Built-in web dashboard
+
+A self-contained, dark-mode dashboard ships with the API server and needs no
+build step, npm install, or Kibana import. Start the API and open it in a
+browser:
+
+```bash
+npm run api          # or: npm run start -- --api-port 3100
+open http://localhost:3100/        # also available at /dashboard
+```
+
+It renders live from the REST API:
+
+- **KPI tiles** — models tracked, total benchmark runs, overall pass rate, and
+  current pipeline state.
+- **Model leaderboard** — sortable table of every model with pass rate, mean
+  throughput (tok/s), inter-token latency (ms), tool-call success, and last-run
+  status.
+- **Average throughput by model** and a **pass/fail run-outcome** donut.
+- **Live queue panel** — the currently-running model plus pending entries,
+  streamed over Server-Sent Events (`/api/queue/events`), with polling fallback.
+
+Data routes consumed (all unauthenticated, consistent with the existing
+internal-UI queue routes): `GET /healthz`, `GET /api/stats`,
+`GET /api/models?summaries=true`, `GET /api/queue`, `GET /api/queue/events`.
+The source file is [`public/dashboard.html`](../public/dashboard.html).
+
+---
+
+## Kibana saved objects
+
+Kibana saved objects that visualize benchmark results.
 
 ## Files
 

@@ -73,6 +73,7 @@ function createMockResultsStore(): ElasticsearchResultsStore {
       avgThroughput: 1200,
       bestConfig: { tensorParallelSize: 4 },
     }),
+    getStats: vi.fn().mockResolvedValue({ total: 10, passed: 8, failed: 2 }),
   } as unknown as ElasticsearchResultsStore;
 }
 
@@ -122,6 +123,36 @@ describe('Queue Server', () => {
       const res = await request(app).get('/api/queue');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('GET /api/stats should return run counts', async () => {
+      const app = createQueueServer({ esClient, queueService, resultsStore, requireAuth: false });
+      const res = await request(app).get('/api/stats');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ total: 10, passed: 8, failed: 2 });
+    });
+
+    it('GET /api/models should list models', async () => {
+      const app = createQueueServer({ esClient, queueService, resultsStore, requireAuth: false });
+      const res = await request(app).get('/api/models');
+      expect(res.status).toBe(200);
+      expect(res.body.total).toBe(1);
+      expect(res.body.models[0].modelId).toBe('meta-llama/Llama-3-8B');
+    });
+
+    it('GET /api/models?summaries=true should include summaries', async () => {
+      const app = createQueueServer({ esClient, queueService, resultsStore, requireAuth: false });
+      const res = await request(app).get('/api/models?summaries=true');
+      expect(res.status).toBe(200);
+      expect(res.body.models[0].summary).toBeDefined();
+    });
+
+    it('GET / should serve the dashboard HTML', async () => {
+      const app = createQueueServer({ esClient, queueService, resultsStore, requireAuth: false });
+      const res = await request(app).get('/');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/html');
+      expect(res.text).toContain('LLM Benchmarker');
     });
   });
 

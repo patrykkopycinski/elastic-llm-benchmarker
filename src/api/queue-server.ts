@@ -1,4 +1,6 @@
 import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import express from 'express';
 import { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../services/queue-service.js';
@@ -52,6 +54,21 @@ function sha256(input: string): string {
 
 function sanitizeForLog(value: string): string {
   return value.replace(/[<>&"']/g, '');
+}
+
+/**
+ * Resolve the bundled dashboard HTML. The `public/` dir always lives at the
+ * repo root, but the running module may be `src/api/*` (tsx) or `dist/*`
+ * (compiled), so we probe a few candidate locations relative to this file.
+ */
+function resolveDashboardPath(): string | null {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    resolve(here, '../public/dashboard.html'),
+    resolve(here, '../../public/dashboard.html'),
+    resolve(process.cwd(), 'public/dashboard.html'),
+  ];
+  return candidates.find((p) => existsSync(p)) ?? null;
 }
 
 // ─── Auth & Rate Limit ──────────────────────────────────────────────
@@ -349,6 +366,55 @@ export function createQueueServer(config: QueueServerConfig & {
   });
 
   app.use('/api/v1', v1);
+
+  // ─── Dashboard (static web UI) ──────────────────────────────────────
+  const dashboardPath = resolveDashboardPath();
+  const serveDashboard = (_req: express.Request, res: express.Response): void => {
+    if (!dashboardPath) {
+      res.status(404).type('text/plain').send('Dashboard not found (public/dashboard.html missing)');
+      return;
+    }
+    res.sendFile(dashboardPath);
+  };
+  app.get('/', serveDashboard);
+  app.get('/dashboard', serveDashboard);
+
+  // ─── Read-only data routes for the dashboard ────────────────────────
+  // Unauthenticated, consistent with the legacy /api/queue internal-UI routes.
+
+  // GET /api/stats  → overall benchmark run counts
+  app.get('/api/stats', async (_req, res) => {
+    try {
+      const stats = await resultsStore.getStats();
+      res.json(stats);
+    } catch (err) {
+      logger.error('GET /api/stats failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/models  → model catalog, optionally with per-model summaries
+  app.get('/api/models', async (req, res) => {
+    try {
+      const architecture =
+        typeof req.query.architecture === 'string' ? req.query.architecture : undefined;
+      const source = typeof req.query.source === 'string' ? req.query.source : undefined;
+      const withSummaries = req.query.summaries === 'true';
+
+      const models = await resultsStore.queryModels({ architecture, source });
+      if (!withSummaries) {
+        res.json({ models, total: models.length });
+        return;
+      }
+      const summaries = await Promise.all(
+        models.map(async (m) => ({ ...m, summary: await resultsStore.getModelSummary(m.modelId) })),
+      );
+      res.json({ models: summaries, total: summaries.length });
+    } catch (err) {
+      logger.error('GET /api/models failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   // Legacy routes (no auth, backward compat for internal UI)
   app.post('/api/queue', async (req, res) => {

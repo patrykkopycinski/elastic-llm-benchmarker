@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="color-scheme" content="dark" />
+  <title>LLM Benchmarker</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1014;
+      --surface: #16181d;
+      --surface-elev: #1d2026;
+      --border: #2a2e36;
+      --border-strong: #3a3f49;
+      --text: #e8e6e3;
+      --text-muted: #a0a09c;
+      --text-soft: #6e7079;
+      --accent: #e8845c;
+      --accent-soft: #3a201a;
+      --good: #6fb87f;
+      --good-soft: #1a2e21;
+      --warn: #d4a93f;
+      --warn-soft: #2e2614;
+      --bad: #e07575;
+      --bad-soft: #3a1d1d;
+      --info: #6fa6e0;
+      --info-soft: #1a2436;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    a { color: var(--info); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    .wrap {
+      max-width: 1480px;
+      margin: 0 auto;
+      padding: 24px 28px 64px;
+    }
+
+    /* ── Top bar ─────────────────────────────────────── */
+    header.topbar {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      margin-bottom: 24px;
+    }
+    .brand h1 {
+      font-size: 22px;
+      margin: 0;
+      letter-spacing: -0.2px;
+    }
+    .brand .sub {
+      color: var(--text-soft);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .updated {
+      font-size: 12px;
+      color: var(--text-soft);
+      font-variant-numeric: tabular-nums;
+    }
+    .health {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 600;
+      border: 1px solid var(--border-strong);
+      background: var(--surface-elev);
+      color: var(--text-muted);
+    }
+    .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--text-soft);
+      flex: none;
+    }
+    .health.ok { color: var(--good); border-color: var(--good); background: var(--good-soft); }
+    .health.ok .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(111,184,127,0.18); }
+    .health.bad { color: var(--bad); border-color: var(--bad); background: var(--bad-soft); }
+    .health.bad .dot { background: var(--bad); }
+
+    button.btn {
+      font-family: var(--sans);
+      font-size: 13px;
+      color: var(--text);
+      background: var(--surface-elev);
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+      padding: 7px 13px;
+      cursor: pointer;
+    }
+    button.btn:hover { border-color: var(--accent); color: var(--accent); }
+    button.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* ── KPI cards ───────────────────────────────────── */
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 14px;
+      margin-bottom: 24px;
+    }
+    .kpi {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .kpi .label {
+      font-size: 12px;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .kpi .value {
+      font-size: 30px;
+      font-weight: 650;
+      margin-top: 8px;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.5px;
+    }
+    .kpi .meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .kpi .value.accent { color: var(--accent); }
+
+    /* ── Layout grid ─────────────────────────────────── */
+    .grid-main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 20px;
+      align-items: start;
+    }
+    .charts {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+      gap: 20px;
+      margin-top: 20px;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+    .panel-head h2 {
+      font-size: 14px;
+      margin: 0;
+      font-weight: 600;
+    }
+    .panel-head .caption {
+      font-size: 11px;
+      color: var(--text-soft);
+    }
+    .panel-body { padding: 6px 0; }
+    .panel-body.pad { padding: 18px; }
+
+    /* ── Table ───────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-variant-numeric: tabular-nums;
+      min-width: 720px;
+    }
+    thead th {
+      text-align: right;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }
+    thead th:first-child { text-align: left; padding-left: 18px; }
+    thead th:last-child { padding-right: 18px; }
+    thead th:hover { color: var(--text); }
+    thead th .arrow { color: var(--accent); margin-left: 4px; }
+    tbody td {
+      padding: 11px 12px;
+      border-bottom: 1px solid var(--border);
+      text-align: right;
+      white-space: nowrap;
+    }
+    tbody td:first-child { padding-left: 18px; }
+    tbody td:last-child { padding-right: 18px; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: var(--surface-elev); }
+    td.model { text-align: left; }
+    td.model .name {
+      font-weight: 600;
+      color: var(--text);
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    td.model .id {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-soft);
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .muted { color: var(--text-soft); }
+
+    /* pass-rate inline bar */
+    .rate {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .rate .track {
+      width: 56px; height: 6px;
+      background: var(--surface-elev);
+      border-radius: 999px;
+      overflow: hidden;
+      flex: none;
+    }
+    .rate .fill { height: 100%; border-radius: 999px; }
+    .rate .num { width: 38px; text-align: right; font-size: 12px; }
+
+    /* badges */
+    .badge {
+      display: inline-block;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      border: 1px solid transparent;
+    }
+    .badge.pass { color: var(--good); background: var(--good-soft); border-color: var(--good); }
+    .badge.fail { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
+    .badge.pending { color: var(--info); background: var(--info-soft); border-color: var(--info); }
+    .badge.deploying, .badge.benchmarking { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+    .badge.completed { color: var(--good); background: var(--good-soft); border-color: var(--good); }
+    .badge.cancelled { color: var(--text-soft); background: var(--surface-elev); border-color: var(--border-strong); }
+    .badge.tool { color: var(--info); background: var(--info-soft); border-color: var(--info); }
+
+    /* ── Queue panel ─────────────────────────────────── */
+    .current {
+      margin: 0 18px 14px;
+      padding: 14px;
+      border: 1px solid var(--accent);
+      background: var(--accent-soft);
+      border-radius: 9px;
+    }
+    .current .lbl {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .current .mid {
+      font-family: var(--mono);
+      font-size: 13px;
+      margin-top: 6px;
+      word-break: break-all;
+    }
+    .current .small { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .queue-list { list-style: none; margin: 0; padding: 0 8px 8px; }
+    .queue-list li {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 8px;
+    }
+    .queue-list li:hover { background: var(--surface-elev); }
+    .queue-list .qid {
+      font-family: var(--mono);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .queue-list .qmeta { font-size: 11px; color: var(--text-soft); margin-top: 2px; }
+
+    .live {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; color: var(--text-soft);
+    }
+    .live .dot { width: 7px; height: 7px; }
+    .live.on .dot { background: var(--good); box-shadow: 0 0 0 3px rgba(111,184,127,0.18); }
+    .live.off .dot { background: var(--text-soft); }
+
+    /* ── Empty / loading ─────────────────────────────── */
+    .empty {
+      padding: 40px 18px;
+      text-align: center;
+      color: var(--text-soft);
+      font-size: 13px;
+    }
+    .skeleton {
+      height: 14px;
+      border-radius: 4px;
+      background: var(--surface-elev);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 0.5; } 50% { opacity: 0.9; } }
+
+    /* ── Charts ──────────────────────────────────────── */
+    svg text { font-family: var(--sans); }
+    .bar-row text.lbl { fill: var(--text-muted); font-size: 12px; }
+    .bar-row text.val { fill: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+    .axis-cap { font-size: 11px; fill: var(--text-soft); }
+
+    @media (max-width: 1080px) {
+      .kpis { grid-template-columns: repeat(2, 1fr); }
+      .grid-main { grid-template-columns: 1fr; }
+      .charts { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <div class="brand">
+        <h1>LLM Benchmarker</h1>
+        <div class="sub">Autonomous vLLM benchmark &amp; evaluation pipeline</div>
+      </div>
+      <div class="topbar-right">
+        <span class="updated" id="updated">—</span>
+        <span class="health" id="health"><span class="dot"></span><span id="health-text">checking…</span></span>
+        <button class="btn" id="refresh" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <section class="kpis" aria-label="Key metrics">
+      <div class="kpi">
+        <div class="label">Models tracked</div>
+        <div class="value" id="kpi-models">—</div>
+        <div class="meta" id="kpi-models-meta">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Benchmark runs</div>
+        <div class="value" id="kpi-runs">—</div>
+        <div class="meta" id="kpi-runs-meta">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Overall pass rate</div>
+        <div class="value accent" id="kpi-pass">—</div>
+        <div class="meta" id="kpi-pass-meta">&nbsp;</div>
+      </div>
+      <div class="kpi">
+        <div class="label">Pipeline</div>
+        <div class="value" id="kpi-current">—</div>
+        <div class="meta" id="kpi-current-meta">&nbsp;</div>
+      </div>
+    </section>
+
+    <div class="grid-main">
+      <div class="panel" id="leaderboard">
+        <div class="panel-head">
+          <h2>Model leaderboard</h2>
+          <span class="caption" id="lb-caption">Source: benchmarker-results</span>
+        </div>
+        <div class="panel-body" id="lb-body">
+          <div class="empty">Loading models…</div>
+        </div>
+      </div>
+
+      <div class="panel" id="queue">
+        <div class="panel-head">
+          <h2>Queue</h2>
+          <span class="live off" id="live"><span class="dot"></span><span id="live-text">connecting</span></span>
+        </div>
+        <div class="panel-body" id="queue-body">
+          <div class="empty">Loading queue…</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="charts">
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Average throughput by model</h2>
+          <span class="caption">tokens / second · mean across runs</span>
+        </div>
+        <div class="panel-body pad" id="chart-throughput">
+          <div class="empty">No throughput data yet.</div>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>Run outcomes</h2>
+          <span class="caption">pass vs fail · all runs</span>
+        </div>
+        <div class="panel-body pad" id="chart-outcomes">
+          <div class="empty">No runs yet.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    "use strict";
+
+    // ── State ──────────────────────────────────────────
+    var state = {
+      models: [],
+      stats: null,
+      sort: { key: "passRate", dir: "desc" },
+    };
+
+    // ── Helpers ────────────────────────────────────────
+    function $(id) { return document.getElementById(id); }
+
+    function fmtInt(n) {
+      if (n == null || isNaN(n)) return "—";
+      return Math.round(n).toLocaleString("en-US");
+    }
+    function fmtNum(n, d) {
+      if (n == null || isNaN(n)) return "—";
+      return Number(n).toLocaleString("en-US", { maximumFractionDigits: d == null ? 1 : d });
+    }
+    function fmtPct(n) {
+      if (n == null || isNaN(n)) return "—";
+      return (n * 100).toFixed(0) + "%";
+    }
+    function fmtParams(n) {
+      if (n == null || isNaN(n) || n <= 0) return "—";
+      if (n >= 1e9) return fmtNum(n / 1e9, 1) + "B";
+      if (n >= 1e6) return fmtNum(n / 1e6, 0) + "M";
+      return fmtInt(n);
+    }
+    function fmtCtx(n) {
+      if (n == null || isNaN(n) || n <= 0) return "—";
+      if (n >= 1024) return Math.round(n / 1024) + "K";
+      return fmtInt(n);
+    }
+    function fmtAgo(iso) {
+      if (!iso) return "—";
+      var t = Date.parse(iso);
+      if (isNaN(t)) return "—";
+      var s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+      if (s < 60) return s + "s ago";
+      if (s < 3600) return Math.floor(s / 60) + "m ago";
+      if (s < 86400) return Math.floor(s / 3600) + "h ago";
+      return Math.floor(s / 86400) + "d ago";
+    }
+    function esc(s) {
+      return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+      });
+    }
+    function rateColor(r) {
+      if (r == null) return "var(--text-soft)";
+      if (r >= 0.8) return "var(--good)";
+      if (r >= 0.5) return "var(--warn)";
+      return "var(--bad)";
+    }
+    function passRateOf(s) {
+      if (!s || !s.totalRuns) return null;
+      return s.passedRuns / s.totalRuns;
+    }
+
+    // ── Fetch ──────────────────────────────────────────
+    function getJSON(url) {
+      return fetch(url, { headers: { Accept: "application/json" } }).then(function (r) {
+        if (!r.ok) throw new Error(url + " -> " + r.status);
+        return r.json();
+      });
+    }
+
+    function loadAll() {
+      var p1 = getJSON("/healthz").then(setHealth).catch(function () { setHealth(null); });
+      var p2 = getJSON("/api/stats").then(function (d) { state.stats = d; }).catch(function () {});
+      var p3 = getJSON("/api/models?summaries=true").then(function (d) {
+        state.models = (d && d.models) || [];
+      }).catch(function () {});
+      return Promise.all([p1, p2, p3]).then(function () {
+        renderKpis();
+        renderLeaderboard();
+        renderThroughput();
+        renderOutcomes();
+        $("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-US");
+      });
+    }
+
+    // ── Health ─────────────────────────────────────────
+    function setHealth(h) {
+      var el = $("health");
+      var txt = $("health-text");
+      el.classList.remove("ok", "bad");
+      if (h && h.status === "healthy") {
+        el.classList.add("ok");
+        txt.textContent = "ES " + (h.elasticsearch || "healthy");
+      } else {
+        el.classList.add("bad");
+        txt.textContent = h ? "Unhealthy" : "Unreachable";
+      }
+    }
+
+    // ── KPIs ───────────────────────────────────────────
+    function renderKpis() {
+      var models = state.models;
+      var stats = state.stats || { total: 0, passed: 0, failed: 0 };
+
+      $("kpi-models").textContent = fmtInt(models.length);
+      var withRuns = models.filter(function (m) { return m.summary && m.summary.totalRuns; }).length;
+      $("kpi-models-meta").textContent = withRuns + " benchmarked · " + (models.length - withRuns) + " awaiting";
+
+      $("kpi-runs").textContent = fmtInt(stats.total);
+      $("kpi-runs-meta").innerHTML =
+        '<span style="color:var(--good)">' + fmtInt(stats.passed) + " passed</span> · " +
+        '<span style="color:var(--bad)">' + fmtInt(stats.failed) + " failed</span>";
+
+      var rate = stats.total ? stats.passed / stats.total : null;
+      $("kpi-pass").textContent = fmtPct(rate);
+      $("kpi-pass-meta").textContent = stats.total ? fmtInt(stats.passed) + " / " + fmtInt(stats.total) + " runs" : "no runs yet";
+    }
+
+    // ── Leaderboard ────────────────────────────────────
+    var COLS = [
+      { key: "name", label: "Model", num: false },
+      { key: "architecture", label: "Arch", num: false },
+      { key: "parameterCount", label: "Params", num: true },
+      { key: "totalRuns", label: "Runs", num: true },
+      { key: "passRate", label: "Pass rate", num: true },
+      { key: "avgThroughput", label: "Tok/s", num: true },
+      { key: "avgItlMs", label: "ITL ms", num: true },
+      { key: "avgToolCallSuccessRate", label: "Tools", num: true },
+      { key: "lastRunTimestamp", label: "Last run", num: true },
+      { key: "status", label: "Status", num: false },
+    ];
+
+    function sortVal(m, key) {
+      var s = m.summary || {};
+      switch (key) {
+        case "name": return (m.name || m.modelId || "").toLowerCase();
+        case "architecture": return (m.architecture || "").toLowerCase();
+        case "parameterCount": return m.parameterCount || 0;
+        case "totalRuns": return s.totalRuns || 0;
+        case "passRate": { var r = passRateOf(s); return r == null ? -1 : r; }
+        case "avgThroughput": return s.avgThroughput || 0;
+        case "avgItlMs": return s.avgItlMs == null ? Infinity : s.avgItlMs;
+        case "avgToolCallSuccessRate": return s.avgToolCallSuccessRate == null ? -1 : s.avgToolCallSuccessRate;
+        case "lastRunTimestamp": return s.lastRunTimestamp ? Date.parse(s.lastRunTimestamp) : 0;
+        case "status": return s.totalRuns ? (s.lastPassed ? 2 : 1) : 0;
+        default: return 0;
+      }
+    }
+
+    function renderLeaderboard() {
+      var body = $("lb-body");
+      var models = state.models.slice();
+      if (!models.length) {
+        body.innerHTML = '<div class="empty">No models discovered yet. Queue one via <code>POST /api/v1/evaluate</code>.</div>';
+        return;
+      }
+
+      var sk = state.sort.key, dir = state.sort.dir === "asc" ? 1 : -1;
+      models.sort(function (a, b) {
+        var va = sortVal(a, sk), vb = sortVal(b, sk);
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        return 0;
+      });
+
+      var html = '<div class="table-wrap"><table><thead><tr>';
+      COLS.forEach(function (c) {
+        var arrow = c.key === sk ? '<span class="arrow">' + (dir === 1 ? "\u2191" : "\u2193") + "</span>" : "";
+        html += "<th data-key=\"" + c.key + "\">" + esc(c.label) + arrow + "</th>";
+      });
+      html += "</tr></thead><tbody>";
+
+      models.forEach(function (m) {
+        var s = m.summary || {};
+        var r = passRateOf(s);
+        var statusBadge;
+        if (!s.totalRuns) statusBadge = '<span class="badge pending">untested</span>';
+        else if (s.lastPassed) statusBadge = '<span class="badge pass">pass</span>';
+        else statusBadge = '<span class="badge fail">fail</span>';
+
+        var rateCell = r == null
+          ? '<span class="muted">—</span>'
+          : '<span class="rate"><span class="track"><span class="fill" style="width:' +
+            Math.round(r * 100) + '%;background:' + rateColor(r) + '"></span></span>' +
+            '<span class="num">' + Math.round(r * 100) + '%</span></span>';
+
+        var tools = s.avgToolCallSuccessRate == null
+          ? '<span class="muted">—</span>'
+          : (m.supportsToolCalling
+              ? '<span class="badge tool">' + Math.round(s.avgToolCallSuccessRate * 100) + '%</span>'
+              : fmtPct(s.avgToolCallSuccessRate));
+
+        html += "<tr>" +
+          '<td class="model"><div class="name">' + esc(m.name || m.modelId) + "</div>" +
+            (m.name && m.name !== m.modelId ? '<div class="id">' + esc(m.modelId) + "</div>" : "") + "</td>" +
+          "<td>" + (m.architecture ? esc(m.architecture) : '<span class="muted">—</span>') + "</td>" +
+          "<td>" + fmtParams(m.parameterCount) + "</td>" +
+          "<td>" + (s.totalRuns ? fmtInt(s.totalRuns) : '<span class="muted">0</span>') + "</td>" +
+          "<td>" + rateCell + "</td>" +
+          "<td>" + (s.avgThroughput ? fmtNum(s.avgThroughput, 0) : '<span class="muted">—</span>') + "</td>" +
+          "<td>" + (s.avgItlMs ? fmtNum(s.avgItlMs, 1) : '<span class="muted">—</span>') + "</td>" +
+          "<td>" + tools + "</td>" +
+          '<td class="muted">' + fmtAgo(s.lastRunTimestamp) + "</td>" +
+          "<td>" + statusBadge + "</td>" +
+          "</tr>";
+      });
+      html += "</tbody></table></div>";
+      body.innerHTML = html;
+      $("lb-caption").textContent = models.length + " models · sorted by " + sk;
+
+      var ths = body.querySelectorAll("th[data-key]");
+      Array.prototype.forEach.call(ths, function (th) {
+        th.addEventListener("click", function () {
+          var key = th.getAttribute("data-key");
+          if (state.sort.key === key) {
+            state.sort.dir = state.sort.dir === "asc" ? "desc" : "asc";
+          } else {
+            state.sort.key = key;
+            state.sort.dir = (key === "name" || key === "architecture") ? "asc" : "desc";
+          }
+          renderLeaderboard();
+        });
+      });
+    }
+
+    // ── Throughput chart (horizontal bars) ─────────────
+    function renderThroughput() {
+      var el = $("chart-throughput");
+      var data = state.models
+        .filter(function (m) { return m.summary && m.summary.avgThroughput; })
+        .map(function (m) { return { label: m.name || m.modelId, value: m.summary.avgThroughput }; })
+        .sort(function (a, b) { return b.value - a.value; })
+        .slice(0, 8);
+
+      if (!data.length) { el.innerHTML = '<div class="empty">No throughput data yet.</div>'; return; }
+
+      var max = Math.max.apply(null, data.map(function (d) { return d.value; }));
+      var rowH = 34, padL = 0, chartL = 170, padR = 56, top = 6;
+      var w = el.clientWidth || 600;
+      var barW = Math.max(60, w - chartL - padR);
+      var h = top + data.length * rowH + 24;
+
+      var svg = '<svg viewBox="0 0 ' + w + " " + h + '" width="100%" height="' + h + '" role="img" aria-label="Average throughput by model in tokens per second">';
+      data.forEach(function (d, i) {
+        var y = top + i * rowH;
+        var bw = Math.max(2, (d.value / max) * barW);
+        var label = d.label.length > 24 ? d.label.slice(0, 23) + "\u2026" : d.label;
+        svg += '<g class="bar-row">';
+        svg += '<text class="lbl" x="' + (chartL - 12) + '" y="' + (y + rowH / 2 + 4) + '" text-anchor="end">' + esc(label) + "</text>";
+        svg += '<rect x="' + chartL + '" y="' + (y + 7) + '" width="' + barW + '" height="' + (rowH - 16) + '" rx="4" fill="var(--surface-elev)"/>';
+        svg += '<rect x="' + chartL + '" y="' + (y + 7) + '" width="' + bw + '" height="' + (rowH - 16) + '" rx="4" fill="var(--accent)"/>';
+        svg += '<text class="val" x="' + (chartL + bw + 8) + '" y="' + (y + rowH / 2 + 4) + '">' + fmtNum(d.value, 0) + "</text>";
+        svg += "</g>";
+      });
+      svg += '<text class="axis-cap" x="' + chartL + '" y="' + (h - 6) + '">tokens / second</text>';
+      svg += "</svg>";
+      el.innerHTML = svg;
+    }
+
+    // ── Outcomes donut ─────────────────────────────────
+    function renderOutcomes() {
+      var el = $("chart-outcomes");
+      var st = state.stats;
+      if (!st || !st.total) { el.innerHTML = '<div class="empty">No runs yet.</div>'; return; }
+
+      var passed = st.passed || 0, failed = st.failed || 0, total = passed + failed || st.total;
+      var rate = passed / total;
+      var size = 180, cx = size / 2, cy = size / 2, rad = 70, circ = 2 * Math.PI * rad, sw = 22;
+      var passLen = circ * rate;
+
+      var svg = '<div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap;justify-content:center">';
+      svg += '<svg width="' + size + '" height="' + size + '" viewBox="0 0 ' + size + " " + size + '" role="img" aria-label="Pass versus fail run outcomes">';
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rad + '" fill="none" stroke="var(--bad-soft)" stroke-width="' + sw + '"/>';
+      svg += '<circle cx="' + cx + '" cy="' + cy + '" r="' + rad + '" fill="none" stroke="var(--good)" stroke-width="' + sw +
+             '" stroke-dasharray="' + passLen + " " + circ + '" stroke-linecap="round" transform="rotate(-90 ' + cx + " " + cy + ')"/>';
+      svg += '<text x="' + cx + '" y="' + (cy - 2) + '" text-anchor="middle" fill="var(--text)" font-size="30" font-weight="650">' + Math.round(rate * 100) + "%</text>";
+      svg += '<text x="' + cx + '" y="' + (cy + 20) + '" text-anchor="middle" fill="var(--text-soft)" font-size="12">pass rate</text>';
+      svg += "</svg>";
+      svg += '<div style="font-size:13px;line-height:2.1">' +
+        '<div><span class="dot" style="display:inline-block;background:var(--good);margin-right:8px"></span>Passed &nbsp;<strong>' + fmtInt(passed) + "</strong></div>" +
+        '<div><span class="dot" style="display:inline-block;background:var(--bad);margin-right:8px"></span>Failed &nbsp;<strong>' + fmtInt(failed) + "</strong></div>" +
+        '<div class="muted" style="margin-top:6px">Total ' + fmtInt(total) + " runs</div>" +
+        "</div>";
+      svg += "</div>";
+      el.innerHTML = svg;
+    }
+
+    // ── Queue (live via SSE, fallback poll) ────────────
+    function renderQueue(data) {
+      var body = $("queue-body");
+      var current = data && data.current;
+      var entries = (data && data.entries) || [];
+      var pending = entries.filter(function (e) { return e.status === "pending"; });
+
+      var html = "";
+      if (current) {
+        html += '<div class="current">' +
+          '<div class="lbl">Now running</div>' +
+          '<div class="mid">' + esc(current.modelId) + "</div>" +
+          '<div class="small"><span class="badge ' + esc(current.status) + '">' + esc(current.status) + "</span>" +
+            (current.startedAt ? " &nbsp;started " + fmtAgo(current.startedAt) : "") + "</div>" +
+          "</div>";
+      }
+
+      if (!pending.length) {
+        html += '<div class="empty">' + (current ? "Nothing else queued." : "Queue is idle.") + "</div>";
+      } else {
+        html += '<ul class="queue-list">';
+        pending.slice(0, 12).forEach(function (e) {
+          html += "<li><div style=\"min-width:0\">" +
+            '<div class="qid">' + esc(e.modelId) + "</div>" +
+            '<div class="qmeta">' + esc(e.source || "user") +
+              (e.priority ? " · p" + e.priority : "") +
+              " · " + fmtAgo(e.requestedAt) + "</div>" +
+            "</div>" +
+            '<span class="badge ' + esc(e.status) + '">' + esc(e.status) + "</span>" +
+            "</li>";
+        });
+        html += "</ul>";
+        if (pending.length > 12) {
+          html += '<div class="muted" style="padding:4px 18px 12px;font-size:12px">+' + (pending.length - 12) + " more pending</div>";
+        }
+      }
+      body.innerHTML = html;
+
+      // KPI pipeline tile
+      $("kpi-current").textContent = current ? "Running" : "Idle";
+      $("kpi-current").classList.toggle("accent", !!current);
+      $("kpi-current-meta").textContent = current
+        ? truncate(current.modelId, 28)
+        : pending.length + " pending in queue";
+    }
+
+    function truncate(s, n) {
+      s = String(s || "");
+      return s.length > n ? s.slice(0, n - 1) + "\u2026" : s;
+    }
+
+    function setLive(on) {
+      var el = $("live");
+      el.classList.toggle("on", on);
+      el.classList.toggle("off", !on);
+      $("live-text").textContent = on ? "live" : "polling";
+    }
+
+    var pollTimer = null;
+    function pollQueue() {
+      getJSON("/api/queue").then(function (entries) {
+        getJSON("/api/queue/current").then(function (current) {
+          renderQueue({ entries: entries, current: current });
+        });
+      }).catch(function () {});
+    }
+
+    function connectQueue() {
+      if (typeof EventSource === "undefined") { startPolling(); return; }
+      try {
+        var es = new EventSource("/api/queue/events");
+        es.onmessage = function (ev) {
+          try { renderQueue(JSON.parse(ev.data)); setLive(true); } catch (e) {}
+        };
+        es.onerror = function () {
+          setLive(false);
+          es.close();
+          startPolling();
+        };
+      } catch (e) { startPolling(); }
+    }
+
+    function startPolling() {
+      setLive(false);
+      if (pollTimer) return;
+      pollQueue();
+      pollTimer = setInterval(pollQueue, 5000);
+    }
+
+    // ── Boot ───────────────────────────────────────────
+    $("refresh").addEventListener("click", loadAll);
+    loadAll();
+    connectQueue();
+    setInterval(loadAll, 15000);
+  </script>
+</body>
+</html>
