@@ -156,7 +156,7 @@
     /* ── Layout grid ─────────────────────────────────── */
     .grid-main {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 340px;
+      grid-template-columns: 1fr;
       gap: 20px;
       align-items: start;
     }
@@ -371,6 +371,211 @@
     .confidence-bar .fill { height: 100%; border-radius: 999px; }
     .confidence-bar .num { width: 30px; text-align: right; font-size: 11px; }
 
+    /* ── Deployment details (expandable row) ────────── */
+    tr.deploy-row td { border-bottom: none; padding: 0; }
+    .deploy-wrap {
+      overflow: hidden;
+      transition: max-height 0.25s ease;
+      max-height: 0;
+    }
+    tr.deploy-row.open .deploy-wrap { max-height: 600px; }
+    .deploy-detail {
+      margin: 0 18px 12px;
+      padding: 14px 16px;
+      background: var(--surface-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+    }
+    .deploy-detail .deploy-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 10px 20px;
+      margin-bottom: 12px;
+    }
+    .deploy-detail .deploy-field .dlabel {
+      font-size: 11px;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .deploy-detail .deploy-field .dval {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text);
+      margin-top: 2px;
+      word-break: break-all;
+    }
+    .deploy-cmd-wrap {
+      position: relative;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 12px 14px;
+      padding-right: 90px;
+    }
+    .deploy-cmd-wrap pre {
+      margin: 0;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.6;
+      white-space: pre-wrap;
+      word-break: break-all;
+      color: var(--text);
+    }
+    .deploy-cmd-wrap .copy-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      font-family: var(--sans);
+      font-size: 12px;
+      color: var(--text);
+      background: var(--surface-elev);
+      border: 1px solid var(--border-strong);
+      border-radius: 5px;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: border-color 0.15s, color 0.15s;
+    }
+    .deploy-cmd-wrap .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .deploy-cmd-wrap .copy-btn.copied { color: var(--good); border-color: var(--good); }
+
+    tr.rec-data-row { cursor: pointer; }
+    tr.rec-data-row:hover td { background: var(--surface-elev); }
+    tr.rec-data-row td:first-child::before {
+      content: "▶";
+      display: inline-block;
+      font-size: 9px;
+      margin-right: 6px;
+      transition: transform 0.2s;
+      color: var(--text-soft);
+    }
+    tr.rec-data-row.expanded td:first-child::before { transform: rotate(90deg); }
+
+    /* ── Methodology panel ─────────────────────────────── */
+    .method-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-soft);
+      cursor: pointer;
+      border: none;
+      background: none;
+      padding: 0;
+      font-family: var(--sans);
+    }
+    .method-toggle:hover { color: var(--text); }
+    .method-toggle .arrow {
+      display: inline-block;
+      transition: transform 0.2s;
+      font-size: 10px;
+    }
+    .method-toggle.open .arrow { transform: rotate(90deg); }
+
+    .method-panel {
+      overflow: hidden;
+      max-height: 0;
+      transition: max-height 0.35s ease;
+    }
+    .method-panel.open { max-height: 3000px; }
+
+    .method-content {
+      padding: 20px 22px 24px;
+      font-size: 13px;
+      line-height: 1.7;
+      color: var(--text-muted);
+    }
+    .method-content h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--text);
+      margin: 0 0 6px;
+      letter-spacing: 0.01em;
+    }
+    .method-content h3:not(:first-child) { margin-top: 20px; }
+    .method-content p { margin: 0 0 10px; }
+
+    .pipeline-steps {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+      gap: 12px;
+      margin: 14px 0 18px;
+    }
+    .pipe-step {
+      background: var(--surface-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+      position: relative;
+    }
+    .pipe-step .step-num {
+      position: absolute;
+      top: -8px;
+      left: 14px;
+      font-size: 10px;
+      font-weight: 700;
+      background: var(--accent);
+      color: #fff;
+      padding: 1px 7px;
+      border-radius: 999px;
+      letter-spacing: 0.05em;
+    }
+    .pipe-step .step-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--text);
+      margin-bottom: 4px;
+      margin-top: 4px;
+    }
+    .pipe-step .step-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .why-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+      margin: 14px 0;
+    }
+    .why-card {
+      background: var(--surface-elev);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .why-card .why-title {
+      font-weight: 600;
+      font-size: 13px;
+      color: var(--accent);
+      margin-bottom: 4px;
+    }
+    .why-card .why-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .metrics-list {
+      list-style: none;
+      padding: 0;
+      margin: 8px 0 0;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 6px;
+    }
+    .metrics-list li {
+      font-size: 12px;
+      color: var(--text-muted);
+      padding: 4px 0;
+    }
+    .metrics-list li strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+
     @media (max-width: 1080px) {
       .kpis { grid-template-columns: repeat(2, 1fr); }
       .grid-main { grid-template-columns: 1fr; }
@@ -391,6 +596,120 @@
         <button class="btn" id="refresh" type="button">Refresh</button>
       </div>
     </header>
+
+    <div class="panel" style="margin-bottom:24px" id="methodology">
+      <div class="panel-head">
+        <h2>Benchmarking methodology</h2>
+        <button class="method-toggle" id="method-toggle" type="button">
+          <span class="arrow">▶</span> <span id="method-toggle-text">Show details</span>
+        </button>
+      </div>
+      <div class="method-panel" id="method-body">
+        <div class="method-content">
+
+          <h3>How models are benchmarked</h3>
+          <p>Every model goes through a rigorous, multi-stage evaluation pipeline that tests real-world production readiness — not just synthetic scores. The pipeline runs autonomously on dedicated GPU hardware via SSH, ensuring consistent and reproducible results.</p>
+
+          <div class="pipeline-steps">
+            <div class="pipe-step">
+              <span class="step-num">1</span>
+              <div class="step-title">Model discovery &amp; card parsing</div>
+              <div class="step-desc">The model's HuggingFace card is fetched and parsed to extract architecture, parameter count, context window, quantization options, supported tasks, and tool-calling capabilities. This metadata drives all downstream configuration decisions.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">2</span>
+              <div class="step-title">GPU deployment via vLLM</div>
+              <div class="step-desc">The model is deployed on a real GPU VM using vLLM inside a Docker container. Tensor parallelism, context length, and quantization are auto-configured based on the model card and hardware profile. The exact <code>docker run</code> command is recorded for reproducibility.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">3</span>
+              <div class="step-title">Stage 1 — Performance benchmarks</div>
+              <div class="step-desc">The model is stress-tested at multiple concurrency levels (1, 4, 16 concurrent requests). Key metrics are measured: <strong>Inter-Token Latency (ITL)</strong>, <strong>Time To First Token (TTFT)</strong>, <strong>throughput (tokens/sec)</strong>, and <strong>P99 latency</strong>. Results are compared against size-tiered thresholds.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">4</span>
+              <div class="step-title">Quality gate</div>
+              <div class="step-desc">Models must pass performance thresholds before advancing: ITL p50 must be under size-based limits (20ms for ≤14B, 40ms for ≤40B, 60ms for ≤80B), throughput above 10 tok/s, TTFT under 5s, and context window ≥128K tokens. Models that fail are rejected with specific reasons.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">5</span>
+              <div class="step-title">Stage 2 — Kibana eval suites</div>
+              <div class="step-desc">Models that pass the quality gate are tested against Kibana's own evaluation suites. The Kibana repo is cloned, bootstrapped, and the model is evaluated on real product tasks — the same tests Elastic uses internally to validate LLM integrations.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">6</span>
+              <div class="step-title">Stage 3 — LLM reasoning analysis</div>
+              <div class="step-desc">An expert LLM (e.g., Claude) analyzes the full benchmark run: performance traces, eval results, deployment config, and failure modes. It produces actionable optimization suggestions (vLLM flags, quantization, hardware) that feed back into the next benchmark run.</div>
+            </div>
+            <div class="pipe-step">
+              <span class="step-num">7</span>
+              <div class="step-title">Verdict &amp; recommendation report</div>
+              <div class="step-desc">All evidence is synthesized into a final verdict: <strong>Support</strong> (production-ready), <strong>Investigate</strong> (potential with caveats), or <strong>Reject</strong> (does not meet requirements). Confidence is computed from the depth of evidence gathered across all stages.</div>
+            </div>
+          </div>
+
+          <h3>What metrics are measured</h3>
+          <ul class="metrics-list">
+            <li><strong>ITL (Inter-Token Latency)</strong> — time between successive tokens; measures streaming responsiveness</li>
+            <li><strong>TTFT (Time To First Token)</strong> — time from request to first token; measures perceived startup speed</li>
+            <li><strong>Throughput (tok/s)</strong> — total tokens generated per second; measures raw generation capacity</li>
+            <li><strong>P99 latency</strong> — 99th percentile end-to-end latency; measures worst-case user experience</li>
+            <li><strong>Tool-calling success rate</strong> — correctness of structured tool calls in auto and required modes</li>
+            <li><strong>Eval suite scores</strong> — pass rate on Kibana's product-level evaluation suites</li>
+            <li><strong>GPU VRAM utilization</strong> — memory footprint on the deployed hardware</li>
+          </ul>
+
+          <h3>Why this is the right way to benchmark</h3>
+          <div class="why-grid">
+            <div class="why-card">
+              <div class="why-title">Real hardware, not simulations</div>
+              <div class="why-desc">Models run on the same GPU VMs customers use. No synthetic estimates or paper benchmarks — actual Docker containers with measured GPU utilization, real network latency, and production-like memory pressure.</div>
+            </div>
+            <div class="why-card">
+              <div class="why-title">Multi-concurrency stress testing</div>
+              <div class="why-desc">Testing at concurrency 1/4/16 reveals how models degrade under load — a model fast at concurrency 1 may collapse at 16. Single-user benchmarks hide this critical production failure mode.</div>
+            </div>
+            <div class="why-card">
+              <div class="why-title">Product-level evaluation, not just metrics</div>
+              <div class="why-desc">Stage 2 uses Kibana's actual eval suites. This tests whether the model works for the product, not just whether it generates fast tokens. A model with great ITL but poor tool-calling is caught here.</div>
+            </div>
+            <div class="why-card">
+              <div class="why-title">Size-tiered thresholds</div>
+              <div class="why-desc">A 7B model is judged differently from a 70B model. ITL thresholds scale with parameter count because larger models are inherently slower but bring greater capability. Flat thresholds would unfairly reject capable large models.</div>
+            </div>
+            <div class="why-card">
+              <div class="why-title">Closed-loop optimization</div>
+              <div class="why-desc">Stage 3's reasoning feedback flows back into the next benchmark run. If the LLM suggests <code>--gpu-memory-utilization 0.95</code> or <code>--max-num-seqs 8</code>, the next deployment applies those flags automatically. Models get a fair second chance.</div>
+            </div>
+            <div class="why-card">
+              <div class="why-title">Full reproducibility</div>
+              <div class="why-desc">Every benchmark records the exact Docker command, vLLM version, hardware config, tensor parallel size, and all flags. Any result can be reproduced by a customer with a single copied command.</div>
+            </div>
+          </div>
+
+          <h3>Verdict decision matrix</h3>
+          <p style="margin-bottom:8px">The final recommendation is deterministic, based on which stages passed:</p>
+          <table style="min-width:auto;font-size:12px;margin-bottom:0">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding-left:18px">Stage 1</th>
+                <th style="text-align:left">Stage 2</th>
+                <th style="text-align:left">Evals</th>
+                <th style="text-align:left">Verdict</th>
+                <th style="text-align:left">Confidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr><td style="text-align:left;padding-left:18px"><span class="badge fail">fail</span></td><td style="text-align:left">—</td><td style="text-align:left">—</td><td style="text-align:left"><span class="badge reject">reject</span></td><td style="text-align:left">high</td></tr>
+              <tr><td style="text-align:left;padding-left:18px"><span class="badge pass">pass</span></td><td style="text-align:left">skipped</td><td style="text-align:left">—</td><td style="text-align:left"><span class="badge investigate">investigate</span></td><td style="text-align:left">low</td></tr>
+              <tr><td style="text-align:left;padding-left:18px"><span class="badge pass">pass</span></td><td style="text-align:left"><span class="badge pass">pass</span></td><td style="text-align:left">some fail</td><td style="text-align:left"><span class="badge investigate">investigate</span></td><td style="text-align:left">medium</td></tr>
+              <tr><td style="text-align:left;padding-left:18px"><span class="badge pass">pass</span></td><td style="text-align:left"><span class="badge pass">pass</span></td><td style="text-align:left">all pass</td><td style="text-align:left"><span class="badge support">support</span></td><td style="text-align:left">high</td></tr>
+            </tbody>
+          </table>
+
+        </div>
+      </div>
+    </div>
 
     <section class="kpis" aria-label="Key metrics">
       <div class="kpi">
@@ -416,16 +735,6 @@
     </section>
 
     <div class="grid-main">
-      <div class="panel" id="leaderboard">
-        <div class="panel-head">
-          <h2>Model leaderboard</h2>
-          <span class="caption" id="lb-caption">Source: benchmarker-results</span>
-        </div>
-        <div class="panel-body" id="lb-body">
-          <div class="empty">Loading models…</div>
-        </div>
-      </div>
-
       <div class="panel" id="queue">
         <div class="panel-head">
           <h2>Queue</h2>
@@ -433,6 +742,16 @@
         </div>
         <div class="panel-body" id="queue-body">
           <div class="empty">Loading queue…</div>
+        </div>
+      </div>
+
+      <div class="panel" id="leaderboard">
+        <div class="panel-head">
+          <h2>Model leaderboard</h2>
+          <span class="caption" id="lb-caption">Source: benchmarker-results</span>
+        </div>
+        <div class="panel-body" id="lb-body">
+          <div class="empty">Loading models…</div>
         </div>
       </div>
     </div>
@@ -884,12 +1203,74 @@
     }
 
     function loadRecommendations(verdict) {
-      var url = "/api/recommendations?size=50";
+      var url = "/api/recommendations?size=50&deployment=true";
       if (verdict) url += "&verdict=" + encodeURIComponent(verdict);
       return getJSON(url).then(function (d) {
         renderRecommendations((d && d.reports) || []);
       }).catch(function () {
         $("rec-body").innerHTML = '<div class="empty">Could not load recommendations.</div>';
+      });
+    }
+
+    function buildDeployCommand(dep) {
+      if (!dep) return null;
+      if (dep.dockerCommand) return dep.dockerCommand;
+      return null;
+    }
+
+    function renderDeployDetail(dep, vllmConfig) {
+      if (!dep) return '<div class="deploy-detail"><span class="muted">No deployment data available. Run a benchmark to capture deployment details.</span></div>';
+
+      var hw = dep.hardwareConfig || {};
+      var html = '<div class="deploy-detail">';
+      html += '<div class="deploy-grid">';
+
+      var fields = [
+        { label: "vLLM Version", val: dep.vllmVersion },
+        { label: "GPU", val: hw.gpuType ? hw.gpuType + " × " + (hw.gpuCount || 1) : null },
+        { label: "TP Size", val: dep.tensorParallelSize },
+        { label: "RAM", val: hw.ramGb ? hw.ramGb + " GB" : null },
+        { label: "Machine", val: hw.machineType },
+        { label: "Quantization", val: vllmConfig ? vllmConfig.quantization : null },
+        { label: "Context Length", val: vllmConfig && vllmConfig.contextLength ? fmtCtx(vllmConfig.contextLength) : null },
+        { label: "Tool Call Parser", val: vllmConfig ? vllmConfig.toolCallParser : null },
+      ];
+
+      fields.forEach(function (f) {
+        if (f.val == null) return;
+        html += '<div class="deploy-field"><div class="dlabel">' + esc(f.label) + '</div><div class="dval">' + esc(f.val) + '</div></div>';
+      });
+      html += '</div>';
+
+      var cmd = buildDeployCommand(dep);
+      if (cmd) {
+        html += '<div class="deploy-cmd-wrap"><pre>' + esc(cmd) + '</pre>' +
+          '<button class="copy-btn" type="button" onclick="copyCommand(this)">Copy command</button></div>';
+      }
+
+      if (vllmConfig && vllmConfig.flags && vllmConfig.flags.length) {
+        html += '<div style="margin-top:10px"><span class="dlabel" style="font-size:11px;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.04em">Extra flags</span>' +
+          '<div class="rec-tags" style="margin-top:4px;justify-content:flex-start">';
+        vllmConfig.flags.forEach(function (f) {
+          html += '<span class="tag">' + esc(f) + '</span>';
+        });
+        html += '</div></div>';
+      }
+
+      html += '</div>';
+      return html;
+    }
+
+    function copyCommand(btn) {
+      var pre = btn.parentElement.querySelector("pre");
+      if (!pre) return;
+      navigator.clipboard.writeText(pre.textContent).then(function () {
+        btn.textContent = "Copied!";
+        btn.classList.add("copied");
+        setTimeout(function () {
+          btn.textContent = "Copy command";
+          btn.classList.remove("copied");
+        }, 2000);
       });
     }
 
@@ -914,7 +1295,7 @@
         '<th>Evaluated</th>' +
         '</tr></thead><tbody>';
 
-      reports.forEach(function (r) {
+      reports.forEach(function (r, idx) {
         var v = r.verdict || "unknown";
         var conf = r.confidence || null;
         var confNum = conf ? confidenceToNum(conf) : 0;
@@ -931,7 +1312,7 @@
         var evalCount = (r.passingEvals || []).length;
         var issueCount = (r.blockingIssues || []).length;
 
-        html += "<tr>" +
+        html += '<tr class="rec-data-row" data-idx="' + idx + '">' +
           '<td class="model"><div class="name">' + esc(r.modelName || r.modelId) + "</div>" +
             (r.modelName && r.modelName !== r.modelId ? '<div class="id">' + esc(r.modelId) + "</div>" : "") + "</td>" +
           '<td><span class="badge ' + esc(v) + '">' + esc(v) + "</span></td>" +
@@ -947,13 +1328,39 @@
             : '<span class="muted">0</span>') + "</td>" +
           '<td class="muted">' + fmtAgo(r.evaluatedAt) + "</td>" +
           "</tr>";
+
+        html += '<tr class="deploy-row" data-idx="' + idx + '">' +
+          '<td colspan="9"><div class="deploy-wrap">' +
+          renderDeployDetail(r.deployment || null, r.vllmConfigUsed || null) +
+          '</div></td></tr>';
       });
       html += "</tbody></table></div>";
       body.innerHTML = html;
+
+      body.querySelectorAll("tr.rec-data-row").forEach(function (tr) {
+        tr.addEventListener("click", function () {
+          var idx = tr.getAttribute("data-idx");
+          var detailRow = body.querySelector('tr.deploy-row[data-idx="' + idx + '"]');
+          var isOpen = tr.classList.contains("expanded");
+          tr.classList.toggle("expanded", !isOpen);
+          if (detailRow) detailRow.classList.toggle("open", !isOpen);
+        });
+      });
     }
 
     $("rec-filter").addEventListener("change", function () {
       loadRecommendations(this.value);
+    });
+
+    // ── Methodology toggle ──────────────────────────────
+    $("method-toggle").addEventListener("click", function () {
+      var panel = $("method-body");
+      var btn = $("method-toggle");
+      var txt = $("method-toggle-text");
+      var isOpen = panel.classList.contains("open");
+      panel.classList.toggle("open", !isOpen);
+      btn.classList.toggle("open", !isOpen);
+      txt.textContent = isOpen ? "Show details" : "Hide details";
     });
 
     // ── Boot ───────────────────────────────────────────

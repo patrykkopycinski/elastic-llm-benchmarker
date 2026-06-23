@@ -73,7 +73,7 @@ const DEFAULT_MIN_CONTEXT_WINDOW = 128_000;
 const DEFAULT_TARGET_HARDWARE: VMHardwareProfile = {
   gpuType: 'nvidia-a100-80gb',
   gpuCount: 2,
-  ramGb: 680,
+  ramGb: 340,
   cpuCores: 24,
   diskGb: 1000,
   machineType: 'a2-ultragpu-2g',

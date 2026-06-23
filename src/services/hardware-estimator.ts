@@ -68,7 +68,7 @@ const GPU_VRAM_GB: Record<string, number> = {
 };
 
 const DEFAULT_GPU_VRAM_GB = 24;
-const GPU_MEMORY_UTILIZATION = 0.9;
+const GPU_MEMORY_UTILIZATION = 0.95;
 const KV_SEQ_LEN = 8192;
 const ACTIVATION_SEQ_LEN = 4096;
 const BATCH_SIZE = 1;

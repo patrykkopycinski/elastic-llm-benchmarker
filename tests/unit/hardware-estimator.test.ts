@@ -186,7 +186,7 @@ describe('HardwareEstimator', () => {
 
       expect(result.fits).toBe(true);
       expect(result.estimatedGb).toBe(18);
-      expect(result.availableGb).toBe(21.6); // 24 * 0.9
+      expect(result.availableGb).toBeCloseTo(22.8, 1); // 24 * 0.95
       expect(result.reason).toContain('fits within available');
     });
 
@@ -210,7 +210,7 @@ describe('HardwareEstimator', () => {
 
       expect(result.fits).toBe(false);
       expect(result.estimatedGb).toBe(32.81);
-      expect(result.availableGb).toBe(21.6);
+      expect(result.availableGb).toBeCloseTo(22.8, 1);
       expect(result.reason).toContain('exceeds available');
     });
 
@@ -231,7 +231,7 @@ describe('HardwareEstimator', () => {
       };
 
       const result = estimator.dryRunCheck(config, profile);
-      expect(result.availableGb).toBe(21.6); // 24 * 0.9
+      expect(result.availableGb).toBeCloseTo(22.8, 1); // 24 * 0.95
     });
   });
 

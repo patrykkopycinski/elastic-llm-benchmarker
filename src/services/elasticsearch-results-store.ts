@@ -12,6 +12,7 @@ import { createLogger } from '../utils/logger.js';
 import type { EvalSuiteResult } from './eval-suite-runner.js';
 import type { Stage2Result, Stage3Result, Stage3Suggestion } from '../scheduler/pipeline-state.js';
 import type { RecommendationReport } from '../types/recommendation.js';
+import type { CIEvalResult } from '../types/ci-eval.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
@@ -986,6 +987,80 @@ export class ElasticsearchResultsStore {
       evaluatedBy: String(src.evaluated_by ?? ''),
       source: String(src.source ?? 'manual') as 'discovery' | 'manual',
     };
+  }
+
+  async saveCIEvalResult(result: CIEvalResult): Promise<void> {
+    try {
+      await this.esClient.index({
+        index: INDEX_NAMES.BENCHMARKER_CI_EVALS,
+        body: {
+          '@timestamp': new Date().toISOString(),
+          run_id: result.runId,
+          model_id: result.modelId,
+          buildkite_build_url: result.buildkiteBuildUrl,
+          buildkite_build_number: result.buildkiteBuildNumber,
+          pipeline_slug: result.pipelineSlug,
+          status: result.status,
+          eval_suites: result.evalSuites,
+          scores: result.scores ?? null,
+          artifacts: result.artifacts ?? null,
+          started_at: result.startedAt,
+          completed_at: result.completedAt,
+          retry_count: result.retryCount,
+          connector_json: result.connectorJson,
+        },
+      });
+      this.logger.info('CI eval result saved', {
+        modelId: result.modelId,
+        buildNumber: result.buildkiteBuildNumber,
+        status: result.status,
+      });
+    } catch (err) {
+      this.logger.error('Failed to save CI eval result', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async getCIEvalResults(
+    modelId: string,
+    options?: { limit?: number },
+  ): Promise<CIEvalResult[]> {
+    try {
+      const response = await this.esClient.search({
+        index: INDEX_NAMES.BENCHMARKER_CI_EVALS,
+        body: {
+          query: { term: { model_id: modelId } },
+          sort: [{ '@timestamp': { order: 'desc' } }],
+          size: options?.limit ?? 10,
+        },
+      });
+
+      return (
+        response.hits.hits as Array<{
+          _source: Record<string, unknown>;
+        }>
+      ).map((hit) => ({
+        runId: hit._source['run_id'] as string,
+        modelId: hit._source['model_id'] as string,
+        buildkiteBuildUrl: hit._source['buildkite_build_url'] as string,
+        buildkiteBuildNumber: hit._source['buildkite_build_number'] as number,
+        pipelineSlug: hit._source['pipeline_slug'] as string,
+        status: hit._source['status'] as CIEvalResult['status'],
+        evalSuites: hit._source['eval_suites'] as string[],
+        scores: (hit._source['scores'] as Record<string, number>) ?? undefined,
+        artifacts: (hit._source['artifacts'] as Record<string, string>) ?? undefined,
+        startedAt: hit._source['started_at'] as string,
+        completedAt: hit._source['completed_at'] as string,
+        retryCount: hit._source['retry_count'] as number,
+        connectorJson: hit._source['connector_json'] as string,
+      }));
+    } catch (err) {
+      this.logger.error('Failed to query CI eval results', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
   }
 
   async close(): Promise<void> {

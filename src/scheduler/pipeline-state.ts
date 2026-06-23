@@ -54,6 +54,10 @@ export interface Stage1Result {
   error?: string;
   startedAt: string;
   completedAt: string;
+  /** API endpoint URL of the deployed model (populated on success) */
+  endpointUrl?: string;
+  /** Container/deployment name for teardown (populated on success) */
+  deploymentName?: string;
 }
 
 export interface Stage2Result {

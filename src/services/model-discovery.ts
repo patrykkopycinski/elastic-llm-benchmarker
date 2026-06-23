@@ -279,8 +279,8 @@ export class ModelDiscoveryService {
         'nvidia-v100': 32,
       };
       const perGpu = gpuVramGb[hardwareProfile.gpuType] ?? 24;
-      // Reserve 10 % head-room for vLLM overhead / KV-cache bloom
-      this.targetVramGb = perGpu * hardwareProfile.gpuCount * 0.9;
+      // Reserve 5 % head-room for vLLM overhead / KV-cache bloom
+      this.targetVramGb = perGpu * hardwareProfile.gpuCount * 0.95;
     } else {
       this.targetVramGb = Infinity;
     }

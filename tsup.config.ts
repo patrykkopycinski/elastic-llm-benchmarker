@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts', 'src/cli.ts', 'src/api/queue-server.ts', 'src/scripts/import-mock-benchmarks.ts', 'src/scripts/run-queue-benchmarks.ts'],
+  entry: ['src/index.ts', 'src/cli.ts', 'src/api/queue-server.ts', 'src/scripts/run-queue-benchmarks.ts'],
   format: ['esm'],
   dts: { entry: ['src/index.ts'] },
   sourcemap: true,

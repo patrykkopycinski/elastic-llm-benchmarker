@@ -51,6 +51,13 @@ import { runEnqueue } from './cli/enqueue-handler.js';
 import { SystemHealthChecker } from './services/system-health-check.js';
 import { SlackNotifier } from './services/slack-notifier.js';
 import { LocalConnector } from './services/local-connector.js';
+import { DiscoveryScheduler } from './services/discovery-scheduler.js';
+import { ModelDiscoveryService } from './services/model-discovery.js';
+import { HardwareEstimator } from './services/hardware-estimator.js';
+import { HardwareProfileRegistry } from './services/hardware-profiles.js';
+import { ModelSmokeTestImpl } from './services/model-smoke-test.js';
+import { BuildkiteEvalTriggerImpl } from './services/buildkite-eval-trigger.js';
+import type { CIEvalsOptions } from './scheduler/scheduler.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -469,8 +476,8 @@ program
   )
   .option('--model <id>', 'Model ID (e.g. meta-llama/Llama-3.3-70B-Instruct)', 'meta-llama/Llama-3.3-70B-Instruct')
   .option('--port <n>', 'Host port to expose (default: 8000)', '8000')
-  .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:v0.15.1')
-  .option('--tensor-parallel <n>', 'Tensor parallel size (GPUs)', '1')
+  .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:latest')
+  .option('--tensor-parallel <n>', 'Tensor parallel size (GPUs)', '2')
   .action((opts) => {
     const modelId = opts['model'] as string;
     const port = parseInt(opts['port'] as string, 10);
@@ -499,8 +506,8 @@ program
   )
   .option('--model <id>', 'Model ID', 'meta-llama/Llama-3.3-70B-Instruct')
   .option('--port <n>', 'Host port', '8000')
-  .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:v0.15.1')
-  .option('--tensor-parallel <n>', 'Tensor parallel size', '1')
+  .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:latest')
+  .option('--tensor-parallel <n>', 'Tensor parallel size', '2')
   .option('--wait-ms <n>', 'Max ms to wait for API health before running benchmark', '600000')
   .option('--no-stop', 'Do not stop the container after the benchmark')
   .action(async (opts) => {
@@ -1152,6 +1159,9 @@ if (_binaryName === 'benchmarker-queue') {
     .option('--stage2', 'Enable Stage 2 eval pipeline', false)
     .option('--stage3', 'Enable Stage 3 reasoning pipeline', true)
     .option('--queue-model <modelId>', 'Enqueue a single model and exit (does not start scheduler)')
+    .option('--discovery', 'Enable HuggingFace model discovery scheduler', false)
+    .option('--ci-evals', 'Enable CI eval pipeline (smoke test → Buildkite on-demand eval)', false)
+    .option('--full-eval', 'Also trigger weekly eval after on-demand passes (requires --ci-evals)', false)
     .option('--connector <type>', 'Output connector: "elasticsearch" (default) or "local"', 'elasticsearch')
     .option('--output-dir <path>', 'Output directory for local connector', './benchmark-output')
     .action(async (opts) => {
@@ -1159,6 +1169,9 @@ if (_binaryName === 'benchmarker-queue') {
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
       const enableStage2 = opts['stage2'] as boolean;
       const enableStage3 = opts['stage3'] as boolean;
+      const enableDiscovery = opts['discovery'] as boolean;
+      const enableCIEvals = opts['ciEvals'] as boolean;
+      const enableFullEval = opts['fullEval'] as boolean;
       const queueModel = opts['queueModel'] as string | undefined;
       const connectorType = opts['connector'] as string;
       const outputDir = opts['outputDir'] as string;
@@ -1240,7 +1253,14 @@ if (_binaryName === 'benchmarker-queue') {
       // Create worker dependencies
       const sshPool = new SSHClientPool({}, config.logLevel ?? 'info');
       const resultsStore = new ElasticsearchResultsStore(esClient);
-      const vllmEngine = new VllmEngine(sshPool, config.logLevel ?? 'info');
+      const vllmEngine = new VllmEngine(sshPool, config.logLevel ?? 'info', {
+        deployment: {
+          dockerImage: config.engine?.dockerImage,
+          gpuMemoryUtilization: config.engine?.vllmGpuMemoryUtilization,
+          maxModelLen: config.engine?.maxModelLen,
+          huggingfaceToken: config.huggingfaceToken,
+        },
+      });
 
       // Optionally create Stage 2 worker
       const stage2Worker =
@@ -1298,6 +1318,60 @@ if (_binaryName === 'benchmarker-queue') {
         logger.info('Local connector initialized', { outputDir });
       }
 
+      // Start HuggingFace model discovery scheduler (auto-discovers and queues models)
+      let discoveryScheduler: DiscoveryScheduler | undefined;
+      if (enableDiscovery || config.discoveryScheduler.enabled) {
+        const profileRegistry = new HardwareProfileRegistry();
+        const existingResults = await resultsStore.query({ limit: 10000 });
+        const evaluatedIds = [...new Set(existingResults.map((r) => r.modelId))];
+
+        const discoveryService = new ModelDiscoveryService(
+          config.huggingfaceToken,
+          evaluatedIds,
+          config.logLevel,
+          config.vmHardwareProfile,
+        );
+
+        discoveryScheduler = new DiscoveryScheduler({
+          discoveryService,
+          hardwareEstimator: new HardwareEstimator(),
+          profileRegistry,
+          queueService,
+          config: config.discoveryScheduler,
+          logger,
+        });
+        discoveryScheduler.start();
+        logger.info('HuggingFace discovery scheduler started (interval: %d min)', config.discoveryScheduler.intervalMinutes);
+      } else {
+        logger.info('HuggingFace discovery scheduler disabled (set discoveryScheduler.enabled=true to enable)');
+      }
+
+      // Optionally create CI evals pipeline
+      let ciEvalsOptions: CIEvalsOptions | undefined;
+      if ((enableCIEvals || config.buildkite.enabled) && config.buildkite.apiToken) {
+        const smokeTest = new ModelSmokeTestImpl(config.smokeTest, config.logLevel);
+        const buildkiteTrigger = new BuildkiteEvalTriggerImpl({
+          apiToken: config.buildkite.apiToken,
+          orgSlug: config.buildkite.orgSlug,
+          onDemandPipelineSlug: config.buildkite.onDemandPipelineSlug,
+          weeklyPipelineSlug: config.buildkite.weeklyPipelineSlug,
+          pollIntervalMs: config.buildkite.pollIntervalMs,
+          pollTimeoutMs: config.buildkite.pollTimeoutMs,
+          retryOnFailure: config.buildkite.retryOnFailure,
+          defaultEvalSuites: config.buildkite.defaultEvalSuites,
+          kibanaBranch: config.buildkite.kibanaBranch,
+        }, config.logLevel);
+        ciEvalsOptions = {
+          enabled: true,
+          fullEval: enableFullEval || config.buildkite.triggerFullEval,
+          smokeTest,
+          buildkiteTrigger,
+        };
+        logger.info('CI eval pipeline enabled (on-demand + %s)', ciEvalsOptions.fullEval ? 'weekly' : 'no weekly');
+      } else if (enableCIEvals) {
+        logger.warn('CI evals requested but buildkite.apiToken is missing — skipping');
+      }
+
       // Create scheduler
       const scheduler = new Scheduler(
         queueService,
@@ -1314,6 +1388,8 @@ if (_binaryName === 'benchmarker-queue') {
         stage3Worker,
         config,
         slackNotifier,
+        vllmEngine,
+        ciEvalsOptions,
       );
 
       logger.info('Scheduler starting. Polling every %d ms...', pollInterval);
@@ -1322,6 +1398,7 @@ if (_binaryName === 'benchmarker-queue') {
       // Graceful shutdown
       const shutdown = async (signal: string) => {
         logger.info('Received %s. Stopping scheduler...', signal);
+        discoveryScheduler?.stop();
         await scheduler.stop();
         lockfile.release();
         await resultsStore.close();

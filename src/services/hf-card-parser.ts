@@ -2,7 +2,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 const ONE_HOUR_MS = 3_600_000;
-const MAX_CONTEXT_WINDOW = 128_000;
+const MAX_CONTEXT_WINDOW = 1_048_576;
 
 export interface HFCardParserOptions {
   modelId: string;

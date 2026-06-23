@@ -28,7 +28,7 @@
     "test:coverage": "vitest run --coverage",
     "setup": "bash scripts/setup-local.sh && bash scripts/setup-ilm.sh",
     "clean": "rm -rf dist",
-    "import-mock": "tsx src/scripts/import-mock-benchmarks.ts",
+
     "prepublishOnly": "npm run build",
     "infra:up": "docker compose --env-file .env.docker up -d elasticsearch kibana",
     "infra:down": "docker compose --env-file .env.docker down",

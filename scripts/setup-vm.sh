@@ -22,7 +22,7 @@ set -euo pipefail
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.15.1}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:latest}"
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 

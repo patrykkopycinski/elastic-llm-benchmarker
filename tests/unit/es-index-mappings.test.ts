@@ -10,7 +10,7 @@ import {
 describe('es-index-mappings', () => {
   it('exports all expected index names as lowercase hyphenated strings', () => {
     const values = Object.values(INDEX_NAMES);
-    expect(values).toHaveLength(10);
+    expect(values).toHaveLength(11);
     values.forEach((name) => {
       expect(name).toEqual(name.toLowerCase());
       expect(name).toMatch(/^[a-z0-9-]+$/);

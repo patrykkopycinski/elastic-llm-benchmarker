@@ -9,6 +9,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_STAGE2: 'benchmark-stage2',
   BENCHMARKER_REASONING: 'benchmark-reasoning',
   RECOMMENDATION_REPORTS: 'recommendation-reports',
+  BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -378,6 +379,30 @@ export const INDEX_MAPPINGS: Record<
         evaluated_at: { type: 'date' },
         evaluated_by: { type: 'keyword' },
         source: { type: 'keyword' },
+      },
+    },
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 1,
+    },
+  },
+  [INDEX_NAMES.BENCHMARKER_CI_EVALS]: {
+    mappings: {
+      properties: {
+        '@timestamp': { type: 'date' },
+        run_id: { type: 'keyword' },
+        model_id: { type: 'keyword' },
+        buildkite_build_url: { type: 'keyword' },
+        buildkite_build_number: { type: 'integer' },
+        pipeline_slug: { type: 'keyword' },
+        status: { type: 'keyword' },
+        eval_suites: { type: 'keyword' },
+        scores: { type: 'object', enabled: false },
+        artifacts: { type: 'object', enabled: false },
+        started_at: { type: 'date' },
+        completed_at: { type: 'date' },
+        retry_count: { type: 'integer' },
+        connector_json: { type: 'text', index: false },
       },
     },
     settings: {

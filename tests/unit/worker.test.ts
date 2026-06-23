@@ -268,10 +268,9 @@ describe('Stage1WorkerImpl', () => {
       expect(result.status).toBe('success');
       expect(result.modelId).toBe('meta-llama/Llama-3-8B');
 
-      // Queue status transitions
+      // Queue status transitions (Stage 1 no longer calls 'completed' — scheduler does)
       expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'deploying');
       expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'benchmarking');
-      expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'completed');
 
       // Deploy and benchmark called
       expect(vllmEngine.deploy).toHaveBeenCalledTimes(1);
@@ -283,8 +282,12 @@ describe('Stage1WorkerImpl', () => {
       expect(savedResult.modelId).toBe('meta-llama/Llama-3-8B');
       expect(savedResult.passed).toBe(true);
 
-      // Teardown called
-      expect(vllmEngine.stop).toHaveBeenCalledWith(config.ssh, 'vllm-test-model');
+      // Teardown NOT called by Stage 1 — scheduler owns lifecycle
+      expect(vllmEngine.stop).not.toHaveBeenCalled();
+
+      // Stage 1 returns deployment info for scheduler
+      expect(result.endpointUrl).toBe('http://test-vm:8000');
+      expect(result.deploymentName).toBe('vllm-test-model');
     });
   });
 

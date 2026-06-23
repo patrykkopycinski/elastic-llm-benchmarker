@@ -42,7 +42,7 @@ const testSSHConfig: SSHConfig = {
 const testHardwareProfile: VMHardwareProfile = {
   gpuType: 'nvidia-a100-80gb',
   gpuCount: 2,
-  ramGb: 680,
+  ramGb: 340,
   cpuCores: 24,
   diskGb: 1000,
   machineType: 'a2-ultragpu-2g',
@@ -180,11 +180,11 @@ describe('VllmDeploymentService', () => {
       expect(command).toContain('--gpus all');
       expect(command).toContain('--shm-size=16g');
       expect(command).toContain('-p 8000:8000');
-      expect(command).toContain('vllm/vllm-openai:v0.15.1');
+      expect(command).toContain('vllm/vllm-openai:latest');
       expect(command).toContain(`--model ${model.id}`);
       expect(command).toContain('--tensor-parallel-size 2');
       expect(command).toContain('--tool-call-parser llama3_json');
-      expect(command).toContain('--gpu-memory-utilization 0.9');
+      expect(command).toContain('--gpu-memory-utilization 0.95');
       expect(command).toContain('--tool-call-parser llama3_json');
       expect(command).toContain('--enable-auto-tool-choice');
     });
@@ -445,7 +445,7 @@ describe('VllmDeploymentService', () => {
       expect(result.tensorParallelSize).toBe(2);
       expect(result.maxModelLen).toBe(128000);
       expect(result.apiEndpoint).toBe('http://10.0.0.1:8000');
-      expect(result.dockerImage).toBe('vllm/vllm-openai:v0.15.1');
+      expect(result.dockerImage).toBe('vllm/vllm-openai:latest');
       expect(result.dockerCommand).toContain('docker run -d');
       expect(result.dockerCommand).toContain('--tensor-parallel-size 2');
       expect(result.dockerCommand).toContain('--tool-call-parser llama3_json');

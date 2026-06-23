@@ -28,7 +28,7 @@ const BUILTIN_PROFILES: readonly HardwareProfileDefinition[] = [
     hardware: {
       gpuType: 'nvidia-a100-80gb',
       gpuCount: 2,
-      ramGb: 680,
+      ramGb: 340,
       cpuCores: 24,
       diskGb: 1000,
       machineType: 'a2-ultragpu-2g',

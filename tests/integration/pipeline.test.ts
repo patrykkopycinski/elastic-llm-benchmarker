@@ -289,9 +289,6 @@ describe('Pipeline Integration', () => {
 
       // Results stored
       expect(resultsStore.save).toHaveBeenCalledTimes(1);
-
-      // Teardown called
-      expect(vllmEngine.stop).toHaveBeenCalled();
     });
   });
 

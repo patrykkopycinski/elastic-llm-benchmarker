@@ -1,9 +1,10 @@
 {
   "$schema": "../src/types/config.ts",
   "ssh": {
-    "host": "",
+    "host": "your-gpu-vm-host",
     "port": 22,
-    "username": ""
+    "username": "your_ssh_user",
+    "privateKeyPath": "/path/to/your/ssh/key"
   },
   "huggingfaceToken": "",
   "benchmarkThresholds": {
@@ -14,13 +15,18 @@
     "concurrencyLevels": [1, 4, 16],
     "healthCheckTimeoutSeconds": 600
   },
+  "hardwareProfileId": "2xa100-80gb",
   "vmHardwareProfile": {
-    "gpuType": "nvidia-a100-sxm4-80gb",
+    "gpuType": "nvidia-a100-80gb",
     "gpuCount": 2,
     "ramGb": 340,
     "cpuCores": 24,
-    "diskGb": 500,
+    "diskGb": 1000,
     "machineType": "a2-ultragpu-2g"
+  },
+  "engine": {
+    "type": "vllm",
+    "vllmGpuMemoryUtilization": 0.95
   },
   "logLevel": "info",
   "resultsDir": "./results",
@@ -48,5 +54,24 @@
     "enabled": false,
     "connectorNamePrefix": "vllm-",
     "requestTimeoutMs": 30000
+  },
+  "smokeTest": {
+    "healthTimeoutMs": 10000,
+    "inferenceTimeoutMs": 30000,
+    "toolCallingTimeoutMs": 60000,
+    "maxRetries": 2,
+    "depth": "full"
+  },
+  "buildkite": {
+    "enabled": false,
+    "orgSlug": "elastic",
+    "onDemandPipelineSlug": "kibana-evals-on-demand",
+    "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
+    "pollIntervalMs": 30000,
+    "pollTimeoutMs": 3600000,
+    "retryOnFailure": true,
+    "defaultEvalSuites": ["security_ai_assistant"],
+    "kibanaBranch": "main",
+    "triggerFullEval": false
   }
 }

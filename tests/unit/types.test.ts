@@ -30,12 +30,12 @@ describe('Config schemas', () => {
 
   it('should validate VM hardware profile with defaults', () => {
     const result = vmHardwareProfileSchema.parse({});
-    expect(result.gpuType).toBe('nvidia-l4');
-    expect(result.gpuCount).toBe(1);
-    expect(result.ramGb).toBe(64);
-    expect(result.cpuCores).toBe(8);
-    expect(result.diskGb).toBe(200);
-    expect(result.machineType).toBe('g2-standard-8');
+    expect(result.gpuType).toBe('nvidia-a100-80gb');
+    expect(result.gpuCount).toBe(2);
+    expect(result.ramGb).toBe(340);
+    expect(result.cpuCores).toBe(24);
+    expect(result.diskGb).toBe(1000);
+    expect(result.machineType).toBe('a2-ultragpu-2g');
   });
 
   it('should validate VM hardware profile with custom values', () => {
@@ -69,7 +69,7 @@ describe('Config schemas', () => {
     expect(config.ssh.host).toBe('10.0.0.1');
     expect(config.logLevel).toBe('info');
     expect(config.resultsDir).toBe('./results');
-    expect(config.vmHardwareProfile.gpuType).toBe('nvidia-l4');
+    expect(config.vmHardwareProfile.gpuType).toBe('nvidia-a100-80gb');
   });
 
   it('should accept SSH with privateKeyPath instead of password', () => {

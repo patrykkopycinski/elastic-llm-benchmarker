@@ -12,7 +12,7 @@ export const GB_PER_GPU_FOR_TENSOR_PARALLEL = 35;
 /**
  * Default context window when HF API unavailable
  */
-export const DEFAULT_CONTEXT_WINDOW = 8192;
+export const DEFAULT_CONTEXT_WINDOW = 32768;
 
 /**
  * Reasoning capability detection keywords

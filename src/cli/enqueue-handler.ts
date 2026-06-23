@@ -36,7 +36,7 @@ export interface EnqueueResult {
  */
 export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult> {
   const { modelId, config, esClient } = options;
-  const hardwareProfileId = options.hardwareProfileId ?? config.hardwareProfileId ?? '1xl4';
+  const hardwareProfileId = options.hardwareProfileId ?? config.hardwareProfileId ?? '2xa100-80gb';
   const priority = options.priority ?? 5;
   const force = options.force ?? false;
   const reason = options.reason;

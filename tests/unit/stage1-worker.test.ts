@@ -356,10 +356,6 @@ describe('Stage1WorkerImpl', () => {
         'queue-001',
         'benchmarking',
       );
-      expect(deps.queueService.updateStatus).toHaveBeenCalledWith(
-        'queue-001',
-        'completed',
-      );
     });
 
     it('should save benchmark results to the store', async () => {
@@ -367,9 +363,15 @@ describe('Stage1WorkerImpl', () => {
       expect(deps.resultsStore.save).toHaveBeenCalledTimes(1);
     });
 
-    it('should teardown deployment after benchmarks', async () => {
+    it('should NOT teardown deployment — scheduler owns teardown', async () => {
       await worker.execute(createPipelineRun());
-      expect(deps.vllmEngine.stop).toHaveBeenCalledTimes(1);
+      expect(deps.vllmEngine.stop).not.toHaveBeenCalled();
+    });
+
+    it('should return endpointUrl and deploymentName for scheduler teardown', async () => {
+      const result = await worker.execute(createPipelineRun());
+      expect(result.endpointUrl).toBe('http://localhost:8000');
+      expect(result.deploymentName).toBe('vllm-meta-llama-Llama-3-8B');
     });
   });
 

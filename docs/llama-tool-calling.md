@@ -11,7 +11,7 @@ vLLM requires a **tool-calling chat template** for Llama models when using `--to
 
 Our deployment was only passing `--tool-call-parser llama3_json` and `--enable-auto-tool-choice`, and **not** `--chat-template`, so the server could be using the default chat template, which is not the tool-use one. That likely led to empty or wrong `tool_calls` in the API response and our benchmark seeing 0 tool calls.
 
-**Fix:** The deployment now adds `--chat-template examples/tool_chat_template_llama3.1_json.jinja` for Llama when tool calling is enabled (3.1 template works for 3.2/3.3 and is present in vLLM v0.15.1 images). You can override via config `chatTemplate` if your image has a 3.3-specific template.
+**Fix:** The deployment now adds `--chat-template examples/tool_chat_template_llama3.1_json.jinja` for Llama when tool calling is enabled (3.1 template works for 3.2/3.3 and is present in vLLM images). You can override via config `chatTemplate` if your image has a 3.3-specific template.
 
 ---
 

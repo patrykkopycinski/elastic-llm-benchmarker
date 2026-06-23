@@ -425,11 +425,54 @@ export function createQueueServer(config: QueueServerConfig & {
       const modelId = typeof req.query.model === 'string' ? req.query.model : undefined;
       const verdict = typeof req.query.verdict === 'string' ? req.query.verdict : undefined;
       const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 200);
+      const withDeployment = req.query.deployment !== 'false';
 
       const reports = await resultsStore.queryRecommendations({ modelId, verdict, size });
-      res.json({ reports, total: reports.length });
+
+      if (!withDeployment) {
+        res.json({ reports, total: reports.length });
+        return;
+      }
+
+      const enriched = await Promise.all(
+        reports.map(async (r) => {
+          const results = await resultsStore.query({ modelId: r.modelId, limit: 1 });
+          const latest = results[0];
+          if (!latest) return r;
+          return {
+            ...r,
+            deployment: {
+              dockerCommand: latest.dockerCommand,
+              vllmVersion: latest.vllmVersion,
+              tensorParallelSize: latest.tensorParallelSize,
+              hardwareConfig: latest.hardwareConfig,
+            },
+          };
+        }),
+      );
+      res.json({ reports: enriched, total: enriched.length });
     } catch (err) {
       logger.error('GET /api/recommendations failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/results/:modelId/latest  → latest benchmark result with full deployment details
+  app.get('/api/results/:modelId/latest', async (req, res) => {
+    try {
+      const modelId = decodeURIComponent(req.params.modelId);
+      if (!modelId || modelId.length > MODEL_ID_MAX_LENGTH || !MODEL_ID_PATTERN.test(modelId)) {
+        res.status(400).json({ error: 'Invalid modelId' });
+        return;
+      }
+      const results = await resultsStore.query({ modelId, limit: 1 });
+      if (!results.length) {
+        res.status(404).json({ error: 'No benchmark results found for this model' });
+        return;
+      }
+      res.json(results[0]);
+    } catch (err) {
+      logger.error(`GET /api/results/${sanitizeForLog(req.params.modelId)}/latest failed`, { err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });

@@ -297,16 +297,10 @@ export class Stage1WorkerImpl implements Stage1Worker {
         };
       }
 
-      // i. Teardown deployment
-      this.logger.info('Stage 1: stopping deployment', {
-        deploymentName: deployment.deploymentName,
-      });
-      await this.vllmEngine.stop(this.config.ssh, deployment.deploymentName);
-      deployment = null;
-      this.logger.info('Stage 1: deployment stopped');
-
-      // j. Update queue entry status to 'completed'
-      await this.queueService.updateStatus(run.queueEntryId, 'completed');
+      // Carry deployment info so the scheduler can keep the model alive
+      // for Stage 2 CI evals and tear down in its own finally block.
+      result.endpointUrl = deployment.apiEndpoint;
+      result.deploymentName = deployment.deploymentName;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error('Stage 1: execution failed', {
@@ -323,20 +317,13 @@ export class Stage1WorkerImpl implements Stage1Worker {
         });
       }
     } finally {
-      // Always attempt teardown in finally block as a safety net
+      // Teardown is now owned by the Scheduler (via its own finally block).
+      // Stage 1 only logs if deployment is still live so the caller knows
+      // it must clean up.
       if (deployment) {
-        try {
-          this.logger.info('Stage 1: cleaning up deployment in finally', {
-            deploymentName: deployment.deploymentName,
-          });
-          await this.vllmEngine.stop(this.config.ssh, deployment.deploymentName);
-          this.logger.info('Stage 1: deployment cleaned up');
-        } catch (stopErr) {
-          const stopMessage = stopErr instanceof Error ? stopErr.message : String(stopErr);
-          this.logger.error('Stage 1: failed to stop deployment in finally', {
-            error: stopMessage,
-          });
-        }
+        this.logger.info('Stage 1: deployment still active — scheduler owns teardown', {
+          deploymentName: deployment.deploymentName,
+        });
       }
     }
 

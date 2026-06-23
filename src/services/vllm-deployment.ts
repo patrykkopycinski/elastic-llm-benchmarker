@@ -92,7 +92,7 @@ export interface ContainerStatus {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const DEFAULT_DOCKER_IMAGE = 'vllm/vllm-openai:v0.15.1';
+const DEFAULT_DOCKER_IMAGE = 'vllm/vllm-openai:latest';
 const DEFAULT_CONTAINER_NAME_PREFIX = 'vllm-model';
 const DEFAULT_API_PORT = 8000;
 const DEFAULT_PULL_TIMEOUT_MS = 600_000; // 10 minutes
@@ -100,7 +100,7 @@ const DEFAULT_RUN_TIMEOUT_MS = 30_000; // 30 seconds
 const DEFAULT_STOP_TIMEOUT_MS = 60_000; // 60 seconds (large models take longer to stop)
 const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 1_200_000; // 20 minutes (70B+ models need extended load time)
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10_000; // 10 seconds
-const DEFAULT_GPU_MEMORY_UTILIZATION = 0.9;
+const DEFAULT_GPU_MEMORY_UTILIZATION = 0.95;
 
 /** Re-export for CLI and callers that only need parser by model ID */
 export { getToolCallParserForModelId } from './vllm-model-params.js';
@@ -122,7 +122,7 @@ export function buildDeployCommandWithToolCalling(options: {
   const modelId = options.modelId;
   const apiPort = options.apiPort ?? DEFAULT_API_PORT;
   const dockerImage = options.dockerImage ?? DEFAULT_DOCKER_IMAGE;
-  const tensorParallelSize = options.tensorParallelSize ?? 1;
+  const tensorParallelSize = options.tensorParallelSize ?? 2;
   const gpuMemoryUtilization = options.gpuMemoryUtilization ?? DEFAULT_GPU_MEMORY_UTILIZATION;
   const maxModelLen = options.maxModelLen ?? undefined;
   const hfToken = options.huggingfaceToken ?? '${HF_TOKEN}';
@@ -425,6 +425,9 @@ export class VllmDeploymentService {
 
     const apiEndpoint = `http://${sshConfig.host}:${this.options.apiPort}`;
 
+    // Step 7: Resolve actual vLLM version from the running container
+    const resolvedImage = await this.resolveVllmVersion(sshConfig, containerName);
+
     const result: DeploymentResult = {
       containerId,
       containerName,
@@ -435,7 +438,7 @@ export class VllmDeploymentService {
       maxModelLen,
       apiEndpoint,
       timestamp: new Date().toISOString(),
-      dockerImage: this.options.dockerImage,
+      dockerImage: resolvedImage,
       healthCheckResult,
       gpuUtilization,
     };
@@ -708,6 +711,35 @@ export class VllmDeploymentService {
     }
 
     return null;
+  }
+
+  /**
+   * Resolves the actual vLLM version from a running container.
+   * When using the :latest tag, this queries `pip show vllm` inside the container
+   * to get the real installed version. Falls back to the configured image tag.
+   */
+  private async resolveVllmVersion(
+    sshConfig: SSHConfig,
+    containerName: string,
+  ): Promise<string> {
+    try {
+      const result = await this.execSSH(
+        sshConfig,
+        `docker exec ${containerName} pip show vllm 2>/dev/null | grep -i '^Version:' | awk '{print $2}'`,
+        15_000,
+      );
+      const version = result.stdout.trim();
+      if (version && /^\d+\.\d+/.test(version)) {
+        const resolved = `vllm/vllm-openai:v${version}`;
+        this.logger.info(`Resolved vLLM version: ${resolved} (from container ${containerName})`);
+        return resolved;
+      }
+    } catch (error) {
+      this.logger.debug('Could not resolve vLLM version from container', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return this.options.dockerImage;
   }
 
   /**

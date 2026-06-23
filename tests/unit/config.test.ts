@@ -53,11 +53,11 @@ describe('loadConfig', () => {
 
     const config = loadConfig(undefined, { skipDotenv: true });
 
-    expect(config.vmHardwareProfile.gpuType).toBe('nvidia-a100-sxm4-80gb');
+    expect(config.vmHardwareProfile.gpuType).toBe('nvidia-a100-80gb');
     expect(config.vmHardwareProfile.gpuCount).toBe(2);
     expect(config.vmHardwareProfile.ramGb).toBe(340);
     expect(config.vmHardwareProfile.cpuCores).toBe(24);
-    expect(config.vmHardwareProfile.diskGb).toBe(500);
+    expect(config.vmHardwareProfile.diskGb).toBe(1000);
     expect(config.vmHardwareProfile.machineType).toBe('a2-ultragpu-2g');
   });
 

@@ -10,7 +10,7 @@
 
 set -uo pipefail
 
-VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:v0.15.1}"
+VLLM_IMAGE="${VLLM_IMAGE:-vllm/vllm-openai:latest}"
 
 PASS=0
 FAIL=0

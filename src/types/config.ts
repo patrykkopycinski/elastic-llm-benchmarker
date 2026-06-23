@@ -63,12 +63,12 @@ export const stage2ThresholdsSchema = z.object({
  * VM hardware profile configuration describing the GCP VM resources
  */
 export const vmHardwareProfileSchema = z.object({
-  gpuType: z.string().default('nvidia-l4'),
-  gpuCount: z.number().int().positive().default(1),
-  ramGb: z.number().positive().default(64),
-  cpuCores: z.number().int().positive().default(8),
-  diskGb: z.number().int().positive().default(200),
-  machineType: z.string().default('g2-standard-8'),
+  gpuType: z.string().default('nvidia-a100-80gb'),
+  gpuCount: z.number().int().positive().default(2),
+  ramGb: z.number().positive().default(340),
+  cpuCores: z.number().int().positive().default(24),
+  diskGb: z.number().int().positive().default(1000),
+  machineType: z.string().default('a2-ultragpu-2g'),
 });
 
 /**
@@ -212,8 +212,8 @@ export const engineConfigSchema = z.object({
   apiPort: z.number().int().positive().optional(),
   /** Docker image override for the engine */
   dockerImage: z.string().optional(),
-  /** GPU memory utilization fraction for vLLM (default: 0.90) */
-  vllmGpuMemoryUtilization: z.number().min(0).max(1).default(0.9),
+  /** GPU memory utilization fraction for vLLM (default: 0.95) */
+  vllmGpuMemoryUtilization: z.number().min(0).max(1).default(0.95),
   /** Maximum model length override (optional, engine auto-detects) */
   maxModelLen: z.number().int().positive().optional(),
 });
@@ -396,6 +396,58 @@ export const kibanaRepoConfigSchema = z.object({
 });
 
 /**
+ * Smoke test configuration for validating deployed models before CI eval triggers.
+ */
+export const smokeTestConfigSchema = z.object({
+  /** Timeout for health check endpoint. */
+  healthTimeoutMs: z.number().int().positive().default(10_000),
+  /** Timeout for single inference request. */
+  inferenceTimeoutMs: z.number().int().positive().default(30_000),
+  /** Timeout for tool-calling request. */
+  toolCallingTimeoutMs: z.number().int().positive().default(60_000),
+  /** Number of retries per tier. */
+  maxRetries: z.number().int().min(0).default(2),
+  /** Smoke test depth: 'health', 'inference', or 'full' (includes tool calling). */
+  depth: z.enum(['health', 'inference', 'full']).default('full'),
+  /** Prompt for inference tier. */
+  testPrompt: z.string().default('What is 2 + 2? Answer with just the number.'),
+  /** Expected keywords in inference response. */
+  expectedKeywords: z.array(z.string()).default(['4']),
+  /** Tool name for tool-calling tier. */
+  toolName: z.string().default('get_current_time'),
+  /** Prompt for tool-calling tier. */
+  toolPrompt: z.string().default('What is the current time? Use the get_current_time tool.'),
+});
+
+/**
+ * Buildkite CI eval configuration for triggering and polling eval builds.
+ */
+export const buildkiteConfigSchema = z.object({
+  /** Whether CI evals via Buildkite are enabled. */
+  enabled: z.boolean().default(false),
+  /** Buildkite API token (read/write builds permission). */
+  apiToken: z.string().min(1).optional(),
+  /** Buildkite organization slug. */
+  orgSlug: z.string().default('elastic'),
+  /** Pipeline slug for on-demand eval runs. */
+  onDemandPipelineSlug: z.string().default('kibana-evals-on-demand'),
+  /** Pipeline slug for weekly eval runs. */
+  weeklyPipelineSlug: z.string().default('kibana-evals-weekly-llm-evals'),
+  /** Polling interval in milliseconds when waiting for build completion. */
+  pollIntervalMs: z.number().int().positive().default(30_000),
+  /** Maximum wait time for build completion in milliseconds. */
+  pollTimeoutMs: z.number().int().positive().default(3_600_000),
+  /** Whether to retry on-demand eval once on failure. */
+  retryOnFailure: z.boolean().default(true),
+  /** Eval suites to run (on-demand). */
+  defaultEvalSuites: z.array(z.string()).default(['security_ai_assistant']),
+  /** Kibana branch to build against. */
+  kibanaBranch: z.string().default('main'),
+  /** Whether to also trigger weekly evals after on-demand passes. */
+  triggerFullEval: z.boolean().default(false),
+});
+
+/**
  * Discovery scheduler configuration for automated model discovery and queueing.
  */
 export const discoverySchedulerConfigSchema = z.object({
@@ -412,7 +464,7 @@ export const discoverySchedulerConfigSchema = z.object({
   /** Whether to automatically enqueue discovered models. */
   autoQueue: z.boolean().default(true),
   /** Hardware profile ID used for dry-run fit checks. */
-  hardwareProfileId: z.string().default('1xl4'),
+  hardwareProfileId: z.string().default('2xa100-80gb'),
 });
 
 /**
@@ -457,6 +509,10 @@ export const appConfigSchema = z.object({
   kibanaRepo: kibanaRepoConfigSchema.default({}),
   /** Discovery scheduler configuration for automated model discovery. */
   discoveryScheduler: discoverySchedulerConfigSchema.default({}),
+  /** Smoke test configuration for validating deployed models before CI. */
+  smokeTest: smokeTestConfigSchema.default({}),
+  /** Buildkite CI eval configuration. */
+  buildkite: buildkiteConfigSchema.default({}),
   /** LLM configuration for reasoning and evaluation tasks. */
   llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
   llmBaseUrl: z.string().url().optional().describe('Base URL for OpenAI-compatible API'),
@@ -514,3 +570,5 @@ export type GoldenClusterConfig = z.infer<typeof goldenClusterConfigSchema>;
 export type EdotCollectorConfig = z.infer<typeof edotCollectorConfigSchema>;
 export type KibanaRepoConfig = z.infer<typeof kibanaRepoConfigSchema>;
 export type DiscoverySchedulerConfig = z.infer<typeof discoverySchedulerConfigSchema>;
+export type SmokeTestConfig = z.infer<typeof smokeTestConfigSchema>;
+export type BuildkiteConfig = z.infer<typeof buildkiteConfigSchema>;
