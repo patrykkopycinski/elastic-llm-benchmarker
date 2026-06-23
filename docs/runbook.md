@@ -4,175 +4,251 @@ Production deployment and operations guide for elastic-llm-benchmarker.
 
 ## Table of Contents
 
-- [Deployment](#deployment)
+- [Prerequisites](#prerequisites)
+- [Initial Setup](#initial-setup)
+- [Starting the Service](#starting-the-service)
+- [Stopping the Service](#stopping-the-service)
 - [Health Monitoring](#health-monitoring)
-- [Common Issues](#common-issues)
-- [Alerting](#alerting)
+- [Common Operations](#common-operations)
+- [Troubleshooting](#troubleshooting)
 - [Maintenance](#maintenance)
+- [Disaster Recovery](#disaster-recovery)
 
 ---
 
-## Deployment
+## Prerequisites
 
-### Prerequisites
+- **Node.js 20+** with npm
+- **Elasticsearch 8.x** cluster (Elastic Serverless recommended) with API key
+- **GPU VM** with 2x A100-80GB (or equivalent), accessible via SSH
+  - Docker installed with NVIDIA Container Toolkit
+  - Sufficient disk for model weights (~200GB+ recommended)
+- **SSH key** with access to the GPU VM (`chmod 600`)
+- **HuggingFace token** (for model discovery, higher API rate limits)
+- **Buildkite API token** (optional, for CI eval pipeline)
+- **Anthropic API key** (optional, for Stage 3 reasoning)
 
-- Node.js 20+
-- Elasticsearch 8.x cluster with API key or basic auth
-- Kibana instance with Agent Builder enabled (for evals)
-- Local Kibana git checkout (for `@kbn/evals`)
-- GCP VM with GPU (for vLLM model deployment)
-- HuggingFace API token (for model discovery)
+---
 
-### Initial Setup
+## Initial Setup
+
+### 1. Clone and install
 
 ```bash
-# Clone and install
 git clone https://github.com/patrykkopycinski/elastic-llm-benchmarker.git
 cd elastic-llm-benchmarker
 npm install
 npm run build
-
-# Verify ES connectivity
-ES_URL=https://your-cluster:9243 ES_API_KEY=xxx npx elastic-llm-benchmarker health-check
-
-# Bootstrap Kibana repo (one-time)
-KIBANA_REPO_PATH=/path/to/kibana npx elastic-llm-benchmarker bootstrap-kibana
 ```
 
-### Environment File
+### 2. Configure
 
-Create `.env` or export:
+Copy and edit the config file:
 
 ```bash
-# Required
-ES_URL=https://your-cluster:9243
-ES_API_KEY=your-api-key
-
-# For eval runs
-KIBANA_URL=http://localhost:5601
-KIBANA_REPO_PATH=/path/to/kibana
-
-# For model deployment
-GCP_VM_NAME=vllm-gpu-vm
-GCP_ZONE=us-central1-a
-GCP_PROJECT=your-project
-
-# For discovery
-HF_TOKEN=hf_xxx
-
-# Dashboard (optional)
-PORT=3200
-API_KEYS=key1,key2
-REQUIRE_AUTH=true
+cp config/default.json config/local.json
 ```
 
-### Starting the Service
+Required fields in `config/local.json`:
 
-```bash
-# Full autonomous pipeline
-npx elastic-llm-benchmarker start
-
-# Dashboard only
-npx elastic-llm-benchmarker queue start
-
-# Single model benchmark (manual)
-npx elastic-llm-benchmarker benchmark-model meta-llama/Llama-3.1-8B-Instruct
+```jsonc
+{
+  "ssh": {
+    "host": "YOUR_GPU_VM_IP",
+    "port": 22,
+    "username": "YOUR_SSH_USER",
+    "privateKeyPath": "/path/to/ssh/key"
+  },
+  "elasticsearch": {
+    "url": "https://your-cluster.es.cloud.elastic.co",
+    "apiKey": "YOUR_ES_API_KEY"
+  },
+  "huggingfaceToken": "hf_YOUR_TOKEN",
+  "hardwareProfileId": "2xa100-80gb",
+  "vmHardwareProfile": {
+    "gpuType": "nvidia-a100-80gb",
+    "gpuCount": 2,
+    "ramGb": 340,
+    "cpuCores": 24,
+    "diskGb": 1000,
+    "machineType": "a2-ultragpu-2g"
+  }
+}
 ```
 
-### Process Management
-
-For production, run under a process manager:
+### 3. Verify GPU VM connectivity
 
 ```bash
-# systemd unit (recommended)
+# Test SSH connection
+ssh -i /path/to/key YOUR_USER@YOUR_GPU_VM_IP 'nvidia-smi && docker --version'
+
+# Verify Docker + NVIDIA runtime
+ssh -i /path/to/key YOUR_USER@YOUR_GPU_VM_IP 'docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi'
+```
+
+### 4. Verify Elasticsearch connectivity
+
+```bash
+npx tsx src/cli.ts health-check --config config/local.json --format json
+```
+
+Expected output: all checks pass with `"ok": true`.
+
+### 5. (Optional) Set up Buildkite CI evals
+
+Add to your config:
+
+```jsonc
+{
+  "buildkite": {
+    "enabled": true,
+    "apiToken": "bkua_YOUR_TOKEN",
+    "orgSlug": "elastic",
+    "onDemandPipelineSlug": "kibana-evals-on-demand",
+    "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
+    "retryOnFailure": true,
+    "triggerFullEval": false
+  }
+}
+```
+
+---
+
+## Starting the Service
+
+### Full autonomous pipeline
+
+```bash
+npx tsx src/cli.ts start \
+  --config config/local.json \
+  --stage2 \
+  --stage3 \
+  --discovery \
+  --ci-evals \
+  --poll-interval 30000
+```
+
+This starts:
+- **Queue poller**: checks ES queue every 30s for pending entries
+- **Stage 1 worker**: deploys models on GPU VM, runs benchmarks
+- **Stage 2 worker**: runs Kibana eval suites (if `--stage2`)
+- **Stage 3 worker**: LLM reasoning over results (if `--stage3`)
+- **Discovery scheduler**: polls HuggingFace for new models (if `--discovery`)
+- **CI eval pipeline**: smoke test + Buildkite triggers (if `--ci-evals`)
+
+### Dashboard only (no processing)
+
+The dashboard is served as part of the API server. Start with:
+
+```bash
+npx tsx src/cli.ts start --config config/local.json
+```
+
+Dashboard is available at `http://localhost:3200`.
+
+### One-off model benchmark
+
+```bash
+# Enqueue with hardware-fit check
+npx tsx src/cli.ts enqueue Qwen/Qwen2.5-7B-Instruct --config config/local.json
+
+# Enqueue and wait for completion
+npx tsx src/cli.ts benchmark-model Qwen/Qwen2.5-7B-Instruct --wait --config config/local.json
+```
+
+### Process management (production)
+
+For production deployments, run under systemd:
+
+```ini
 # /etc/systemd/system/llm-benchmarker.service
 [Unit]
-Description=LLM Benchmarker
+Description=Elastic LLM Benchmarker
 After=network.target
 
 [Service]
 Type=simple
 User=benchmarker
 WorkingDirectory=/opt/elastic-llm-benchmarker
-EnvironmentFile=/opt/elastic-llm-benchmarker/.env
-ExecStart=/usr/bin/node dist/cli.js start
+ExecStart=/usr/bin/node dist/cli.js start \
+  --config config/production.json \
+  --stage2 --stage3 --discovery --ci-evals
 Restart=on-failure
 RestartSec=30
+Environment=NODE_OPTIONS=--max-old-space-size=4096
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-# Dashboard server
-# /etc/systemd/system/llm-benchmarker-dashboard.service
-[Unit]
-Description=LLM Benchmarker Dashboard
-After=network.target
+sudo systemctl daemon-reload
+sudo systemctl enable llm-benchmarker
+sudo systemctl start llm-benchmarker
+```
 
-[Service]
-Type=simple
-User=benchmarker
-WorkingDirectory=/opt/elastic-llm-benchmarker
-EnvironmentFile=/opt/elastic-llm-benchmarker/.env
-ExecStart=/usr/bin/node dist/cli.js queue start
-Restart=on-failure
-RestartSec=10
+---
 
-[Install]
-WantedBy=multi-user.target
+## Stopping the Service
+
+### Graceful shutdown
+
+```bash
+# Via CLI (sends SIGTERM to the daemon)
+npx tsx src/cli.ts stop
+
+# Via systemd
+sudo systemctl stop llm-benchmarker
+```
+
+The scheduler handles SIGINT/SIGTERM gracefully:
+1. Stops polling for new entries
+2. Waits for the current model to finish (does not interrupt mid-benchmark)
+3. Tears down any active vLLM deployment on the GPU VM
+4. Releases the lockfile
+5. Closes ES connections
+
+### Force stop (if graceful fails)
+
+```bash
+# Find the process
+ps aux | grep benchmarker
+
+# Kill it
+kill -9 <PID>
+
+# Clean up the lockfile
+rm .benchmarker-queue.lock
+```
+
+After a force stop, check for orphaned Docker containers on the GPU VM:
+
+```bash
+ssh YOUR_USER@YOUR_GPU_VM_IP 'docker ps --filter "name=vllm-" --format "{{.Names}}"'
+ssh YOUR_USER@YOUR_GPU_VM_IP 'docker stop $(docker ps -q --filter "name=vllm-")'
 ```
 
 ---
 
 ## Health Monitoring
 
-### Endpoints
+### Health check endpoints
 
 | Endpoint | Purpose | Expected |
 |----------|---------|----------|
-| `GET /healthz` | Liveness probe | `200` with `{ status: "ok" }` |
-| `GET /api/v1/health` | Full health check | `200` when healthy, `503` when degraded |
-| `GET /api/v1/health/history` | Check history | Array of snapshots |
-| `GET /metrics` | Prometheus scrape | Prometheus text format |
-| `GET /metrics/json` | JSON metrics | Operation counters + timings |
+| `GET /healthz` | Liveness probe | `200` when ES is reachable |
+| `GET /api/v1/health` | Full health check | `200` with component statuses |
+| `GET /metrics` | Prometheus scrape | Text format metrics |
 
-### Health Check Components
+### CLI health check
 
-The `/api/v1/health` endpoint checks:
-
-| Check | What it validates | Failure meaning |
-|-------|------------------|-----------------|
-| `queue_depth` | Pending entries < 50 | Backlog building up — workers may be stuck |
-| `golden_forwarder` | vLLM proxy responding | GPU VM or vLLM container down |
-| `discovery_scheduler` | Discovery loop running | Auto-discovery stopped |
-| `elasticsearch` | ES cluster reachable | Storage/query unavailable |
-
-### Response Format
-
-```json
-{
-  "status": "healthy",
-  "timestamp": "2026-06-16T08:00:00.000Z",
-  "checks": {
-    "queue_depth": { "ok": true, "message": "Queue depth is 5" },
-    "elasticsearch": { "ok": true, "message": "Cluster green" }
-  },
-  "uptime": { "seconds": 86400, "memoryMB": 256 },
-  "monitoring": {
-    "totalChecks": 2880,
-    "healthyChecks": 2875,
-    "uptimePercent": "99.83",
-    "currentStatus": "healthy",
-    "failureCounts": { "queue_depth": 0 },
-    "historySize": 100
-  }
-}
+```bash
+npx tsx src/cli.ts health-check --config config/local.json --format json
 ```
 
-### Prometheus Integration
+Checks: Elasticsearch connectivity, SSH key existence, GPU VM reachability, Docker availability.
 
-Scrape config for `prometheus.yml`:
+### Prometheus scrape config
 
 ```yaml
 scrape_configs:
@@ -183,171 +259,257 @@ scrape_configs:
     metrics_path: /metrics
 ```
 
-### Kubernetes Probes
+### Key signals to monitor
 
-```yaml
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 3200
-  initialDelaySeconds: 10
-  periodSeconds: 30
-readinessProbe:
-  httpGet:
-    path: /api/v1/health
-    port: 3200
-  initialDelaySeconds: 15
-  periodSeconds: 30
-  failureThreshold: 3
+| Signal | Where to check | Healthy | Investigate |
+|--------|---------------|---------|-------------|
+| Queue depth | `GET /api/stats` or dashboard | 0-5 pending | 10+ growing |
+| Current model runtime | Dashboard "Currently Processing" | < 2h per model | > 3h |
+| ES cluster health | `GET /healthz` | `green` | `yellow` or `red` |
+| GPU VM Docker containers | SSH + `docker ps` | 0-1 vllm containers | 2+ (orphaned) |
+| Disk on GPU VM | SSH + `df -h` | > 100 GB free | < 50 GB |
+| Error index | ES query `benchmarker-errors` | < 5/day | > 20/day |
+
+---
+
+## Common Operations
+
+### Enqueue a model for benchmarking
+
+```bash
+# Standard enqueue (checks hardware fit)
+npx tsx src/cli.ts enqueue meta-llama/Llama-3.1-70B-Instruct
+
+# High priority
+npx tsx src/cli.ts enqueue meta-llama/Llama-3.1-70B-Instruct --priority 1
+
+# Force enqueue (skip hardware check)
+npx tsx src/cli.ts enqueue meta-llama/Llama-3.1-70B-Instruct --force
+```
+
+### Check queue status
+
+```bash
+npx tsx src/cli.ts queue-status
+npx tsx src/cli.ts status --json
+```
+
+### View results
+
+```bash
+# Latest results
+npx tsx src/cli.ts results --limit 10
+
+# Per-model summary
+npx tsx src/cli.ts results --summary
+
+# Filter by model
+npx tsx src/cli.ts results --model Qwen/Qwen2.5-7B-Instruct
+```
+
+### View recommendations
+
+```bash
+# Latest recommendation for a model
+npx tsx src/cli.ts recommend --model Qwen/Qwen2.5-7B-Instruct
+
+# All "support" verdicts
+npx tsx src/cli.ts recommend --verdict support
+
+# JSON output
+npx tsx src/cli.ts recommend --format json
+```
+
+### Export results
+
+```bash
+# JSON export
+npx tsx src/cli.ts export --output results.json
+
+# CSV export
+npx tsx src/cli.ts export --format csv --output results.csv
+
+# Filtered export
+npx tsx src/cli.ts export --status passed --after 2026-06-01
+```
+
+### Get vLLM deploy command for a model
+
+```bash
+npx tsx src/cli.ts print-deploy-command --model Qwen/Qwen2.5-72B-Instruct --tensor-parallel 2
+```
+
+### Run Stage 3 reasoning on a past run
+
+```bash
+npx tsx src/cli.ts reasoning <run-id> --config config/local.json
 ```
 
 ---
 
-## Common Issues
+## Troubleshooting
 
-### 1. Queue Depth Growing
+### 1. Scheduler not processing entries
 
-**Symptom:** `/api/v1/health` returns `status: degraded`, `queue_depth` check failing.
+**Symptom**: Queue has pending entries but nothing is being processed.
 
-**Diagnosis:**
+**Diagnosis**:
 ```bash
-# Check queue status
-npx elastic-llm-benchmarker queue-status
+# Check if daemon is running
+cat .benchmarker-queue.lock
+
+# Check logs
+journalctl -u llm-benchmarker -n 100 --no-pager
 
 # Check for stuck entries
-npx elastic-llm-benchmarker queue-status --status=processing
-
-# Look at worker logs
-journalctl -u llm-benchmarker -n 100 --no-pager
+npx tsx src/cli.ts queue-status
 ```
 
-**Resolution:**
-- If entries are stuck in `processing`: the worker crashed mid-run. Cancel and retry:
-  ```bash
-  curl -X POST http://localhost:3200/api/v1/queue/<id>/retry
-  ```
-- If entries keep failing: check the model is available on HuggingFace, vLLM can load it
-- If queue is genuinely backed up: expected during bulk discovery — monitor, don't intervene
+**Resolution**:
+- Lockfile exists but process is dead: remove `.benchmarker-queue.lock` and restart
+- Entry stuck in `deploying`/`benchmarking`: cancel via API, check GPU VM for orphaned containers
+- SSH connection failing: verify `ssh -i <key> <user>@<host>` works manually
 
-### 2. vLLM / GPU VM Unreachable
+### 2. vLLM deployment fails
 
-**Symptom:** `golden_forwarder` check failing. Stage 1 jobs error with connection timeouts.
+**Symptom**: Stage 1 fails with SSH or Docker errors.
 
-**Diagnosis:**
+**Diagnosis**:
 ```bash
-# Check GCP VM status
-gcloud compute instances describe $GCP_VM_NAME --zone=$GCP_ZONE --format='value(status)'
+# Check GPU VM
+ssh YOUR_USER@YOUR_GPU_VM_IP
 
-# SSH and check vLLM container
-gcloud compute ssh $GCP_VM_NAME --zone=$GCP_ZONE -- docker ps
-gcloud compute ssh $GCP_VM_NAME --zone=$GCP_ZONE -- docker logs vllm-server --tail=50
+# Check GPU availability
+nvidia-smi
+
+# Check Docker
+docker ps -a --filter "name=vllm-"
+docker logs <container-name> --tail 50
+
+# Check disk space (model weights can be large)
+df -h /root/.cache/huggingface
 ```
 
-**Resolution:**
-- VM stopped → `gcloud compute instances start $GCP_VM_NAME --zone=$GCP_ZONE`
-- vLLM container crashed → SSH in, `docker restart vllm-server`
-- GPU OOM → check model size, may need a smaller quantization
+**Resolution**:
+- GPU OOM: model too large for available VRAM. Use a smaller model or quantization.
+- Docker pull fails: check network, Docker Hub rate limits, or disk space.
+- Model download hangs: check HuggingFace token validity, network to HF CDN.
+- Container exits immediately: check `docker logs` for vLLM startup errors.
 
-### 3. Elasticsearch Connection Failures
+### 3. Elasticsearch connection issues
 
-**Symptom:** `/healthz` returns 503. All queue operations fail.
+**Symptom**: Health check shows ES unreachable. Results not being stored.
 
-**Diagnosis:**
+**Diagnosis**:
 ```bash
 # Direct ES check
-curl -s "$ES_URL/_cluster/health" -H "Authorization: ApiKey $ES_API_KEY"
+curl -s "$ELASTICSEARCH_URL/_cluster/health" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY"
 
-# Check index health
-curl -s "$ES_URL/_cat/indices/llm-*" -H "Authorization: ApiKey $ES_API_KEY"
+# Check indices exist
+curl -s "$ELASTICSEARCH_URL/_cat/indices/benchmarker-*?v" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY"
 ```
 
-**Resolution:**
-- Cluster red/yellow → check ES cluster health, disk space
-- Auth failure → rotate API key, update `.env`
-- Network → check firewall rules, VPN, allowlists
+**Resolution**:
+- API key expired: rotate key, update config
+- Cluster red: check ES cluster health, disk space, shard allocation
+- Index missing: the service auto-creates indices on startup via `ensureIndices()`
+- Network: check firewall rules, VPN, cloud provider security groups
 
-### 4. Kibana Eval Failures
+### 4. Discovery not finding models
 
-**Symptom:** Stage 2 jobs fail with eval errors. Results show 0 scores.
+**Symptom**: Queue stays empty even with `--discovery` enabled.
 
-**Diagnosis:**
+**Diagnosis**:
 ```bash
-# Check Kibana is running
-curl -s "$KIBANA_URL/api/status" | jq '.status.overall.level'
+# Test HuggingFace API directly
+curl -s -H "Authorization: Bearer $HUGGINGFACE_TOKEN" \
+  "https://huggingface.co/api/models?limit=5&filter=text-generation" | jq '.[].id'
 
-# Check eval repo state
-cd $KIBANA_REPO_PATH && git status && node scripts/evals --help
+# Check discovery scheduler logs
+journalctl -u llm-benchmarker --grep "discovery" -n 50
 ```
 
-**Resolution:**
-- Kibana down → restart Kibana
-- Repo dirty → `cd $KIBANA_REPO_PATH && git stash && git pull`
-- Missing connectors → re-run `bootstrap-kibana`
+**Resolution**:
+- HF token expired: generate new token at huggingface.co/settings/tokens
+- Rate limited: wait, or use authenticated requests (higher limits)
+- Filters too strict: check `discoveryScheduler` config (min downloads, licenses, etc.)
+- All discovered models already evaluated: discovery skips previously benchmarked models
 
-### 5. Discovery Not Finding Models
+### 5. CI eval pipeline fails
 
-**Symptom:** Queue stays empty. No new models appearing.
+**Symptom**: Smoke test passes but Buildkite build fails or times out.
 
-**Diagnosis:**
+**Diagnosis**:
 ```bash
-# Manual discovery check
-npx elastic-llm-benchmarker status
+# Check Buildkite build status
+curl -s -H "Authorization: Bearer $BUILDKITE_API_TOKEN" \
+  "https://api.buildkite.com/v2/organizations/elastic/pipelines/kibana-evals-on-demand/builds?per_page=5" \
+  | jq '.[].state'
 
-# Check HF token
-curl -s -H "Authorization: Bearer $HF_TOKEN" \
-  "https://huggingface.co/api/models?limit=1" | jq '.[] | .id'
+# Check the CI eval results in ES
+curl -s "$ELASTICSEARCH_URL/benchmarker-ci-evals/_search?size=5&sort=@timestamp:desc" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" | jq '.hits.hits[]._source.status'
 ```
 
-**Resolution:**
-- HF token expired → generate a new one at huggingface.co/settings/tokens
-- Rate limited → wait, or check HF rate limit headers
-- Filter too aggressive → review discovery config thresholds
+**Resolution**:
+- Build timed out: increase `buildkite.pollTimeoutMs` (default 1h)
+- Build failed: check Buildkite build logs for eval suite errors
+- Smoke test fails: model may not support tool calling; check model card
+- Connector JSON wrong: verify `.gen-ai` connector format matches Kibana's expectations
 
----
+### 6. Orphaned containers on GPU VM
 
-## Alerting
+**Symptom**: GPU memory in use but no benchmark running.
 
-The health monitor runs checks every 30 seconds and tracks consecutive failures.
+**Resolution**:
+```bash
+ssh YOUR_USER@YOUR_GPU_VM_IP
 
-### Alert Levels
+# List vLLM containers
+docker ps --filter "name=vllm-"
 
-| Level | Trigger | Action |
-|-------|---------|--------|
-| `warning` | First failure of any check | Investigate within 1 hour |
-| `critical` | 3+ consecutive failures (configurable) | Investigate immediately |
+# Stop all vLLM containers
+docker stop $(docker ps -q --filter "name=vllm-")
 
-### Custom Alert Handlers
+# Remove stopped containers
+docker container prune -f
 
-The `HealthMonitor.onAlert()` hook supports custom handlers. To add webhook alerting:
-
-```typescript
-import { HealthMonitor } from './services/health-monitor.js';
-
-monitor.onAlert(async (alert) => {
-  if (alert.level === 'critical') {
-    await fetch('https://hooks.slack.com/services/xxx', {
-      method: 'POST',
-      body: JSON.stringify({
-        text: `🚨 [${alert.level}] ${alert.check}: ${alert.message} (${alert.consecutiveFailures} failures)`,
-      }),
-    });
-  }
-});
+# Verify GPU is free
+nvidia-smi
 ```
+
+### 7. Model fails with "context length too large"
+
+**Symptom**: vLLM refuses to start or OOMs during benchmark.
+
+**Resolution**:
+- The system auto-detects max context length from model config. If it's too large for available VRAM, reduce `engine.maxModelLen` in config or let the hardware estimator cap it.
+- For very large context windows (128k+), ensure `engine.vllmGpuMemoryUtilization` is set to 0.95 (default).
 
 ---
 
 ## Maintenance
 
-### Index Lifecycle
-
-Benchmark results accumulate over time. Set up ILM:
+### Updating the benchmarker
 
 ```bash
-# Create ILM policy (retain 90 days)
-curl -X PUT "$ES_URL/_ilm/policy/llm-benchmark-cleanup" \
+cd /opt/elastic-llm-benchmarker
+git pull
+npm install
+npm run build
+sudo systemctl restart llm-benchmarker
+```
+
+### Index lifecycle management
+
+Benchmark data accumulates over time. Set up an ILM policy:
+
+```bash
+curl -X PUT "$ELASTICSEARCH_URL/_ilm/policy/benchmarker-cleanup" \
   -H "Content-Type: application/json" \
-  -H "Authorization: ApiKey $ES_API_KEY" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
   -d '{
     "policy": {
       "phases": {
@@ -360,35 +522,51 @@ curl -X PUT "$ES_URL/_ilm/policy/llm-benchmark-cleanup" \
   }'
 ```
 
-### Updating
+Apply to benchmarker indices:
 
 ```bash
-cd /opt/elastic-llm-benchmarker
-git pull
-npm install
-npm run build
-sudo systemctl restart llm-benchmarker llm-benchmarker-dashboard
+for idx in benchmarker-results benchmarker-checkpoints benchmarker-errors benchmarker-ci-evals; do
+  curl -X PUT "$ELASTICSEARCH_URL/$idx/_settings" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+    -d '{ "index.lifecycle.name": "benchmarker-cleanup" }'
+done
 ```
 
-### Backup
+### Cleaning GPU VM disk
 
-Results live in Elasticsearch. Use standard ES snapshot/restore:
+Model weights cache grows over time:
 
 ```bash
-# Register snapshot repo (one-time)
-curl -X PUT "$ES_URL/_snapshot/llm-backup" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: ApiKey $ES_API_KEY" \
-  -d '{ "type": "fs", "settings": { "location": "/mnt/backups/llm" } }'
+ssh YOUR_USER@YOUR_GPU_VM_IP
 
-# Take snapshot
-curl -X PUT "$ES_URL/_snapshot/llm-backup/snap-$(date +%Y%m%d)" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: ApiKey $ES_API_KEY" \
-  -d '{ "indices": "llm-*", "include_global_state": false }'
+# Check cache size
+du -sh ~/.cache/huggingface/hub/
+
+# Remove old models (keep only recently used)
+# List models sorted by access time
+ls -lt ~/.cache/huggingface/hub/models--*/
+
+# Remove specific model cache
+rm -rf ~/.cache/huggingface/hub/models--ORG--MODEL/
 ```
 
-### Log Rotation
+### Rotating credentials
+
+| Credential | Rotation procedure |
+|------------|-------------------|
+| ES API key | Create new key in Kibana, update config, restart service |
+| SSH key | Generate new key, add to GPU VM `authorized_keys`, update `privateKeyPath` |
+| HuggingFace token | Generate at huggingface.co/settings/tokens, update config |
+| Buildkite token | Generate in Buildkite settings, update config |
+
+After rotating any credential, restart the service:
+
+```bash
+sudo systemctl restart llm-benchmarker
+```
+
+### Log rotation
 
 When running under systemd, journald handles log rotation. For file-based logging:
 
@@ -402,4 +580,72 @@ When running under systemd, journald handles log rotation. For file-based loggin
     missingok
     notifempty
 }
+```
+
+---
+
+## Disaster Recovery
+
+### Data loss in Elasticsearch
+
+All data lives in Elasticsearch. Use ES snapshot/restore:
+
+```bash
+# Register snapshot repository (one-time)
+curl -X PUT "$ELASTICSEARCH_URL/_snapshot/benchmarker-backup" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+  -d '{ "type": "fs", "settings": { "location": "/mnt/backups/benchmarker" } }'
+
+# Take a snapshot
+curl -X PUT "$ELASTICSEARCH_URL/_snapshot/benchmarker-backup/snap-$(date +%Y%m%d)" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+  -d '{ "indices": "benchmarker-*,benchmark-*,recommendation-*", "include_global_state": false }'
+
+# Restore from snapshot
+curl -X POST "$ELASTICSEARCH_URL/_snapshot/benchmarker-backup/snap-20260623/_restore" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+  -d '{ "indices": "benchmarker-*,benchmark-*,recommendation-*" }'
+```
+
+### GPU VM replacement
+
+If the GPU VM needs replacement:
+
+1. Provision new VM with NVIDIA Container Toolkit + Docker
+2. Update `ssh.host` in config
+3. Copy SSH key to new VM: `ssh-copy-id -i /path/to/key USER@NEW_IP`
+4. Restart the benchmarker service
+5. The model weights cache will rebuild on first run (downloads from HuggingFace)
+
+### Queue recovery
+
+If entries are stuck:
+
+```bash
+# Find stuck entries (in-progress for too long)
+curl -s "$ELASTICSEARCH_URL/benchmarker-queue/_search" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+  -d '{
+    "query": {
+      "bool": {
+        "must": [
+          { "term": { "status": "deploying" } },
+          { "range": { "started_at": { "lt": "now-2h" } } }
+        ]
+      }
+    }
+  }' | jq '.hits.hits[]._id'
+
+# Reset stuck entries to pending
+curl -X POST "$ELASTICSEARCH_URL/benchmarker-queue/_update_by_query" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: ApiKey $ELASTICSEARCH_API_KEY" \
+  -d '{
+    "query": { "term": { "status": "deploying" } },
+    "script": { "source": "ctx._source.status = \"pending\"; ctx._source.started_at = null" }
+  }'
 ```

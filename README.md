@@ -1,242 +1,282 @@
-# elastic-llm-benchmarker
+# Elastic LLM Benchmarker
 
-Automated LLM discovery, deployment, and benchmarking for Elastic Agent Builder qualification.
+Autonomous LLM qualification pipeline for Elastic Agent Builder. Discovers models from HuggingFace, deploys them on GPU VMs via vLLM, runs performance benchmarks and Kibana eval suites, and produces recommendation reports with a verdict (`support` / `investigate` / `reject`).
 
-Discovers promising models from HuggingFace, deploys them on vLLM, runs Kibana `@kbn/evals` suites, and stores results in Elasticsearch — fully autonomous, queue-driven.
+## Pipeline
+
+```
+HuggingFace ──▶ Discovery ──▶ Queue (ES) ──▶ Scheduler
+                                                 │
+                          ┌──────────────────────┤
+                          ▼                      ▼
+                    ┌───────────┐          ┌───────────┐
+                    │  Stage 1  │──pass──▶ │  Stage 2  │
+                    │  vLLM     │          │  Kibana   │
+                    │  Perf     │          │  Evals    │
+                    └───────────┘          └─────┬─────┘
+                          │                      │
+                          │               ┌──────┴──────┐
+                          ▼               ▼             ▼
+                    ┌───────────┐   ┌───────────┐ ┌──────────┐
+                    │ Smoke Test│   │  Stage 3  │ │ Buildkite│
+                    │ + CI Eval │   │ Reasoning │ │ CI Evals │
+                    └───────────┘   └───────────┘ └──────────┘
+                                          │
+                                          ▼
+                                   Recommendation
+                                      Report
+```
+
+**Stages:**
+
+1. **Stage 1 -- Performance Gate**: Deploys model on GPU VM via SSH + Docker, runs `vllm bench serve`. If ITL/throughput thresholds fail, emits `reject` and skips remaining stages.
+2. **Smoke Test + CI Eval** (optional): Validates the deployed model (health, inference, tool-calling), then triggers Buildkite on-demand evals against the live vLLM endpoint.
+3. **Stage 2 -- Quality Eval**: Runs `@kbn/evals` suites (tool_calls, skill_invocation, etc.) against the vLLM endpoint.
+4. **Stage 3 -- Reasoning**: LLM reasons over Stage 1+2 results and raw OTel traces, producing improvement suggestions.
+5. **Recommendation Report**: Structured document with verdict, confidence, metrics, eval scores, and suggestions. Stored in Elasticsearch.
 
 ## Quick Start
 
 ```bash
-# Install
+git clone https://github.com/patrykkopycinski/elastic-llm-benchmarker.git
+cd elastic-llm-benchmarker
 npm install
 
-# Configure (minimal)
-export ES_URL=https://your-es-cluster:9243
-export ES_API_KEY=your-api-key
-export KIBANA_URL=http://localhost:5601
-export KIBANA_REPO_PATH=/path/to/kibana
+# Configure
+cp config/default.json config/local.json
+# Edit config/local.json with your ES, SSH, and HuggingFace credentials
 
-# Run a single model benchmark
-npx elastic-llm-benchmarker benchmark-model meta-llama/Llama-3.1-8B-Instruct
+# Verify connectivity
+npx tsx src/cli.ts health-check
 
-# Or start the full autonomous pipeline
-npx elastic-llm-benchmarker start
+# Enqueue a model
+npx tsx src/cli.ts enqueue Qwen/Qwen2.5-7B-Instruct
+
+# Start the scheduler (processes queue entries)
+npx tsx src/cli.ts start \
+  --config config/local.json \
+  --stage2 \
+  --stage3 \
+  --discovery \
+  --ci-evals
 ```
 
-## Architecture
+## CLI Reference
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Discovery   │────▶│    Queue     │────▶│   Worker    │
-│  Scheduler   │     │   Service    │     │  Pipeline   │
-└─────────────┘     └─────────────┘     └──────┬──────┘
-                                                │
-                          ┌─────────────────────┼─────────────────────┐
-                          ▼                     ▼                     ▼
-                    ┌───────────┐        ┌───────────┐        ┌───────────┐
-                    │  Stage 1  │        │  Stage 2  │        │  Results  │
-                    │  vLLM     │        │  Kibana   │        │  ES Store │
-                    │  Deploy   │        │  Evals    │        │           │
-                    └───────────┘        └───────────┘        └───────────┘
-```
+The CLI has two binaries that share the same entry point (`src/cli.ts`):
 
-**Pipeline stages:**
-1. **Discovery** — scans HuggingFace for tool-calling models, filters by size/quantization/recency
-2. **Queue** — prioritised work queue in Elasticsearch with deduplication
-3. **Stage 1 (vLLM)** — deploys model on GPU VM, validates tool-calling
-4. **Stage 2 (Evals)** — runs `@kbn/evals` suites against the deployed model
-5. **Results** — stores scores, traces, and reasoning in Elasticsearch
-
-## Commands
-
-### Core Pipeline
+### `benchmarker-queue` (primary daemon)
 
 | Command | Description |
 |---------|-------------|
-| `start` | Start the full autonomous pipeline (discovery → queue → benchmark) |
-| `stop` | Stop the running pipeline |
-| `status` | Show pipeline status, queue depth, and active work |
-| `benchmark-model <id>` | Benchmark a single model end-to-end |
-| `benchmark` | Run benchmarks from the queue |
+| `start` | Start the scheduler polling loop |
+| `queue <modelId>` | Add a model to the benchmark queue |
+| `enqueue <modelId>` | Enqueue with hardware-fit dry-run |
+| `stop` | Stop the running daemon |
+| `health-check` | Run health checks (ES, SSH, GPU VM) |
+| `reasoning <runId>` | Run Stage 3 reasoning on a completed run |
+| `setup-local` | Start local ES + EDOT containers |
 
-### Queue Management
+#### `start` Options
 
-| Command | Description |
-|---------|-------------|
-| `queue-status [id]` | Show queue entries (optionally filter by ID) |
-| `queue <modelId>` | Manually enqueue a model for benchmarking |
-| `enqueue <modelId>` | Enqueue a model via the discovery pipeline |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config <path>` | `config/default.json` | Configuration file path |
+| `--poll-interval <ms>` | `30000` | Queue polling interval |
+| `--stage2` | `false` | Enable Kibana eval pipeline |
+| `--stage3` | `true` | Enable LLM reasoning |
+| `--discovery` | `false` | Enable HuggingFace model discovery |
+| `--ci-evals` | `false` | Enable CI eval pipeline (smoke test + Buildkite) |
+| `--full-eval` | `false` | Also trigger weekly evals after on-demand passes |
+| `--connector <type>` | `elasticsearch` | Output connector (`elasticsearch` or `local`) |
+| `--output-dir <path>` | `./benchmark-output` | Output directory for local connector |
 
-### Results & Reporting
-
-| Command | Description |
-|---------|-------------|
-| `results` | Show benchmark results from Elasticsearch |
-| `report` | Generate a markdown report of results |
-| `export` | Export results to JSON/CSV |
-| `reasoning <runId>` | Show reasoning traces for a specific run |
-
-### Infrastructure
-
-| Command | Description |
-|---------|-------------|
-| `health-check` | Run health checks (ES, EDOT, GPU VM) |
-| `bootstrap-kibana` | Set up Kibana repo for eval runs |
-| `setup-local` | Configure local development environment |
-| `deploy-and-test-tool-calls` | Deploy vLLM + validate tool calling |
-| `tool-call-benchmark` | Run tool-call-specific benchmarks |
-| `migrate-to-es` | Migrate local results to Elasticsearch |
-
-### Dashboard Server
+### General commands
 
 | Command | Description |
 |---------|-------------|
-| `queue start` | Start the dashboard + API server (default: port 3200) |
+| `status` | View queue depth, current model, result counts |
+| `results` | Query benchmark results from ES |
+| `recommend` | Get recommendation reports by model or verdict |
+| `export` | Export results as JSON or CSV |
+| `benchmark-model <id>` | Enqueue with priority and optionally wait for completion |
+| `queue-status [id]` | View queue entries |
+| `print-deploy-command` | Print vLLM docker run command for a model |
+| `tool-call-benchmark` | Run tool-call benchmark against a running API |
 
 ## Configuration
 
-### Environment Variables
+### Config File (`config/default.json`)
+
+```jsonc
+{
+  "ssh": {
+    "host": "your-gpu-vm-host",
+    "port": 22,
+    "username": "your_ssh_user",
+    "privateKeyPath": "/path/to/key"
+  },
+  "huggingfaceToken": "",
+  "hardwareProfileId": "2xa100-80gb",
+  "vmHardwareProfile": {
+    "gpuType": "nvidia-a100-80gb",
+    "gpuCount": 2,
+    "ramGb": 340,
+    "cpuCores": 24,
+    "diskGb": 1000,
+    "machineType": "a2-ultragpu-2g"
+  },
+  "engine": {
+    "type": "vllm",
+    "vllmGpuMemoryUtilization": 0.95
+  },
+  "benchmarkThresholds": {
+    "minContextWindow": 128000,
+    "maxITLMs": 20,
+    "maxToolCallLatencyMs": 1000,
+    "minToolCallSuccessRate": 1.0,
+    "concurrencyLevels": [1, 4, 16],
+    "healthCheckTimeoutSeconds": 600
+  },
+  "smokeTest": {
+    "healthTimeoutMs": 10000,
+    "inferenceTimeoutMs": 30000,
+    "toolCallingTimeoutMs": 60000,
+    "maxRetries": 2,
+    "depth": "full"           // "health" | "inference" | "full"
+  },
+  "buildkite": {
+    "enabled": false,
+    "apiToken": "",            // BUILDKITE_API_TOKEN env var
+    "orgSlug": "elastic",
+    "onDemandPipelineSlug": "kibana-evals-on-demand",
+    "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
+    "pollIntervalMs": 30000,
+    "pollTimeoutMs": 3600000,
+    "retryOnFailure": true,
+    "defaultEvalSuites": ["security_ai_assistant"],
+    "kibanaBranch": "main",
+    "triggerFullEval": false
+  }
+}
+```
+
+### Key Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ES_URL` | Yes | Elasticsearch cluster URL |
-| `ES_API_KEY` | One of | ES API key (preferred) |
-| `ES_USERNAME` / `ES_PASSWORD` | One of | ES basic auth |
-| `KIBANA_URL` | For evals | Kibana instance URL |
-| `KIBANA_REPO_PATH` | For evals | Path to local Kibana git checkout |
-| `GCP_VM_NAME` | For vLLM | GCP VM instance name for GPU workloads |
-| `GCP_ZONE` | For vLLM | GCP zone (default: `us-central1-a`) |
-| `GCP_PROJECT` | For vLLM | GCP project ID |
-| `HF_TOKEN` | For discovery | HuggingFace API token |
-| `PORT` | No | Dashboard server port (default: 3200) |
-| `API_KEYS` | No | Comma-separated API keys for dashboard auth |
-| `REQUIRE_AUTH` | No | Set `true` to require API key auth |
+| `SSH_HOST` | Yes | GPU VM IP address |
+| `SSH_USERNAME` | Yes | SSH user |
+| `SSH_PRIVATE_KEY_PATH` | Yes | Path to SSH private key |
+| `ELASTICSEARCH_URL` | Yes | Elasticsearch cluster URL |
+| `ELASTICSEARCH_API_KEY` | Recommended | ES API key |
+| `HUGGINGFACE_TOKEN` | For discovery | HuggingFace API token |
+| `BUILDKITE_API_TOKEN` | For CI evals | Buildkite REST API token |
+| `ANTHROPIC_API_KEY` | For Stage 3 | LLM reasoning API key |
+| `ES_GOLDEN_API_KEY` | For forwarding | Golden cluster API key |
 
-### Elasticsearch Indices
+## Elasticsearch Indices
 
 | Index | Purpose |
 |-------|---------|
-| `llm-benchmark-results` | Benchmark scores and metadata |
-| `llm-benchmark-queue` | Work queue entries |
-| `llm-tool-call-results` | Tool-calling validation results |
-| `llm-eval-traces` | Eval run traces and reasoning |
+| `benchmarker-results` | Stage 1 benchmark results (metrics, hardware, vLLM config) |
+| `benchmarker-queue` | Work queue entries |
+| `benchmarker-models` | Discovered model metadata |
+| `benchmarker-eval-reports` | Evaluation classification reports |
+| `benchmark-evaluations` | Stage 2 eval suite results |
+| `benchmark-stage2` | Stage 2 detailed results |
+| `benchmark-reasoning` | Stage 3 reasoning suggestions |
+| `recommendation-reports` | Final recommendation reports (verdict + evidence) |
+| `benchmarker-ci-evals` | CI evaluation results (Buildkite) |
+| `benchmarker-checkpoints` | Deployment lifecycle events |
+| `benchmarker-errors` | Dead-letter queue for errors |
 
 ## API Endpoints
 
-The dashboard server (`queue start`) exposes:
-
-### Queue Management
-- `GET /api/v1/queue` — List queue entries (supports `?status=`, `?limit=`, `?sort=`)
-- `POST /api/v1/queue` — Enqueue a model `{ modelId, priority?, metadata? }`
-- `PATCH /api/v1/queue/:id` — Update entry status
-- `DELETE /api/v1/queue/:id` — Remove a queue entry
-- `POST /api/v1/queue/:id/cancel` — Cancel a running entry
-- `POST /api/v1/queue/:id/retry` — Retry a failed entry
-- `GET /api/v1/queue/current` — Currently processing entry
-
-### Results
-- `GET /api/v1/results` — Benchmark results (supports `?limit=`, `?modelId=`)
-
-### Health & Monitoring
-- `GET /healthz` — Basic liveness probe (ES ping)
-- `GET /api/v1/health` — Comprehensive health with check details, uptime, and monitoring summary
-- `GET /api/v1/health/history` — Health check history (supports `?limit=`)
-- `GET /metrics` — Prometheus-format metrics
-- `GET /metrics/json` — JSON-format metrics
+The dashboard server runs on port 3200 by default.
 
 ### Dashboard
-- `GET /` — Web dashboard (queue status, results, real-time updates)
-- `GET /api/v1/queue/stream` — SSE stream for real-time queue updates
+- `GET /` -- Web dashboard (queue, leaderboard, methodology, vLLM commands)
 
-## Recommendation Reports
+### Queue Management
+- `GET /api/v1/queue` -- List queue entries (`?status=`, `?limit=`, `?sort=`)
+- `POST /api/v1/queue` -- Enqueue a model `{ modelId, priority?, metadata? }`
+- `POST /api/v1/queue/:id/cancel` -- Cancel a queue entry
+- `POST /api/v1/queue/:id/retry` -- Retry a failed entry
+- `GET /api/v1/queue/current` -- Currently processing entry
 
-After each pipeline run, a **Recommendation Report** is generated with a verdict:
+### Results & Models
+- `GET /api/v1/results` -- Benchmark results (`?limit=`, `?modelId=`)
+- `GET /api/stats` -- Run counts (total, passed, failed)
+- `GET /api/models` -- Model catalog with summaries
+- `GET /api/recommendations` -- Recommendation reports
 
-| Verdict | Meaning |
-|---------|---------|
-| `support` | Model meets all thresholds and eval suites — ready for production |
-| `investigate` | Model partially passes — worth manual review |
-| `reject` | Model fails critical thresholds — not suitable |
+### Health & Monitoring
+- `GET /healthz` -- Liveness probe (ES ping)
+- `GET /api/v1/health` -- Comprehensive health with check details
+- `GET /metrics` -- Prometheus-format metrics
 
-```bash
-# Get latest recommendation for a model
-npx elastic-llm-benchmarker recommend --model meta-llama/Llama-3.1-8B-Instruct
+## Hardware Profiles
 
-# List all recommendations by verdict
-npx elastic-llm-benchmarker recommend --verdict support --limit 10
-```
+Pre-defined profiles match common GPU configurations:
 
-## External Users (Phase 2 — Local Connector)
+| Profile ID | GPUs | VRAM | Use Case |
+|------------|------|------|----------|
+| `2xa100-80gb` | 2x A100-80GB | 160 GB | Default: 70B+ models |
+| `1xa100-80gb` | 1x A100-80GB | 80 GB | 7B-30B models |
+| `4xa100-80gb` | 4x A100-80GB | 320 GB | 200B+ models |
+| `1xl4` | 1x L4 | 24 GB | Small models |
+| `8xl4` | 8x L4 | 192 GB | Large models on L4 |
 
-Run the benchmarker without Elasticsearch by using the local connector:
-
-```bash
-# Start with local file output (no ES required)
-npx elastic-llm-benchmarker start \
-  --connector local \
-  --output-dir ./my-results \
-  --config config.yaml
-
-# Results are written as JSON files:
-# ./my-results/benchmarks/      — Stage 1 benchmark results
-# ./my-results/recommendations/ — Recommendation reports + index.jsonl
-# ./my-results/stage2/          — Kibana eval results
-# ./my-results/stage3/          — Reasoning analysis
-```
-
-The `Connector` interface (`src/services/connector.ts`) can be extended for custom storage backends.
+The hardware estimator checks if a model fits the configured profile before queueing.
 
 ## Development
 
 ```bash
-# Run tests
-npm test
-
-# Type check
-npx tsc --noEmit
-
-# Build
-npm run build
-
-# Lint
-npm run lint
+npm install
+npx tsc --noEmit          # type check
+npx vitest run            # unit tests (858 tests)
+npm run build             # build for production
 ```
 
 ### Project Structure
 
 ```
 src/
-├── cli.ts                          # CLI entry point (commander)
-├── api/
-│   └── queue-server.ts             # Express API + dashboard server
-├── services/
-│   ├── model-discovery.ts          # HuggingFace model discovery
-│   ├── llm-client.ts               # LLM API client (OpenAI-compatible)
-│   ├── kibana-repo-service.ts      # Kibana repo management
-│   ├── kibana-eval-runner.ts       # @kbn/evals suite runner
-│   ├── eval-suite-runner.ts        # End-to-end eval orchestration
-│   ├── queue-service.ts            # ES-backed work queue
-│   ├── elasticsearch-results-store.ts  # Results persistence
-│   ├── health-monitor.ts           # Periodic health monitoring + alerting
-│   ├── system-health-check.ts      # Individual health checks
-│   ├── monitoring-integration.ts   # Prometheus + JSON metrics
-│   ├── metrics-collector.ts        # Operation timing/error tracking
-│   ├── trace-query-builder.ts      # OTLP trace queries
-│   ├── reasoning-prompt-builder.ts # Reasoning trace formatting
-│   ├── recommendation-report-builder.ts # Verdict computation
-│   ├── connector.ts                # Pluggable storage interface
-│   ├── elasticsearch-connector.ts  # ES storage (default)
-│   ├── local-connector.ts          # Local file storage (Phase 2)
-│   ├── golden-forwarder.ts         # Async replication to shared cluster
-│   └── slack-notifier.ts           # Slack webhook notifications
-├── worker/
-│   ├── stage1-worker.ts            # vLLM deployment + tool-call validation
-│   └── stage2-gate.ts              # Kibana eval execution gate
-└── utils/
-    └── logger.ts                   # Structured logging (pino)
+  cli.ts                              # CLI entry point (commander)
+  api/queue-server.ts                 # Express API + dashboard server
+  scheduler/
+    scheduler.ts                      # Pipeline orchestrator (queue -> stages -> report)
+    pipeline-state.ts                 # Pipeline run state machine
+  worker/
+    stage1-worker.ts                  # SSH -> GPU VM -> vLLM deploy -> benchmark
+    stage2-worker.ts                  # Kibana @kbn/evals runner
+    stage2-gate.ts                    # Stage 1 pass/fail gate
+    stage3-worker.ts                  # LLM reasoning over traces
+  services/
+    elasticsearch-results-store.ts    # ES persistence (all data)
+    queue-service.ts                  # ES-backed work queue
+    ssh-client.ts                     # SSHClientPool
+    vllm-deployment.ts                # Docker deploy on GPU VM
+    model-discovery.ts                # HuggingFace API polling
+    discovery-scheduler.ts            # Periodic discovery + auto-queue
+    hardware-estimator.ts             # VRAM estimation
+    hardware-profiles.ts              # Predefined GPU profiles
+    model-smoke-test.ts               # 3-tier model validation
+    buildkite-eval-trigger.ts         # Buildkite REST API integration
+    buildkite-connector-builder.ts    # KIBANA_TESTING_AI_CONNECTORS builder
+    golden-forwarder.ts               # Async replication to shared ES
+    recommendation-report-builder.ts  # Verdict computation
+    hf-card-parser.ts                 # HuggingFace model card parsing
+    es-index-mappings.ts              # ES index definitions
+  types/
+    config.ts                         # Zod-validated AppConfig
+    ci-eval.ts                        # CI evaluation result type
+    benchmark.ts                      # Benchmark result type
+    recommendation.ts                 # Recommendation report type
 tests/
-├── unit/                           # Unit tests (vitest)
-docs/                               # Additional documentation
-scripts/
-└── health-check.sh                 # Bash pre-flight health check
+  unit/                               # 858 unit tests (vitest)
+  integration/                        # Integration tests
 ```
+
+See [docs/architecture.md](docs/architecture.md) for detailed data flow and service interactions, and [docs/runbook.md](docs/runbook.md) for operational procedures.
