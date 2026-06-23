@@ -379,12 +379,12 @@ export class ElasticsearchResultsStore {
           aggs: { count: { value_count: { field: 'model_id' } } },
         },
         last_run: {
-          max: { field: 'timestamp' },
+          max: { field: '@timestamp' },
         },
         latest_passed: {
           top_hits: {
             size: 1,
-            sort: [{ timestamp: { order: 'desc' } }],
+            sort: [{ '@timestamp': { order: 'desc' } }],
             _source: ['passed'],
           },
         },
@@ -406,8 +406,8 @@ export class ElasticsearchResultsStore {
       (resp.aggregations?.passed_count as { count: { value: number } })?.count?.value ?? 0;
     const failedVal =
       (resp.aggregations?.failed_count as { count: { value: number } })?.count?.value ?? 0;
-    const lastRun =
-      (resp.aggregations?.last_run as { value: string | null })?.value ?? null;
+    const lastRunAgg = resp.aggregations?.last_run as { value: number | null; value_as_string?: string } | undefined;
+    const lastRun = lastRunAgg?.value_as_string ?? (lastRunAgg?.value ? new Date(lastRunAgg.value).toISOString() : null);
     const latestHits =
       (resp.aggregations?.latest_passed as { hits: { hits: { _source?: { passed: boolean } }[] } })
         ?.hits?.hits ?? [];
