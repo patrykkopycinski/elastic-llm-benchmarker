@@ -148,6 +148,44 @@ The dashboard server (`queue start`) exposes:
 - `GET /` — Web dashboard (queue status, results, real-time updates)
 - `GET /api/v1/queue/stream` — SSE stream for real-time queue updates
 
+## Recommendation Reports
+
+After each pipeline run, a **Recommendation Report** is generated with a verdict:
+
+| Verdict | Meaning |
+|---------|---------|
+| `support` | Model meets all thresholds and eval suites — ready for production |
+| `investigate` | Model partially passes — worth manual review |
+| `reject` | Model fails critical thresholds — not suitable |
+
+```bash
+# Get latest recommendation for a model
+npx elastic-llm-benchmarker recommend --model meta-llama/Llama-3.1-8B-Instruct
+
+# List all recommendations by verdict
+npx elastic-llm-benchmarker recommend --verdict support --limit 10
+```
+
+## External Users (Phase 2 — Local Connector)
+
+Run the benchmarker without Elasticsearch by using the local connector:
+
+```bash
+# Start with local file output (no ES required)
+npx elastic-llm-benchmarker start \
+  --connector local \
+  --output-dir ./my-results \
+  --config config.yaml
+
+# Results are written as JSON files:
+# ./my-results/benchmarks/      — Stage 1 benchmark results
+# ./my-results/recommendations/ — Recommendation reports + index.jsonl
+# ./my-results/stage2/          — Kibana eval results
+# ./my-results/stage3/          — Reasoning analysis
+```
+
+The `Connector` interface (`src/services/connector.ts`) can be extended for custom storage backends.
+
 ## Development
 
 ```bash
@@ -184,7 +222,13 @@ src/
 │   ├── monitoring-integration.ts   # Prometheus + JSON metrics
 │   ├── metrics-collector.ts        # Operation timing/error tracking
 │   ├── trace-query-builder.ts      # OTLP trace queries
-│   └── reasoning-prompt-builder.ts # Reasoning trace formatting
+│   ├── reasoning-prompt-builder.ts # Reasoning trace formatting
+│   ├── recommendation-report-builder.ts # Verdict computation
+│   ├── connector.ts                # Pluggable storage interface
+│   ├── elasticsearch-connector.ts  # ES storage (default)
+│   ├── local-connector.ts          # Local file storage (Phase 2)
+│   ├── golden-forwarder.ts         # Async replication to shared cluster
+│   └── slack-notifier.ts           # Slack webhook notifications
 ├── worker/
 │   ├── stage1-worker.ts            # vLLM deployment + tool-call validation
 │   └── stage2-gate.ts              # Kibana eval execution gate

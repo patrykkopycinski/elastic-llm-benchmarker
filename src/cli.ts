@@ -49,6 +49,8 @@ import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js
 import { ConfigResearcherService } from './services/config-researcher.js';
 import { runEnqueue } from './cli/enqueue-handler.js';
 import { SystemHealthChecker } from './services/system-health-check.js';
+import { SlackNotifier } from './services/slack-notifier.js';
+import { LocalConnector } from './services/local-connector.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
 
@@ -219,21 +221,25 @@ program
 
 // ─── start command ─────────────────────────────────────────────────────────────
 
-program
-  .command('start')
-  .description('Start the benchmarking daemon (deprecated: use benchmarker-queue start instead)')
-  .action(() => {
-    const globalOpts = program.opts();
-    const jsonOutput = globalOpts['json'] as boolean;
-    const msg =
-      'Daemon removed. Run: benchmarker-queue start (see README for setup)';
-    if (jsonOutput) {
-      output({ error: msg }, true);
-    } else {
-      console.error(msg);
-    }
-    process.exit(1);
-  });
+const _binaryName = basename(process.argv[1] ?? '');
+
+if (_binaryName !== 'benchmarker-queue') {
+  program
+    .command('start')
+    .description('Start the benchmarking daemon (deprecated: use benchmarker-queue start instead)')
+    .action(() => {
+      const globalOpts = program.opts();
+      const jsonOutput = globalOpts['json'] as boolean;
+      const msg =
+        'Daemon removed. Run: benchmarker-queue start (see README for setup)';
+      if (jsonOutput) {
+        output({ error: msg }, true);
+      } else {
+        console.error(msg);
+      }
+      process.exit(1);
+    });
+}
 
 // ─── status command ────────────────────────────────────────────────────────────
 
@@ -835,6 +841,115 @@ program
     }
   });
 
+// ─── recommend command ─────────────────────────────────────────────────
+
+program
+  .command('recommend')
+  .description('Get the latest recommendation report for a model')
+  .option('--model <id>', 'Model ID to get recommendation for')
+  .option('--verdict <verdict>', 'Filter by verdict (support | investigate | reject)')
+  .option('--limit <n>', 'Number of reports to return', '10')
+  .option('--format <fmt>', 'Output format: json or text', 'text')
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const jsonOutput = (globalOpts['json'] as boolean) || opts['format'] === 'json';
+    const config = loadAppConfig({ config: globalOpts['config'] as string, json: jsonOutput });
+    const esClient = createEsClient(config);
+    if (!esClient) {
+      outputError('Cannot connect to Elasticsearch. Check config.', jsonOutput);
+      process.exit(1);
+    }
+
+    const store = new ElasticsearchResultsStore(esClient);
+    await store.initialize();
+
+    try {
+      const modelId = opts['model'] as string | undefined;
+
+      if (modelId) {
+        const report = await store.getLatestRecommendation(modelId);
+        if (!report) {
+          outputError(`No recommendation found for ${modelId}`, jsonOutput);
+          process.exit(1);
+        }
+        if (jsonOutput) {
+          output(report, true);
+        } else {
+          printReport(report);
+        }
+      } else {
+        const reports = await store.queryRecommendations({
+          verdict: opts['verdict'] as string | undefined,
+          limit: parseInt(opts['limit'] as string, 10),
+        });
+
+        if (reports.length === 0) {
+          if (jsonOutput) {
+            output({ total: 0, data: [] }, true);
+          } else {
+            console.error('No recommendation reports found.');
+          }
+          return;
+        }
+
+        if (jsonOutput) {
+          output({ total: reports.length, data: reports }, true);
+        } else {
+          console.error(`Found ${reports.length} recommendation report(s):\n`);
+          for (const r of reports) {
+            printReportSummary(r);
+          }
+        }
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+function printReport(r: { modelId: string; verdict: string; confidence: string; hardwareProfile: string; stage1Passed: boolean; stage2Ran: boolean; stage2Passed: boolean | null; stage3Ran: boolean; stage1Metrics: { itl: { p50: number }; ttft: { p50: number }; throughputTps: number } | null; passingEvals: Array<{ suite: string; score: number; threshold: number; passed: boolean }>; blockingIssues: Array<{ severity: string; message: string }>; suggestions: Array<{ title: string; description: string }>; evaluatedAt: string; runId: string }): void {
+  const verdictColor = r.verdict === 'support' ? '\x1b[32m' : r.verdict === 'reject' ? '\x1b[31m' : '\x1b[33m';
+  console.error(`\n=== Recommendation Report: ${r.modelId} ===\n`);
+  console.error(`  Verdict:    ${verdictColor}${r.verdict.toUpperCase()}\x1b[0m`);
+  console.error(`  Confidence: ${r.confidence}`);
+  console.error(`  Hardware:   ${r.hardwareProfile}`);
+  console.error(`  Evaluated:  ${r.evaluatedAt}`);
+  console.error(`  Run ID:     ${r.runId}`);
+  console.error('');
+  console.error(`  Stage 1: ${r.stage1Passed ? 'PASSED' : 'FAILED'}`);
+  if (r.stage1Metrics) {
+    console.error(`    ITL p50:     ${r.stage1Metrics.itl.p50.toFixed(1)}ms`);
+    console.error(`    TTFT:        ${r.stage1Metrics.ttft.p50.toFixed(1)}ms`);
+    console.error(`    Throughput:  ${r.stage1Metrics.throughputTps.toFixed(1)} tps`);
+  }
+  console.error(`  Stage 2: ${r.stage2Ran ? (r.stage2Passed ? 'PASSED' : 'FAILED') : 'NOT RUN'}`);
+  if (r.passingEvals.length > 0) {
+    for (const e of r.passingEvals) {
+      const status = e.passed ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
+      console.error(`    [${status}] ${e.suite}: ${(e.score * 100).toFixed(0)}% (threshold: ${(e.threshold * 100).toFixed(0)}%)`);
+    }
+  }
+  console.error(`  Stage 3: ${r.stage3Ran ? 'COMPLETED' : 'NOT RUN'}`);
+  if (r.blockingIssues.length > 0) {
+    console.error('\n  Blocking Issues:');
+    for (const i of r.blockingIssues) {
+      console.error(`    [${i.severity}] ${i.message}`);
+    }
+  }
+  if (r.suggestions.length > 0) {
+    console.error('\n  Suggestions:');
+    for (const s of r.suggestions) {
+      console.error(`    - ${s.title}: ${s.description}`);
+    }
+  }
+  console.error('');
+}
+
+function printReportSummary(r: { modelId: string; verdict: string; confidence: string; evaluatedAt: string; stage1Passed: boolean; stage2Ran: boolean }): void {
+  const verdictColor = r.verdict === 'support' ? '\x1b[32m' : r.verdict === 'reject' ? '\x1b[31m' : '\x1b[33m';
+  const stages = `S1:${r.stage1Passed ? 'Y' : 'N'} S2:${r.stage2Ran ? 'Y' : '-'}`;
+  console.error(`  ${verdictColor}${r.verdict.toUpperCase().padEnd(12)}\x1b[0m ${r.modelId.padEnd(40)} [${r.confidence}] ${stages}  ${r.evaluatedAt}`);
+}
+
 // ─── benchmark-model command ───────────────────────────────────────────────
 
 program
@@ -1026,9 +1141,7 @@ program
 
 // ─── benchmarker-queue commands ───────────────────────────────────────────────
 
-const binaryName = basename(process.argv[1] ?? '');
-
-if (binaryName === 'benchmarker-queue') {
+if (_binaryName === 'benchmarker-queue') {
   program.name('benchmarker-queue').description('LLM Benchmarker Queue Scheduler');
 
   program
@@ -1039,12 +1152,17 @@ if (binaryName === 'benchmarker-queue') {
     .option('--stage2', 'Enable Stage 2 eval pipeline', false)
     .option('--stage3', 'Enable Stage 3 reasoning pipeline', true)
     .option('--queue-model <modelId>', 'Enqueue a single model and exit (does not start scheduler)')
+    .option('--connector <type>', 'Output connector: "elasticsearch" (default) or "local"', 'elasticsearch')
+    .option('--output-dir <path>', 'Output directory for local connector', './benchmark-output')
     .action(async (opts) => {
       const configPath = opts['config'] as string;
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
       const enableStage2 = opts['stage2'] as boolean;
       const enableStage3 = opts['stage3'] as boolean;
       const queueModel = opts['queueModel'] as string | undefined;
+      const connectorType = opts['connector'] as string;
+      const outputDir = opts['outputDir'] as string;
+      const useLocalConnector = connectorType === 'local';
 
       // Load config first — needed for both one-off enqueue and scheduler start
       const config = loadAppConfig({ config: configPath, json: false });
@@ -1158,6 +1276,28 @@ if (binaryName === 'benchmarker-queue') {
         logger.info('Stage 3 reasoning pipeline enabled');
       }
 
+      // Optionally create Slack notifier
+      const slackWebhookUrl = config.notifications.webhook.url;
+      const slackNotifier = slackWebhookUrl && config.notifications.webhook.enabled
+        ? new SlackNotifier({ webhookUrl: slackWebhookUrl, logLevel: config.logLevel })
+        : undefined;
+
+      if (slackNotifier) {
+        logger.info('Slack notifications enabled');
+      }
+
+      // Local connector mode
+      if (useLocalConnector) {
+        const localConnector = new LocalConnector({ outputDir, logLevel: config.logLevel });
+        const initResult = await localConnector.initialize();
+        if (!initResult.success) {
+          logger.error('Failed to initialize local connector', { error: initResult.error });
+          lockfile.release();
+          process.exit(1);
+        }
+        logger.info('Local connector initialized', { outputDir });
+      }
+
       // Create scheduler
       const scheduler = new Scheduler(
         queueService,
@@ -1172,6 +1312,8 @@ if (binaryName === 'benchmarker-queue') {
         stage2Worker,
         resultsStore,
         stage3Worker,
+        config,
+        slackNotifier,
       );
 
       logger.info('Scheduler starting. Polling every %d ms...', pollInterval);

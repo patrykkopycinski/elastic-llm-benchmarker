@@ -11,6 +11,7 @@ import { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
 import { createLogger } from '../utils/logger.js';
 import type { EvalSuiteResult } from './eval-suite-runner.js';
 import type { Stage2Result, Stage3Result, Stage3Suggestion } from '../scheduler/pipeline-state.js';
+import type { RecommendationReport } from '../types/recommendation.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
@@ -806,6 +807,183 @@ export class ElasticsearchResultsStore {
       rawResponse: src.raw_response ? String(src.raw_response) : undefined,
       startedAt: String(src.started_at ?? ''),
       completedAt: String(src.completed_at ?? ''),
+    };
+  }
+
+  async saveRecommendationReport(report: RecommendationReport): Promise<string> {
+    const doc: Record<string, unknown> = {
+      '@timestamp': report.evaluatedAt,
+      report_id: report.reportId,
+      model_id: report.modelId,
+      model_name: report.modelName,
+      verdict: report.verdict,
+      confidence: report.confidence,
+      hardware_profile: report.hardwareProfile,
+      stage1_passed: report.stage1Passed,
+      stage2_passed: report.stage2Passed,
+      stage2_ran: report.stage2Ran,
+      stage3_ran: report.stage3Ran,
+      passing_evals: report.passingEvals.map((e) => ({
+        suite: e.suite,
+        score: e.score,
+        threshold: e.threshold,
+        passed: e.passed,
+      })),
+      blocking_issues: report.blockingIssues.map((i) => ({
+        severity: i.severity,
+        category: i.category,
+        message: i.message,
+      })),
+      vllm_config_used: {
+        context_length: report.vllmConfigUsed.contextLength ?? null,
+        quantization: report.vllmConfigUsed.quantization ?? null,
+        tool_call_parser: report.vllmConfigUsed.toolCallParser ?? null,
+        flags: report.vllmConfigUsed.flags,
+        source: report.vllmConfigUsed.source,
+      },
+      suggestions: report.suggestions.map((s) => ({
+        category: s.category,
+        title: s.title,
+        description: s.description,
+        expected_impact: s.expectedImpact,
+        confidence: s.confidence,
+      })),
+      stage1_metrics: report.stage1Metrics
+        ? {
+            itl: report.stage1Metrics.itl,
+            ttft: report.stage1Metrics.ttft,
+            throughput_tps: report.stage1Metrics.throughputTps,
+          }
+        : null,
+      stage2_results: report.stage2Results
+        ? {
+            suites_run: report.stage2Results.suitesRun,
+            suite_results: report.stage2Results.suiteResults,
+          }
+        : null,
+      reasoning_summary: report.reasoningSummary,
+      run_id: report.runId,
+      version: report.version,
+      evaluated_at: report.evaluatedAt,
+      evaluated_by: report.evaluatedBy,
+      source: report.source,
+    };
+
+    const id = report.reportId;
+    await this.esClient.index({
+      index: INDEX_NAMES.RECOMMENDATION_REPORTS,
+      id,
+      document: doc,
+    });
+    this.logger.info('Stored recommendation report', { modelId: report.modelId, verdict: report.verdict, id });
+    return id;
+  }
+
+  async getLatestRecommendation(modelId: string): Promise<RecommendationReport | null> {
+    const resp = await this.esClient.search({
+      index: INDEX_NAMES.RECOMMENDATION_REPORTS,
+      size: 1,
+      sort: [{ evaluated_at: { order: 'desc' } }],
+      query: { term: { model_id: modelId } },
+    });
+
+    const hits = resp.hits.hits;
+    if (!hits || hits.length === 0) return null;
+
+    const src = hits[0]!._source as Record<string, unknown>;
+    if (!src) return null;
+    return this.parseRecommendationReport(src);
+  }
+
+  async queryRecommendations(
+    filters?: { verdict?: string; limit?: number },
+  ): Promise<RecommendationReport[]> {
+    const must: Record<string, unknown>[] = [];
+    if (filters?.verdict) must.push({ term: { verdict: filters.verdict } });
+
+    const resp = await this.esClient.search({
+      index: INDEX_NAMES.RECOMMENDATION_REPORTS,
+      query: must.length > 0 ? { bool: { must } } : { match_all: {} },
+      sort: [{ evaluated_at: { order: 'desc' } }],
+      size: filters?.limit ?? 100,
+    });
+
+    const hits = (resp.hits.hits ?? []).map((h) => h._source).filter(Boolean) as Record<string, unknown>[];
+    return hits.map((h) => this.parseRecommendationReport(h));
+  }
+
+  private parseRecommendationReport(src: Record<string, unknown>): RecommendationReport {
+    const evals = Array.isArray(src.passing_evals)
+      ? (src.passing_evals as Record<string, unknown>[]).map((e) => ({
+          suite: String(e.suite ?? ''),
+          score: Number(e.score ?? 0),
+          threshold: Number(e.threshold ?? 0),
+          passed: Boolean(e.passed),
+        }))
+      : [];
+
+    const issues = Array.isArray(src.blocking_issues)
+      ? (src.blocking_issues as Record<string, unknown>[]).map((i) => ({
+          severity: String(i.severity ?? 'info') as 'critical' | 'warning' | 'info',
+          category: String(i.category ?? ''),
+          message: String(i.message ?? ''),
+        }))
+      : [];
+
+    const suggestions = Array.isArray(src.suggestions)
+      ? (src.suggestions as Record<string, unknown>[]).map((s) => ({
+          category: String(s.category ?? ''),
+          title: String(s.title ?? ''),
+          description: String(s.description ?? ''),
+          expectedImpact: String(s.expected_impact ?? ''),
+          confidence: (String(s.confidence ?? 'medium') as 'high' | 'medium' | 'low'),
+        }))
+      : [];
+
+    const vllmRaw = (src.vllm_config_used ?? {}) as Record<string, unknown>;
+    const s1Raw = src.stage1_metrics as Record<string, unknown> | null;
+    const s2Raw = src.stage2_results as Record<string, unknown> | null;
+
+    return {
+      reportId: String(src.report_id ?? ''),
+      modelId: String(src.model_id ?? ''),
+      modelName: String(src.model_name ?? ''),
+      verdict: String(src.verdict ?? 'reject') as 'support' | 'investigate' | 'reject',
+      confidence: String(src.confidence ?? 'low') as 'high' | 'medium' | 'low',
+      hardwareProfile: String(src.hardware_profile ?? ''),
+      stage1Passed: Boolean(src.stage1_passed),
+      stage2Passed: src.stage2_passed === null ? null : Boolean(src.stage2_passed),
+      stage2Ran: Boolean(src.stage2_ran),
+      stage3Ran: Boolean(src.stage3_ran),
+      passingEvals: evals,
+      blockingIssues: issues,
+      vllmConfigUsed: {
+        contextLength: vllmRaw.context_length != null ? Number(vllmRaw.context_length) : undefined,
+        quantization: vllmRaw.quantization ? String(vllmRaw.quantization) : undefined,
+        toolCallParser: vllmRaw.tool_call_parser ? String(vllmRaw.tool_call_parser) : undefined,
+        flags: Array.isArray(vllmRaw.flags) ? (vllmRaw.flags as string[]) : [],
+        source: (String(vllmRaw.source ?? 'model_card') as 'model_card' | 'manual_override' | 'hardware_profile_default'),
+      },
+      suggestions,
+      stage1Metrics: s1Raw
+        ? {
+            itl: (s1Raw.itl ?? { p50: 0, p99: 0, mean: 0 }) as { p50: number; p99: number; mean: number },
+            ttft: (s1Raw.ttft ?? { p50: 0, p99: 0, mean: 0 }) as { p50: number; p99: number; mean: number },
+            throughputTps: Number((s1Raw as Record<string, unknown>).throughput_tps ?? 0),
+          }
+        : null,
+      stage2Results: s2Raw
+        ? {
+            suitesRun: Array.isArray(s2Raw.suites_run) ? (s2Raw.suites_run as string[]) : [],
+            suiteResults: (s2Raw.suite_results ?? {}) as Record<string, { score: number; passRate: number; durationSec: number }>,
+          }
+        : null,
+      reasoningSummary: src.reasoning_summary ? String(src.reasoning_summary) : null,
+      runId: String(src.run_id ?? ''),
+      version: Number(src.version ?? 1),
+      evaluatedAt: String(src.evaluated_at ?? ''),
+      evaluatedBy: String(src.evaluated_by ?? ''),
+      source: String(src.source ?? 'manual') as 'discovery' | 'manual',
     };
   }
 

@@ -17,3 +17,14 @@ export type {
   ModelCapabilities,
   EnhancedVllmConfig,
 } from './reasoning.js';
+export type {
+  RecommendationReport,
+  Verdict,
+  Confidence,
+  EvalScore,
+  BlockingIssue,
+  VllmConfigUsed,
+  ReportSuggestion,
+  Stage1Metrics,
+  Stage2Results,
+} from './recommendation.js';

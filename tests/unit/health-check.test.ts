@@ -774,8 +774,8 @@ describe('HealthCheckService', () => {
     });
 
     it('reports golden forwarder healthy when pending < 100 and no errors', async () => {
-      const forwarder = new GoldenForwarder();
-      forwarder.incrementPending();
+      const forwarder = new GoldenForwarder({ enabled: true, client: {} as never });
+      forwarder.enqueue('test', 'id1', { a: 1 });
 
       const checker = new SystemHealthChecker({
         config: baseConfig,
@@ -788,9 +788,9 @@ describe('HealthCheckService', () => {
     });
 
     it('reports golden forwarder unhealthy when pending >= 100', async () => {
-      const forwarder = new GoldenForwarder();
+      const forwarder = new GoldenForwarder({ enabled: true, client: {} as never, batchSize: 200 });
       for (let i = 0; i < 100; i++) {
-        forwarder.incrementPending();
+        forwarder.enqueue('test', `id${i}`, { a: i });
       }
 
       const checker = new SystemHealthChecker({

@@ -2,6 +2,10 @@ import type { QueueService, QueueEntry } from '../services/queue-service.js';
 import type { PipelineRun } from './pipeline-state.js';
 import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../worker/index.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
+import type { AppConfig } from '../types/config.js';
+import type { RecommendationReport } from '../types/recommendation.js';
+import { buildRecommendationReport } from '../services/recommendation-report-builder.js';
+import type { SlackNotifier } from '../services/slack-notifier.js';
 
 export interface SchedulerOptions {
   pollIntervalMs: number;
@@ -20,6 +24,8 @@ export class Scheduler {
     private stage2Worker?: Stage2Worker,
     private resultsStore?: ElasticsearchResultsStore,
     private stage3Worker?: Stage3Worker,
+    private config?: AppConfig,
+    private slackNotifier?: SlackNotifier,
   ) {}
 
   async start(): Promise<void> {
@@ -109,7 +115,27 @@ export class Scheduler {
         }
       }
 
+      // Build and save recommendation report
+      let report: RecommendationReport | undefined;
+      if (this.resultsStore && this.config) {
+        try {
+          report = buildRecommendationReport(run, { config: this.config });
+          await this.resultsStore.saveRecommendationReport(report);
+        } catch {
+          // Report generation failure should not block pipeline completion
+        }
+      }
+
       await this.queueService.updateStatus(entry.id, 'completed');
+
+      // Send Slack notification for actionable verdicts
+      if (report && this.slackNotifier) {
+        try {
+          await this.slackNotifier.notifyVerdict(report);
+        } catch {
+          // Notification failure should not block pipeline
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await this.queueService.updateStatus(entry.id, 'failed', message);

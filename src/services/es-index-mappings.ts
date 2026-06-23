@@ -8,6 +8,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_EVALUATIONS: 'benchmark-evaluations',
   BENCHMARKER_STAGE2: 'benchmark-stage2',
   BENCHMARKER_REASONING: 'benchmark-reasoning',
+  RECOMMENDATION_REPORTS: 'recommendation-reports',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -286,6 +287,97 @@ export const INDEX_MAPPINGS: Record<
         started_at: { type: 'date' },
         completed_at: { type: 'date' },
         '@timestamp': { type: 'date' },
+      },
+    },
+    settings: {
+      number_of_shards: 1,
+      number_of_replicas: 1,
+    },
+  },
+  [INDEX_NAMES.RECOMMENDATION_REPORTS]: {
+    mappings: {
+      properties: {
+        '@timestamp': { type: 'date' },
+        report_id: { type: 'keyword' },
+        model_id: { type: 'keyword' },
+        model_name: { type: 'text', fields: { keyword: { type: 'keyword' } } },
+        verdict: { type: 'keyword' },
+        confidence: { type: 'keyword' },
+        hardware_profile: { type: 'keyword' },
+        stage1_passed: { type: 'boolean' },
+        stage2_passed: { type: 'boolean' },
+        stage2_ran: { type: 'boolean' },
+        stage3_ran: { type: 'boolean' },
+        passing_evals: {
+          type: 'nested',
+          properties: {
+            suite: { type: 'keyword' },
+            score: { type: 'float' },
+            threshold: { type: 'float' },
+            passed: { type: 'boolean' },
+          },
+        },
+        blocking_issues: {
+          type: 'nested',
+          properties: {
+            severity: { type: 'keyword' },
+            category: { type: 'keyword' },
+            message: { type: 'text' },
+          },
+        },
+        vllm_config_used: {
+          type: 'object',
+          properties: {
+            context_length: { type: 'integer' },
+            quantization: { type: 'keyword' },
+            tool_call_parser: { type: 'keyword' },
+            flags: { type: 'keyword' },
+            source: { type: 'keyword' },
+          },
+        },
+        suggestions: {
+          type: 'nested',
+          properties: {
+            category: { type: 'keyword' },
+            title: { type: 'text' },
+            description: { type: 'text' },
+            expected_impact: { type: 'text' },
+            confidence: { type: 'keyword' },
+          },
+        },
+        stage1_metrics: {
+          type: 'object',
+          properties: {
+            itl: {
+              properties: {
+                p50: { type: 'float' },
+                p99: { type: 'float' },
+                mean: { type: 'float' },
+              },
+            },
+            ttft: {
+              properties: {
+                p50: { type: 'float' },
+                p99: { type: 'float' },
+                mean: { type: 'float' },
+              },
+            },
+            throughput_tps: { type: 'float' },
+          },
+        },
+        stage2_results: {
+          type: 'object',
+          properties: {
+            suites_run: { type: 'keyword' },
+            suite_results: { type: 'object', enabled: false },
+          },
+        },
+        reasoning_summary: { type: 'text' },
+        run_id: { type: 'keyword' },
+        version: { type: 'integer' },
+        evaluated_at: { type: 'date' },
+        evaluated_by: { type: 'keyword' },
+        source: { type: 'keyword' },
       },
     },
     settings: {

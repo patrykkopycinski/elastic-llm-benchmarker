@@ -146,3 +146,12 @@ export type {
   AutoQueueResult,
   RunOnceResult,
 } from './discovery-scheduler.js';
+export { buildRecommendationReport } from './recommendation-report-builder.js';
+export type { ReportBuilderOptions } from './recommendation-report-builder.js';
+export { SlackNotifier } from './slack-notifier.js';
+export type { SlackNotifierOptions } from './slack-notifier.js';
+export { GoldenForwarder } from './golden-forwarder.js';
+export type { ReplicationError } from './golden-forwarder.js';
+export type { Connector } from './connector.js';
+export { ElasticsearchConnector } from './elasticsearch-connector.js';
+export { LocalConnector } from './local-connector.js';

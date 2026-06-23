@@ -216,3 +216,51 @@ export type {
   KibanaEvalReport,
   KibanaEvalRunnerConfig,
 } from './types/kibana-eval.js';
+
+// Recommendation report exports
+export { buildRecommendationReport } from './services/recommendation-report-builder.js';
+export type { ReportBuilderOptions } from './services/recommendation-report-builder.js';
+export type {
+  RecommendationReport,
+  Verdict,
+  Confidence,
+  EvalScore,
+  BlockingIssue,
+  VllmConfigUsed,
+  ReportSuggestion,
+  Stage1Metrics,
+  Stage2Results,
+} from './types/recommendation.js';
+
+// Connector exports
+export type { Connector } from './services/connector.js';
+export { ElasticsearchConnector } from './services/elasticsearch-connector.js';
+export { LocalConnector } from './services/local-connector.js';
+
+// Golden forwarder exports
+export { GoldenForwarder } from './services/golden-forwarder.js';
+export type { ReplicationError, GoldenForwarderOptions } from './services/golden-forwarder.js';
+
+// Slack notifier exports
+export { SlackNotifier } from './services/slack-notifier.js';
+export type { SlackNotifierOptions } from './services/slack-notifier.js';
+
+// Trace reasoning exports
+export { TraceQueryBuilderImpl } from './services/trace-query-builder.js';
+export type { TraceSummary, TraceQueryBuilder } from './services/trace-query-builder.js';
+export { ReasoningPromptBuilderImpl } from './services/reasoning-prompt-builder.js';
+export type { ReasoningPromptBuilder } from './services/reasoning-prompt-builder.js';
+export { LlmClientImpl } from './services/llm-client.js';
+export type { LlmClient, LlmResponse } from './services/llm-client.js';
+
+// Discovery scheduler exports
+export { DiscoveryScheduler } from './services/discovery-scheduler.js';
+export type {
+  ScoredModel,
+  DiscoverySchedulerDependencies,
+  AutoQueueResult,
+  RunOnceResult,
+} from './services/discovery-scheduler.js';
+
+// System health check exports
+export { SystemHealthChecker } from './services/system-health-check.js';
