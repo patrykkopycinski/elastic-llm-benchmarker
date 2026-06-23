@@ -349,6 +349,28 @@
     .bar-row text.val { fill: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
     .axis-cap { font-size: 11px; fill: var(--text-soft); }
 
+    /* ── Recommendation badges ─────────────────────────── */
+    .badge.support { color: var(--good); background: var(--good-soft); border-color: var(--good); }
+    .badge.investigate { color: var(--warn); background: var(--warn-soft); border-color: var(--warn); }
+    .badge.reject { color: var(--bad); background: var(--bad-soft); border-color: var(--bad); }
+
+    .rec-table { min-width: 600px; }
+    .rec-table td.model { max-width: 240px; }
+    .rec-tags { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+    .rec-tags .tag {
+      font-size: 10px; padding: 1px 6px; border-radius: 4px;
+      background: var(--surface-elev); color: var(--text-muted); border: 1px solid var(--border);
+    }
+    .confidence-bar {
+      display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end;
+    }
+    .confidence-bar .track {
+      width: 48px; height: 5px; background: var(--surface-elev);
+      border-radius: 999px; overflow: hidden; flex: none;
+    }
+    .confidence-bar .fill { height: 100%; border-radius: 999px; }
+    .confidence-bar .num { width: 30px; text-align: right; font-size: 11px; }
+
     @media (max-width: 1080px) {
       .kpis { grid-template-columns: repeat(2, 1fr); }
       .grid-main { grid-template-columns: 1fr; }
@@ -412,6 +434,24 @@
         <div class="panel-body" id="queue-body">
           <div class="empty">Loading queue…</div>
         </div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px" id="recommendations">
+      <div class="panel-head">
+        <h2>Recommendation reports</h2>
+        <div style="display:flex;gap:8px;align-items:center">
+          <select id="rec-filter" class="btn" style="padding:5px 10px;font-size:12px;appearance:auto;background:var(--surface-elev);color:var(--text);border:1px solid var(--border-strong);border-radius:6px">
+            <option value="">All verdicts</option>
+            <option value="support">Support</option>
+            <option value="investigate">Investigate</option>
+            <option value="reject">Reject</option>
+          </select>
+          <span class="caption" id="rec-caption">latest reports</span>
+        </div>
+      </div>
+      <div class="panel-body" id="rec-body">
+        <div class="empty">Loading recommendations…</div>
       </div>
     </div>
 
@@ -831,11 +871,97 @@
       pollTimer = setInterval(pollQueue, 5000);
     }
 
+    // ── Recommendations ─────────────────────────────────
+    function confidenceToNum(c) {
+      if (c === "high") return 1;
+      if (c === "medium") return 0.6;
+      return 0.25;
+    }
+    function confidenceColor(c) {
+      if (c === "high") return "var(--good)";
+      if (c === "medium") return "var(--warn)";
+      return "var(--bad)";
+    }
+
+    function loadRecommendations(verdict) {
+      var url = "/api/recommendations?size=50";
+      if (verdict) url += "&verdict=" + encodeURIComponent(verdict);
+      return getJSON(url).then(function (d) {
+        renderRecommendations((d && d.reports) || []);
+      }).catch(function () {
+        $("rec-body").innerHTML = '<div class="empty">Could not load recommendations.</div>';
+      });
+    }
+
+    function renderRecommendations(reports) {
+      var body = $("rec-body");
+      if (!reports.length) {
+        body.innerHTML = '<div class="empty">No recommendation reports yet. Run a benchmark to generate one.</div>';
+        $("rec-caption").textContent = "0 reports";
+        return;
+      }
+      $("rec-caption").textContent = reports.length + " reports";
+
+      var html = '<div class="table-wrap"><table class="rec-table"><thead><tr>' +
+        '<th style="text-align:left">Model</th>' +
+        '<th>Verdict</th>' +
+        '<th>Confidence</th>' +
+        '<th>ITL (ms)</th>' +
+        '<th>TTFT (ms)</th>' +
+        '<th>Throughput</th>' +
+        '<th>Evals</th>' +
+        '<th>Issues</th>' +
+        '<th>Evaluated</th>' +
+        '</tr></thead><tbody>';
+
+      reports.forEach(function (r) {
+        var v = r.verdict || "unknown";
+        var conf = r.confidence || null;
+        var confNum = conf ? confidenceToNum(conf) : 0;
+        var confBar = !conf
+          ? '<span class="muted">—</span>'
+          : '<span class="confidence-bar">' +
+            '<span class="track"><span class="fill" style="width:' + Math.round(confNum * 100) + '%;background:' + confidenceColor(conf) + '"></span></span>' +
+            '<span class="num" style="color:' + confidenceColor(conf) + '">' + esc(conf) + '</span></span>';
+
+        var s1 = r.stage1Metrics || {};
+        var itlMean = s1.itl ? s1.itl.mean : null;
+        var ttftMean = s1.ttft ? s1.ttft.mean : null;
+        var tps = s1.throughputTps || null;
+        var evalCount = (r.passingEvals || []).length;
+        var issueCount = (r.blockingIssues || []).length;
+
+        html += "<tr>" +
+          '<td class="model"><div class="name">' + esc(r.modelName || r.modelId) + "</div>" +
+            (r.modelName && r.modelName !== r.modelId ? '<div class="id">' + esc(r.modelId) + "</div>" : "") + "</td>" +
+          '<td><span class="badge ' + esc(v) + '">' + esc(v) + "</span></td>" +
+          "<td>" + confBar + "</td>" +
+          "<td>" + fmtNum(itlMean, 1) + "</td>" +
+          "<td>" + fmtNum(ttftMean, 0) + "</td>" +
+          "<td>" + fmtNum(tps, 0) + "</td>" +
+          "<td>" + (evalCount > 0
+            ? '<span class="badge pass">' + evalCount + " passed</span>"
+            : '<span class="muted">0</span>') + "</td>" +
+          "<td>" + (issueCount > 0
+            ? '<span class="badge fail">' + issueCount + "</span>"
+            : '<span class="muted">0</span>') + "</td>" +
+          '<td class="muted">' + fmtAgo(r.evaluatedAt) + "</td>" +
+          "</tr>";
+      });
+      html += "</tbody></table></div>";
+      body.innerHTML = html;
+    }
+
+    $("rec-filter").addEventListener("change", function () {
+      loadRecommendations(this.value);
+    });
+
     // ── Boot ───────────────────────────────────────────
-    $("refresh").addEventListener("click", loadAll);
+    $("refresh").addEventListener("click", function () { loadAll(); loadRecommendations($("rec-filter").value); });
     loadAll();
+    loadRecommendations("");
     connectQueue();
-    setInterval(loadAll, 15000);
+    setInterval(function () { loadAll(); loadRecommendations($("rec-filter").value); }, 15000);
   </script>
 </body>
 </html>

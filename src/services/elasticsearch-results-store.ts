@@ -896,16 +896,17 @@ export class ElasticsearchResultsStore {
   }
 
   async queryRecommendations(
-    filters?: { verdict?: string; limit?: number },
+    filters?: { verdict?: string; modelId?: string; limit?: number; size?: number },
   ): Promise<RecommendationReport[]> {
     const must: Record<string, unknown>[] = [];
     if (filters?.verdict) must.push({ term: { verdict: filters.verdict } });
+    if (filters?.modelId) must.push({ term: { model_id: filters.modelId } });
 
     const resp = await this.esClient.search({
       index: INDEX_NAMES.RECOMMENDATION_REPORTS,
       query: must.length > 0 ? { bool: { must } } : { match_all: {} },
       sort: [{ evaluated_at: { order: 'desc' } }],
-      size: filters?.limit ?? 100,
+      size: filters?.size ?? filters?.limit ?? 100,
     });
 
     const hits = (resp.hits.hits ?? []).map((h) => h._source).filter(Boolean) as Record<string, unknown>[];

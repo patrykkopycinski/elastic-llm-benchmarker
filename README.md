@@ -91,7 +91,7 @@ npx elastic-llm-benchmarker start
 
 | Command | Description |
 |---------|-------------|
-| `queue start` | Start the dashboard + API server (default: port 3100) |
+| `queue start` | Start the dashboard + API server (default: port 3200) |
 
 ## Configuration
 
@@ -108,7 +108,7 @@ npx elastic-llm-benchmarker start
 | `GCP_ZONE` | For vLLM | GCP zone (default: `us-central1-a`) |
 | `GCP_PROJECT` | For vLLM | GCP project ID |
 | `HF_TOKEN` | For discovery | HuggingFace API token |
-| `PORT` | No | Dashboard server port (default: 3100) |
+| `PORT` | No | Dashboard server port (default: 3200) |
 | `API_KEYS` | No | Comma-separated API keys for dashboard auth |
 | `REQUIRE_AUTH` | No | Set `true` to require API key auth |
 

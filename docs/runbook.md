@@ -61,7 +61,7 @@ GCP_PROJECT=your-project
 HF_TOKEN=hf_xxx
 
 # Dashboard (optional)
-PORT=3100
+PORT=3200
 API_KEYS=key1,key2
 REQUIRE_AUTH=true
 ```
@@ -179,7 +179,7 @@ scrape_configs:
   - job_name: 'llm-benchmarker'
     scrape_interval: 30s
     static_configs:
-      - targets: ['localhost:3100']
+      - targets: ['localhost:3200']
     metrics_path: /metrics
 ```
 
@@ -189,13 +189,13 @@ scrape_configs:
 livenessProbe:
   httpGet:
     path: /healthz
-    port: 3100
+    port: 3200
   initialDelaySeconds: 10
   periodSeconds: 30
 readinessProbe:
   httpGet:
     path: /api/v1/health
-    port: 3100
+    port: 3200
   initialDelaySeconds: 15
   periodSeconds: 30
   failureThreshold: 3
@@ -224,7 +224,7 @@ journalctl -u llm-benchmarker -n 100 --no-pager
 **Resolution:**
 - If entries are stuck in `processing`: the worker crashed mid-run. Cancel and retry:
   ```bash
-  curl -X POST http://localhost:3100/api/v1/queue/<id>/retry
+  curl -X POST http://localhost:3200/api/v1/queue/<id>/retry
   ```
 - If entries keep failing: check the model is available on HuggingFace, vLLM can load it
 - If queue is genuinely backed up: expected during bulk discovery — monitor, don't intervene

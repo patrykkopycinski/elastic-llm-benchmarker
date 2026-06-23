@@ -419,6 +419,21 @@ export function createQueueServer(config: QueueServerConfig & {
     }
   });
 
+  // GET /api/recommendations  → recommendation reports for dashboard
+  app.get('/api/recommendations', async (req, res) => {
+    try {
+      const modelId = typeof req.query.model === 'string' ? req.query.model : undefined;
+      const verdict = typeof req.query.verdict === 'string' ? req.query.verdict : undefined;
+      const size = Math.min(Math.max(Number(req.query.size) || 50, 1), 200);
+
+      const reports = await resultsStore.queryRecommendations({ modelId, verdict, size });
+      res.json({ reports, total: reports.length });
+    } catch (err) {
+      logger.error('GET /api/recommendations failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // Legacy routes (no auth, backward compat for internal UI)
   app.post('/api/queue', async (req, res) => {
     try {
@@ -578,7 +593,7 @@ export function createQueueServer(config: QueueServerConfig & {
 
 // ─── Starter ────────────────────────────────────────────────────────
 export function startQueueServer(config: QueueServerConfig = {}) {
-  const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : 3100);
+  const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : 3200);
   const app = createQueueServer(config);
   const server = app.listen(port, () => {
     const logger = createLogger();
@@ -590,7 +605,7 @@ export function startQueueServer(config: QueueServerConfig = {}) {
 // ─── CLI entrypoint ─────────────────────────────────────────────────
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startQueueServer({
-    port: Number(process.env.PORT) || 3100,
+    port: Number(process.env.PORT) || 3200,
     esUrl: process.env.ES_URL,
     esApiKey: process.env.ES_API_KEY,
     esUsername: process.env.ES_USERNAME,

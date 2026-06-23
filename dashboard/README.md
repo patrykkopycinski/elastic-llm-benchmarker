@@ -12,8 +12,8 @@ build step, npm install, or Kibana import. Start the API and open it in a
 browser:
 
 ```bash
-npm run api          # or: npm run start -- --api-port 3100
-open http://localhost:3100/        # also available at /dashboard
+npm run api          # or: npm run start -- --api-port 3200
+open http://localhost:3200/        # also available at /dashboard
 ```
 
 It renders live from the REST API:
