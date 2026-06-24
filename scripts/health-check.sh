@@ -20,11 +20,22 @@ EDOT_CHECK="${EDOT_CHECK:-optional}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Source .env for SSH credentials if present
+# Source .env for credentials not already provided by the caller (e.g. CLI pre-flight).
 if [[ -f "$PROJECT_ROOT/.env" ]]; then
   # shellcheck source=/dev/null
   set -a
+  # Preserve explicitly-set env vars (config file values passed by benchmarker-queue start).
+  _saved_ssh_host="${SSH_HOST:-}"
+  _saved_ssh_port="${SSH_PORT:-}"
+  _saved_ssh_username="${SSH_USERNAME:-}"
+  _saved_ssh_key_path="${SSH_KEY_PATH:-}"
+  _saved_es_url="${ELASTICSEARCH_URL:-}"
   source "$PROJECT_ROOT/.env"
+  [[ -n "$_saved_ssh_host" ]] && SSH_HOST="$_saved_ssh_host"
+  [[ -n "$_saved_ssh_port" ]] && SSH_PORT="$_saved_ssh_port"
+  [[ -n "$_saved_ssh_username" ]] && SSH_USERNAME="$_saved_ssh_username"
+  [[ -n "$_saved_ssh_key_path" ]] && SSH_KEY_PATH="$_saved_ssh_key_path"
+  [[ -n "$_saved_es_url" ]] && ELASTICSEARCH_URL="$_saved_es_url"
   set +a
 fi
 

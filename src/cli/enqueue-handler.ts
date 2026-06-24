@@ -81,7 +81,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
 
   // Agent Builder baseline gate (pre-deploy filter)
   if (config.agentBuilderBaseline.enabled && !force) {
-    const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config);
+    const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config, modelConfig ?? undefined);
     if (model && filter && !filter.passed) {
       return {
         success: false,
