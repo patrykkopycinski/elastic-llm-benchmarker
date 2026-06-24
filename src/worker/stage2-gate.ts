@@ -25,14 +25,12 @@ export class Stage2Gate {
     }
 
     const { metrics } = result;
-    const { maxTtftMs, minThroughputTps } = this.thresholds;
+    const { maxItlP50Ms, maxTtftMs, minThroughputTps } = this.thresholds;
 
-    // ITL p50 must be <= maxTtftMs (maxTtftMs is used as proxy upper bound
-    // because the schema does not define a maxItlP50Ms field).
-    if (metrics.itl_p50_ms > maxTtftMs) {
+    if (metrics.itl_p50_ms > maxItlP50Ms) {
       return {
         proceed: false,
-        reason: `ITL p50 (${metrics.itl_p50_ms}ms) exceeds threshold (${maxTtftMs}ms)`,
+        reason: `ITL p50 (${metrics.itl_p50_ms}ms) exceeds threshold (${maxItlP50Ms}ms)`,
       };
     }
 

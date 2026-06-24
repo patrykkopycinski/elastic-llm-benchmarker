@@ -188,8 +188,10 @@ function buildEnvConfig(): Record<string, unknown> {
 
   // Stage 2 thresholds from env vars
   const stage2Thresholds: Record<string, unknown> = {};
-  if (process.env['STAGE2_MIN_ITL_P50_MS'] !== undefined)
-    stage2Thresholds['minItlP50Ms'] = Number(process.env['STAGE2_MIN_ITL_P50_MS']);
+  if (process.env['STAGE2_MAX_ITL_P50_MS'] !== undefined)
+    stage2Thresholds['maxItlP50Ms'] = Number(process.env['STAGE2_MAX_ITL_P50_MS']);
+  else if (process.env['STAGE2_MIN_ITL_P50_MS'] !== undefined)
+    stage2Thresholds['maxItlP50Ms'] = Number(process.env['STAGE2_MIN_ITL_P50_MS']);
   if (process.env['STAGE2_MIN_THROUGHPUT_TPS'] !== undefined)
     stage2Thresholds['minThroughputTps'] = Number(process.env['STAGE2_MIN_THROUGHPUT_TPS']);
   if (process.env['STAGE2_MAX_TTFT_MS'] !== undefined)
@@ -236,7 +238,30 @@ function buildEnvConfig(): Record<string, unknown> {
     kibanaRepo['clonePath'] = process.env['KIBANA_REPO_CLONE_PATH'];
   if (process.env['KIBANA_REPO_AUTO_PULL'] !== undefined)
     kibanaRepo['autoPull'] = process.env['KIBANA_REPO_AUTO_PULL'] === 'true';
+  if (process.env['KIBANA_REPO_BRANCH'] !== undefined)
+    kibanaRepo['branch'] = process.env['KIBANA_REPO_BRANCH'];
   if (Object.keys(kibanaRepo).length > 0) env['kibanaRepo'] = kibanaRepo;
+
+  // Buildkite CI eval configuration from env vars
+  const buildkite: Record<string, unknown> = {};
+  if (process.env['BUILDKITE_API_TOKEN'] !== undefined)
+    buildkite['apiToken'] = process.env['BUILDKITE_API_TOKEN'];
+  if (process.env['BUILDKITE_ENABLED'] !== undefined)
+    buildkite['enabled'] = process.env['BUILDKITE_ENABLED'] === 'true';
+  if (process.env['BUILDKITE_ORG_SLUG'] !== undefined)
+    buildkite['orgSlug'] = process.env['BUILDKITE_ORG_SLUG'];
+  if (process.env['BUILDKITE_KIBANA_BRANCH'] !== undefined)
+    buildkite['kibanaBranch'] = process.env['BUILDKITE_KIBANA_BRANCH'];
+  if (process.env['BUILDKITE_DEFAULT_EVAL_SUITES'] !== undefined)
+    buildkite['defaultEvalSuites'] = process.env['BUILDKITE_DEFAULT_EVAL_SUITES']
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  if (process.env['BUILDKITE_TRIGGER_FULL_EVAL'] !== undefined)
+    buildkite['triggerFullEval'] = process.env['BUILDKITE_TRIGGER_FULL_EVAL'] === 'true';
+  if (process.env['BUILDKITE_DETACH_POLL'] !== undefined)
+    buildkite['detachPoll'] = process.env['BUILDKITE_DETACH_POLL'] === 'true';
+  if (Object.keys(buildkite).length > 0) env['buildkite'] = buildkite;
 
   // LLM configuration from env vars
   if (process.env['LLM_API_KEY'] !== undefined) env['llmApiKey'] = process.env['LLM_API_KEY'];
@@ -246,6 +271,12 @@ function buildEnvConfig(): Record<string, unknown> {
     env['llmMaxTokens'] = Number(process.env['LLM_MAX_TOKENS']);
   if (process.env['LLM_TEMPERATURE'] !== undefined)
     env['llmTemperature'] = Number(process.env['LLM_TEMPERATURE']);
+
+  // EIS (Elastic Inference Service) configuration from env vars
+  const eisKey =
+    process.env['EIS_CCM_API_KEY']?.trim() || process.env['KIBANA_EIS_CCM_API_KEY']?.trim();
+  if (eisKey) env['eisApiKey'] = eisKey;
+  if (process.env['EIS_MODEL'] !== undefined) env['eisModel'] = process.env['EIS_MODEL'];
 
   // Kibana connector configuration from env vars
   const kibanaConnector: Record<string, unknown> = {};
@@ -404,6 +435,46 @@ function resolveHardwareProfile(
 }
 
 /**
+ * When buildkite.kibanaBranch is set, align kibanaRepo.branch unless explicitly overridden.
+ */
+function syncKibanaRepoBranchWithBuildkite(
+  config: Record<string, unknown>,
+): Record<string, unknown> {
+  const buildkite = config['buildkite'];
+  const kibanaRepo = config['kibanaRepo'];
+  if (
+    typeof buildkite !== 'object' ||
+    buildkite === null ||
+    typeof kibanaRepo !== 'object' ||
+    kibanaRepo === null
+  ) {
+    return config;
+  }
+
+  const bkBranch = (buildkite as Record<string, unknown>)['kibanaBranch'];
+  if (typeof bkBranch !== 'string' || bkBranch.length === 0) {
+    return config;
+  }
+
+  const repo = { ...(kibanaRepo as Record<string, unknown>), branch: bkBranch };
+  return { ...config, kibanaRepo: repo };
+}
+
+/** Rename legacy minItlP50Ms → maxItlP50Ms in JSON configs. */
+function migrateLegacyStage2Thresholds(config: Record<string, unknown>): Record<string, unknown> {
+  const thresholds = config['stage2Thresholds'];
+  if (typeof thresholds !== 'object' || thresholds === null) {
+    return config;
+  }
+  const t = { ...(thresholds as Record<string, unknown>) };
+  if (t['maxItlP50Ms'] === undefined && t['minItlP50Ms'] !== undefined) {
+    t['maxItlP50Ms'] = t['minItlP50Ms'];
+    delete t['minItlP50Ms'];
+  }
+  return { ...config, stage2Thresholds: t };
+}
+
+/**
  * Loads and validates application configuration from multiple sources.
  *
  * Configuration is loaded and merged in the following priority order (highest wins):
@@ -447,6 +518,9 @@ export function loadConfig(overrides?: Partial<AppConfig>, options?: LoadConfigO
   // Layer 4: Resolve hardware profile ID to hardware configuration
   const registry = options?.profileRegistry ?? defaultHardwareProfileRegistry;
   mergedConfig = resolveHardwareProfile(mergedConfig, registry);
+
+  mergedConfig = syncKibanaRepoBranchWithBuildkite(mergedConfig);
+  mergedConfig = migrateLegacyStage2Thresholds(mergedConfig);
 
   // Validate and return
   try {

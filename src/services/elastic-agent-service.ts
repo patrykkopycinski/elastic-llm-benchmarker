@@ -22,7 +22,7 @@ export class ElasticAgentService {
     return result.success;
   }
 
-  async install(sshConfig: SSHConfig, version: string = '8.17.0'): Promise<boolean> {
+  async install(sshConfig: SSHConfig, version: string = '9.5.0-SNAPSHOT'): Promise<boolean> {
     if (await this.checkInstalled(sshConfig)) {
       this.logger.info('Elastic Agent already installed', { host: sshConfig.host });
       return true;
@@ -124,7 +124,7 @@ export class ElasticAgentService {
     } = {},
   ): Promise<boolean> {
     const { fleetUrl, enrollmentToken, version } = config;
-    const agentVersion = version ?? '8.17.0';
+    const agentVersion = version ?? '9.5.0-SNAPSHOT';
 
     if (!(await this.checkInstalled(sshConfig))) {
       const installed = await this.install(sshConfig, agentVersion);

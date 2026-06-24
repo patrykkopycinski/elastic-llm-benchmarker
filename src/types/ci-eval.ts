@@ -8,7 +8,7 @@ export interface CIEvalResult {
   buildkiteBuildUrl: string;
   buildkiteBuildNumber: number;
   pipelineSlug: string;
-  status: 'passed' | 'failed' | 'error';
+  status: 'passed' | 'failed' | 'error' | 'running';
   evalSuites: string[];
   scores?: Record<string, number>;
   artifacts?: Record<string, string>;

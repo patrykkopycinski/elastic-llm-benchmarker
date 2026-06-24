@@ -1,5 +1,49 @@
+import { spawn, type ChildProcess } from 'child_process';
 import { createLogger } from '../utils/logger.js';
 import type { TunnelConfig, TunnelProvider } from '../types/config.js';
+
+const NGROK_LOCAL_API = 'http://127.0.0.1:4040';
+
+interface NgrokApiTunnel {
+  name?: string;
+  public_url?: string;
+  config?: { addr?: string };
+}
+
+/** Fetch active tunnels from a running ngrok agent's local API. */
+async function listNgrokApiTunnels(): Promise<NgrokApiTunnel[]> {
+  try {
+    const res = await fetch(`${NGROK_LOCAL_API}/api/tunnels`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const body = (await res.json()) as { tunnels?: NgrokApiTunnel[] };
+    return body.tunnels ?? [];
+  } catch {
+    return [];
+  }
+}
+
+function tunnelMatchesLocalPort(tunnel: NgrokApiTunnel, localPort: number): boolean {
+  const addr = tunnel.config?.addr ?? '';
+  const portStr = String(localPort);
+  return (
+    addr === portStr ||
+    addr === `http://localhost:${portStr}` ||
+    addr === `http://127.0.0.1:${portStr}` ||
+    addr === `https://localhost:${portStr}`
+  );
+}
+
+function pickPublicTunnelUrl(tunnel: NgrokApiTunnel): string | null {
+  const url = tunnel.public_url;
+  if (url && isPublicTunnelUrl(url)) {
+    return url;
+  }
+  return null;
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -99,19 +143,25 @@ export class TunnelProviderNotAvailableError extends TunnelError {
   }
 }
 
-// ─── Ngrok Module Interface ───────────────────────────────────────────────────
+// ─── Ngrok helpers ────────────────────────────────────────────────────────────
 
 /**
- * Minimal type definition for the ngrok npm package.
- * Defined inline to avoid requiring ngrok as a compile-time dependency.
- * ngrok is an optional peer dependency loaded lazily at runtime.
+ * True when `url` is a routable public tunnel endpoint (not ngrok's local inspector on :4040).
  */
-interface NgrokModule {
-  connect(opts: { addr: number; region?: string; hostname?: string }): Promise<string>;
-  disconnect(): Promise<void>;
-  kill(): Promise<void>;
-  getUrl(): string | undefined;
-  authtoken(token: string): Promise<void>;
+export function isPublicTunnelUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'https:') {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (host === 'localhost' || host === '127.0.0.1') {
+      return false;
+    }
+    return host.includes('ngrok') || host.endsWith('.dev') || host.endsWith('.app');
+  } catch {
+    return false;
+  }
 }
 
 // ─── Ngrok Provider ───────────────────────────────────────────────────────────
@@ -119,19 +169,16 @@ interface NgrokModule {
 /**
  * Ngrok tunnel provider implementation.
  *
- * Uses the ngrok npm package to create and manage tunnels.
- * Supports checking for existing tunnels, creating new ones,
- * and graceful disconnection.
- *
- * ngrok is loaded lazily at runtime to allow the service to be
- * instantiated even when ngrok is not installed.
+ * Uses the ngrok **CLI** (`ngrok http <port>`) and the local agent API on :4040.
+ * The npm `ngrok` package's `connect()` fails when the target port is already
+ * bound (e.g. by our SSH port-forward to the GPU VM), so the CLI path is required.
  */
 class NgrokProvider implements TunnelProvider_Impl {
   private readonly logger;
   private readonly authToken: string | undefined;
   private readonly region: string;
   private readonly domain: string | undefined;
-  private ngrok: NgrokModule | null = null;
+  private cliProcess: ChildProcess | null = null;
 
   constructor(
     config: TunnelConfig,
@@ -143,108 +190,116 @@ class NgrokProvider implements TunnelProvider_Impl {
     this.domain = config.ngrokDomain;
   }
 
-  /**
-   * Lazily loads the ngrok module.
-   * This allows the service to be instantiated even if ngrok is not installed,
-   * deferring the error to when tunnel operations are actually attempted.
-   */
-  private async loadNgrok(): Promise<NgrokModule> {
-    if (this.ngrok) {
-      return this.ngrok;
-    }
-
-    try {
-      // Dynamic import of optional peer dependency.
-      // Use a variable to prevent TypeScript from resolving the module at compile time.
-      const ngrokModuleName = 'ngrok';
-      const mod = (await import(ngrokModuleName)) as unknown;
-      this.ngrok = mod as NgrokModule;
-      return this.ngrok;
-    } catch {
-      throw new TunnelProviderNotAvailableError(
-        'ngrok',
-        'ngrok package is not installed. Run: npm install ngrok',
-      );
-    }
-  }
-
-  async checkExisting(localPort: number): Promise<TunnelInfo | null> {
-    try {
-      const ngrok = await this.loadNgrok();
-      const url = ngrok.getUrl();
-
-      if (url) {
-        this.logger.info('Found existing ngrok tunnel', { url, localPort });
-        return {
-          publicUrl: url,
-          provider: 'ngrok',
-          localPort,
-          establishedAt: new Date().toISOString(),
-          tunnelId: null,
-          region: this.region,
-        };
+  private async findApiTunnel(localPort: number): Promise<TunnelInfo | null> {
+    const tunnels = await listNgrokApiTunnels();
+    for (const tunnel of tunnels) {
+      if (!tunnelMatchesLocalPort(tunnel, localPort)) {
+        continue;
       }
-    } catch (error) {
-      this.logger.debug('No existing ngrok tunnel found', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const publicUrl = pickPublicTunnelUrl(tunnel);
+      if (!publicUrl) {
+        continue;
+      }
+      return {
+        publicUrl,
+        provider: 'ngrok',
+        localPort,
+        establishedAt: new Date().toISOString(),
+        tunnelId: tunnel.name ?? null,
+        region: this.region,
+      };
     }
-
     return null;
   }
 
+  async checkExisting(localPort: number): Promise<TunnelInfo | null> {
+    const existing = await this.findApiTunnel(localPort);
+    if (existing) {
+      this.logger.info('Found existing ngrok tunnel via local API', {
+        url: existing.publicUrl,
+        localPort,
+      });
+    }
+    return existing;
+  }
+
   async create(localPort: number): Promise<TunnelInfo> {
-    const ngrok = await this.loadNgrok();
-
-    // Set auth token if provided
-    if (this.authToken) {
-      await ngrok.authtoken(this.authToken);
+    const reused = await this.findApiTunnel(localPort);
+    if (reused) {
+      return reused;
     }
 
-    const connectOptions: {
-      addr: number;
-      region?: string;
-      hostname?: string;
-    } = {
-      addr: localPort,
-      region: this.region,
-    };
+    await this.disconnect();
 
+    const bin = process.env['NGROK_BIN'] ?? 'ngrok';
+    const args = ['http', String(localPort), '--log=stdout', '--log-level=warn'];
     if (this.domain) {
-      connectOptions.hostname = this.domain;
+      args.push('--domain', this.domain);
     }
 
-    this.logger.info('Creating ngrok tunnel', {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (this.authToken) {
+      env['NGROK_AUTHTOKEN'] = this.authToken;
+    }
+
+    this.logger.info('Starting ngrok CLI tunnel', {
       localPort,
       region: this.region,
       domain: this.domain ?? 'auto-generated',
+      bin,
     });
 
-    const url = await ngrok.connect(connectOptions);
+    this.cliProcess = spawn(bin, args, {
+      env,
+      stdio: 'ignore',
+      detached: false,
+    });
 
-    this.logger.info('Ngrok tunnel established', { url, localPort });
+    const deadlineMs = 20_000;
+    const started = Date.now();
+    while (Date.now() - started < deadlineMs) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const tunnel = await this.findApiTunnel(localPort);
+      if (tunnel) {
+        this.logger.info('Ngrok tunnel established via CLI', {
+          url: tunnel.publicUrl,
+          localPort,
+        });
+        return tunnel;
+      }
+      if (this.cliProcess.exitCode !== null) {
+        break;
+      }
+    }
 
-    return {
-      publicUrl: url,
-      provider: 'ngrok',
-      localPort,
-      establishedAt: new Date().toISOString(),
-      tunnelId: null,
-      region: this.region,
-    };
+    await this.disconnect();
+    throw new Error(`ngrok CLI failed to expose port ${localPort} within ${deadlineMs}ms`);
   }
 
   async disconnect(): Promise<void> {
-    try {
-      const ngrok = await this.loadNgrok();
-      await ngrok.disconnect();
-      await ngrok.kill();
-      this.logger.info('Ngrok tunnel disconnected');
-    } catch (error) {
-      this.logger.warn('Error disconnecting ngrok tunnel', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+    if (this.cliProcess && this.cliProcess.exitCode === null) {
+      this.cliProcess.kill('SIGTERM');
     }
+    this.cliProcess = null;
+
+    const tunnels = await listNgrokApiTunnels();
+    await Promise.all(
+      tunnels.map(async (tunnel) => {
+        if (!tunnel.name) {
+          return;
+        }
+        try {
+          await fetch(`${NGROK_LOCAL_API}/api/tunnels/${tunnel.name}`, {
+            method: 'DELETE',
+            signal: AbortSignal.timeout(2_000),
+          });
+        } catch {
+          // best-effort cleanup
+        }
+      }),
+    );
+
+    this.logger.info('Ngrok tunnel disconnected');
   }
 }
 
@@ -468,6 +523,7 @@ export class TunnelService {
         );
 
         if (attempt < maxAttempts) {
+          await this.provider.disconnect().catch(() => {});
           this.logger.info(`Retrying in ${this.config.retryDelayMs}ms...`);
           await this.delay(this.config.retryDelayMs);
         }

@@ -4,7 +4,7 @@
 
 Autonomous LLM benchmarking pipeline. Discovers models from HuggingFace, runs vLLM benchmarks on GPU VMs via SSH, evaluates with Kibana's own eval suites, stores everything in Elasticsearch, and publishes curated results to a shared golden cluster.
 
-**Architecture**: TypeScript daemon, Elastic Serverless as single source of truth, REST API for CI/dashboards, async golden forwarding.
+**Architecture**: TypeScript daemon, Elastic Serverless as single source of truth, REST API for CI/dashboards, kbn/evals traces forwarded to golden cluster via Buildkite.
 
 ## Quick Start
 
@@ -19,21 +19,38 @@ npx vitest run                # unit tests
 # Start full pipeline
 cp config.example.yaml config.yaml
 # Edit config.yaml with your ES, SSH, and GPU VM credentials
-npm run start -- --config config.yaml --stage2 --stage3 --api-port 3000
+npm run start -- --config config.yaml --stage2 --stage3 --api-port 3200
 ```
 
 ## Critical Project Rules
 
 1. **Unified persistence**: Elastic Serverless is the primary store. No SQLite. No local ES instance. All data (queue, results, traces, DLQ, model history) lives in the serverless cluster.
-2. **Forward-only shared cluster**: The shared/golden ES cluster is write-only. We forward eval traces and public benchmark cards; we never read from it.
+2. **Forward-only shared cluster**: The shared/golden ES cluster is write-only. Only kbn/evals trace data is forwarded (via the Buildkite eval pipeline); we never read from golden.
 3. **Never throw in services**: All service methods return structured results with `.success`, `.error`, `.data`. Internal errors are logged and returned, never thrown.
 4. **Queue API surface**: Services talk to each other via `QueueService` with exactly four methods: `enqueue()`, `claim()`, `complete()`, `fail()`. No `add()` or `initialize()`.
 5. **SSH as black box**: The GPU VM is reached only via `SSHClientPool` in `src/services/ssh-client.ts`. No direct SSH calls outside this service.
 6. **OTel field casing**: In ES trace indices, fields are PascalCase: `TraceId`, `SpanId`, `ParentSpanId`, `Attributes`, `Duration`, `Name`. ES|QL queries must match this exactly.
-7. **Stage 2 runs only on Stage 1 pass**: `stage2_thresholds` gate must be met before Kibana eval suites execute.
-8. **Golden forwarder is async background work**: Batches of 100 docs max, 5 min flush interval. On 429: drop-last + retry. On 5xx: exponential backoff then DLQ.
+7. **Stage 2 runs only on Stage 1 pass**: `stage2_thresholds` gate must be met before Kibana eval suites execute. When `buildkite.enabled`, Stage 2 is **real Kibana CI evals** via Buildkite — local `eval-suite-runner.ts` is skipped.
+8. **Golden cluster scope**: Only kbn/evals OTel traces land on golden ES — not benchmark results or recommendation reports. `GoldenForwarder` is not on the happy path.
 9. **API keys are SHA-256 hashed**: Never store plaintext API keys in ES. Use `crypto.createHash('sha256').update(key).digest('hex')` for comparison.
 10. **No orphaned services**: If a service is not referenced on the happy path (start → scheduler → worker → store → forwarder), delete it. Do not keep dead code.
+11. **Agent Builder baseline gate**: Models must pass `agentBuilderBaseline` before enqueue/discovery (see below). Use `--force` on manual enqueue to override. Parallel/multi-tool calling is **not** required — Agent Builder uses single-tool calls only.
+
+## Agent Builder Baseline (model selection gate)
+
+Derived from [elastic/security-team#15545](https://github.com/elastic/security-team/issues/15545) Model Evaluation Log, adjusted for Agent Builder: **single-tool calling only** (no parallel tool requirement).
+
+| Criterion | Default | Hard? | Notes |
+|-----------|---------|-------|-------|
+| `minContextWindow` | 128_000 | yes | Long-context security evals |
+| `minParameterCountBillions` | 7 | yes | Excludes sub-agentic models (e.g. Qwen2.5-1.5B) |
+| `requireToolCalling` | true | yes | Known vLLM parser (hermes/mistral/llama3_json) |
+| `requireInstructVariant` | true | yes | `instruct`, `chat`, or `-it` in model id |
+| VRAM fit + vLLM arch | — | yes | Existing `ModelCandidateFilter` logic |
+
+Config block: `agentBuilderBaseline` in `config/default.json`. Wired on **enqueue** (`runEnqueue`), **discovery** (`DiscoveryScheduler`), via `createAgentBuilderFilter()` in `src/services/agent-builder-baseline.ts`. Post-benchmark `ModelEvaluationEngine` checks **single-tool success rate** only (`minToolCallSuccessRate`), not parallel calls.
+
+To sweep smaller models for research, set `minParameterCountBillions: 4` or `agentBuilderBaseline.enabled: false` — never the default for CI eval runs.
 
 ## Directory Layout
 
@@ -52,7 +69,7 @@ src/
     ssh-client.ts                    # SSHClientPool
     discovery-scheduler.ts           # HF API polling + auto-queue
     hardware-estimator.ts            # GPU memory estimation
-    golden-forwarder.ts              # Async replication to shared ES
+    vllm-deployment.ts               # Docker vLLM deploy on GPU VM (latest image, TP=all GPUs)
     system-health-check.ts           # Health checks for all deps
     trace-query-builder.ts           # ES|QL query builder
     reasoning-prompt-builder.ts      # Stage 3 prompt construction
@@ -179,7 +196,9 @@ context/
 | `Cannot find module '@kbn/setup-node-env'` | You are in a fresh git worktree. Run `npm run bootstrap` or `yarn kbn bootstrap` if inside Kibana repo. For this project, just `npm install`. |
 | ES connection refused | Check `elasticsearch.url` in config. Should point to your Elastic Serverless endpoint. |
 | SSH timeout | Verify `gpu_vms` config, SSH key permissions (`chmod 600`), and VM network connectivity. |
-| Golden forwarder queue growing | Check `benchmarker-errors` index for failure reasons. Likely 429 or 503 from shared ES. |
+| Golden forwarder queue growing | Check `benchmarker-errors` index for Buildkite eval forwarding failures. Likely 429 or 503 from shared ES. |
+| Dashboard/API port conflict | Default API port is **3200** — avoid **3100** (patryks-treadmill). Override with `--api-port`. |
+| Local ES port conflict | Dev ES in `config/default.json` uses port **9223** — not 9200 or 9220. |
 | Type errors in tests | Check that mocks match new service signatures. Update `__mocks__/` if needed. |
 
 ## Security Rules
@@ -203,3 +222,31 @@ context/
 - **The golden cluster is not yours.** You write to it; you don't manage it. All querying, queueing, and history lives in Elastic Serverless.
 - **Every feature must justify its existence.** If it's not on the happy path (discovery → queue → benchmark → eval → forward), delete it. The codebase has been cleaned of Ollama, multi-VM orchestration, local ES, and SQLite precisely because they were not on the happy path.
 - **Quality gate**: `npm run typecheck && npm run lint && npm run test` must all pass before any commit. Do not skip tests or suppress lint errors to pass.
+
+## Learned User Preferences
+
+- **Validate UI in browser**: After dashboard/layout changes, open the page and confirm visually — code-only edits are not sufficient.
+- **Latest vLLM, no manual pins**: Deploy with `vllm/vllm-openai:latest` (auto-pulled); never require manual version bumps.
+- **Maximize hardware utilization**: Tensor-parallel across all VM GPUs; use the largest feasible context (`--max-model-len auto` unless constrained).
+- **Real data only**: Never manually seed ES or dashboard indices — all displayed results must come from actual benchmark runs.
+- **Proactive 10x skills**: Evaluate and invoke 10x skills (shape, prd, plan) for multi-step features without waiting for the user to ask.
+- **Avoid port 3100**: Run the built-in dashboard/API on **3200** (or another free port) — 3100 collides with patryks-treadmill.
+- **No commit unless asked**: Do not commit, push, or put credentials in tracked files unless the user explicitly requests it.
+- **One model at a time**: Never deploy or benchmark multiple models concurrently on the GPU VM — keep scheduler `maxConcurrentRuns` at 1.
+
+## Learned Workspace Facts
+
+- **Local dev ES**: `config/default.json` points Elasticsearch to `http://localhost:9223` (dedicated port, not 9200/9220).
+- **GPU VM profile**: Default hardware is `2xa100-80gb` (2× A100-80GB); SSH host/user configured in `config/default.json`.
+- **Golden cluster forwarding**: Only kbn/evals OTel traces reach golden ES via the Buildkite on-demand pipeline — not via `GoldenForwarder`.
+- **Dashboard/API server**: Built-in UI is **not** started by `setup-local.sh` — run `npm run api` separately; `queue-server.ts` loads `.env`, honors `PORT` (defaults **3200**) and `ELASTICSEARCH_URL`.
+- **vLLM deploy defaults**: Docker image `vllm/vllm-openai:latest`; `tensor-parallel-size` = VM `gpuCount`; resolved pip version logged after deploy.
+- **Model discovery**: `DiscoveryScheduler` polls HuggingFace and auto-queues hardware-fit candidates — no manual seeding.
+- **CI eval platform**: `buildkite.enabled` + `tunnel.enabled` → ngrok public URL → Buildkite on-demand pipeline with `EVAL_SUITE_ID`, `EVAL_PROJECT`, `KIBANA_TESTING_AI_CONNECTORS`. Results map to `Stage2Result`; Stage 3 uses composite trace queries (ES + local JSONL fallback).
+- **Stage 2 ITL gate**: `stage2Thresholds.maxItlP50Ms` (default 20ms) — not `maxTtftMs`.
+- **Stage 3 EIS reasoning**: `EisLlmClient` is preferred when `EIS_CCM_API_KEY` is set (Hermes is not an LLM proxy); calls `/_inference/chat_completion/<id>/_stream`; maps `eis/<model>` → `.<model>-chat_completion`.
+- **EIS local ES setup**: `scripts/setup-local.sh` starts ES with trial license + QA `xpack.inference.elastic.url`; Vault path `secret/kibana-issues/dev/inference/kibana-eis-ccm` (`essu_` QA key is correct for CCM).
+- **DRA local ES images**: Pull snapshot **master** (9.x) via `scripts/pull-dra-es-image.sh` (`ES_DRA_CHANNEL=snapshot`); ES 8.17 lacks `/_inference/_ccm` — 9.x DRA is required for local EIS Stage 3.
+- **Stage 2 CI tunnel**: Buildkite evals need a public vLLM URL — set `TUNNEL_ENABLED=true` and `NGROK_AUTH_TOKEN` in `.env`; SSH port-forward alone cannot reach Buildkite agents.
+- **Stage 3 smoke test**: `npm run smoke:stage3` runs EIS validation → Stage 3 reasoning → ES persistence E2E.
+- **Full pipeline smoke test**: `npm run smoke:full` runs HF discovery → Stage 1 → Stage 2 (CI evals + tunnel) → Stage 3 → dashboard verification.

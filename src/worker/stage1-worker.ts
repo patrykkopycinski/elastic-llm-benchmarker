@@ -269,7 +269,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
 
       const stage2Thresholds = this.config.stage2Thresholds;
       const stage2Eligible =
-        avgItlP50 < stage2Thresholds.minItlP50Ms &&
+        avgItlP50 < stage2Thresholds.maxItlP50Ms &&
         throughput > stage2Thresholds.minThroughputTps &&
         avgTtft < stage2Thresholds.maxTtftMs &&
         contextWindow >= stage2Thresholds.minContextWindow;

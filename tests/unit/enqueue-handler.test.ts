@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runEnqueue, type EnqueueOptions } from '../../src/cli/enqueue-handler.js';
+import { evaluateAgentBuilderBaseline } from '../../src/services/agent-builder-baseline.js';
 import { QueueService } from '../../src/services/queue-service.js';
 import { HardwareEstimator } from '../../src/services/hardware-estimator.js';
 import { HardwareProfileRegistry } from '../../src/services/hardware-profiles.js';
@@ -10,9 +11,14 @@ vi.mock('../../src/services/queue-service.js');
 vi.mock('../../src/services/hardware-estimator.js');
 vi.mock('../../src/services/hardware-profiles.js');
 vi.mock('../../src/services/model-discovery.js');
+vi.mock('../../src/services/agent-builder-baseline.js', () => ({
+  evaluateAgentBuilderBaseline: vi.fn().mockResolvedValue({ model: null, filter: null }),
+  formatBaselineRejections: vi.fn().mockReturnValue(''),
+}));
 
 const mockConfig: AppConfig = {
   huggingfaceToken: 'hf_test_token',
+  agentBuilderBaseline: { enabled: false },
   esCluster: {
     node: 'http://localhost:9200',
     auth: { username: 'elastic', password: 'elastic' },
@@ -210,5 +216,48 @@ describe('runEnqueue', () => {
       undefined,
       expect.anything(),
     );
+  });
+
+  it('should fail when Agent Builder baseline rejects the model', async () => {
+    const baselineConfig = {
+      ...mockConfig,
+      agentBuilderBaseline: { enabled: true },
+    } as AppConfig;
+
+    vi.mocked(evaluateAgentBuilderBaseline).mockResolvedValueOnce({
+      model: {
+        id: 'Qwen/Qwen2.5-1.5B-Instruct',
+        name: 'Qwen2.5-1.5B-Instruct',
+        architecture: 'qwen2',
+        contextWindow: 131072,
+        license: 'apache-2.0',
+        parameterCount: 1_500_000_000,
+        quantizations: ['fp16'],
+        supportsToolCalling: true,
+      },
+      filter: {
+        model: {} as never,
+        passed: false,
+        rejections: [
+          {
+            criterion: 'parameter_count',
+            reason: 'Model has ~1.5B parameters; Agent Builder baseline requires >= 7B',
+            isHardRequirement: true,
+          },
+        ],
+        warnings: [],
+        recommendedToolCallParser: 'hermes',
+        estimatedVramGb: 4,
+      },
+    });
+
+    const result = await runEnqueue({
+      modelId: 'Qwen/Qwen2.5-1.5B-Instruct',
+      config: baselineConfig,
+      esClient: mockEsClient as AppConfig,
+    } as EnqueueOptions);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/Agent Builder baseline/);
   });
 });

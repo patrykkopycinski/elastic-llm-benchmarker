@@ -84,12 +84,16 @@ describe('Scheduler', () => {
     ],
   };
 
-  let findPendingMock: ReturnType<typeof vi.fn>;
+  let dequeueMock: ReturnType<typeof vi.fn>;
+  let getCurrentMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
-    findPendingMock = vi.fn().mockResolvedValue([]);
+    dequeueMock = vi.fn().mockResolvedValue(null);
+    getCurrentMock = vi.fn().mockResolvedValue(null);
     queueService = {
-      findPending: findPendingMock,
+      dequeue: dequeueMock,
+      getCurrent: getCurrentMock,
+      findPending: vi.fn().mockResolvedValue([]),
       updateStatus: vi.fn().mockResolvedValue(undefined),
       enqueue: vi.fn().mockResolvedValue(undefined),
       claim: vi.fn().mockResolvedValue(null),
@@ -125,7 +129,7 @@ describe('Scheduler', () => {
   });
 
   it('runs full pipeline and persists Stage 2 + Stage 3 results', async () => {
-    findPendingMock.mockResolvedValue([baseEntry]);
+    dequeueMock.mockResolvedValueOnce(baseEntry);
 
     // Start scheduler, let it poll once, then stop
     await scheduler.start();
@@ -166,7 +170,7 @@ describe('Scheduler', () => {
     (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
       failedStage1,
     );
-    findPendingMock.mockResolvedValue([baseEntry]);
+    dequeueMock.mockResolvedValueOnce(baseEntry);
 
     await scheduler.start();
     await new Promise((r) => setTimeout(r, 100));
@@ -191,7 +195,7 @@ describe('Scheduler', () => {
     (stage2Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
       failedStage2,
     );
-    findPendingMock.mockResolvedValue([baseEntry]);
+    dequeueMock.mockResolvedValueOnce(baseEntry);
 
     await scheduler.start();
     await new Promise((r) => setTimeout(r, 100));
@@ -206,5 +210,19 @@ describe('Scheduler', () => {
       'failed',
       'eval_suite_failed',
     );
+  });
+
+  it('does not dequeue while another entry is in flight', async () => {
+    getCurrentMock.mockResolvedValue({
+      ...baseEntry,
+      status: 'benchmarking',
+    });
+
+    await scheduler.start();
+    await new Promise((r) => setTimeout(r, 100));
+    await scheduler.stop();
+
+    expect(dequeueMock).not.toHaveBeenCalled();
+    expect(stage1Worker.execute).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,5 @@
+import type { Client } from '@elastic/elasticsearch';
+
 export const INDEX_NAMES = {
   BENCHMARKER_RESULTS: 'benchmarker-results',
   BENCHMARKER_EVAL_REPORTS: 'benchmarker-eval-reports',
@@ -487,3 +489,16 @@ export const benchmarkReasoningMapping = {
   completed_at: { type: 'date' },
   '@timestamp': { type: 'date' },
 };
+
+export async function ensureIndices(esClient: Client): Promise<void> {
+  for (const [indexName, indexConfig] of Object.entries(INDEX_MAPPINGS)) {
+    const exists = await esClient.indices.exists({ index: indexName });
+    if (!exists) {
+      await esClient.indices.create({
+        index: indexName,
+        mappings: indexConfig.mappings as Record<string, unknown>,
+        settings: indexConfig.settings as Record<string, unknown>,
+      });
+    }
+  }
+}

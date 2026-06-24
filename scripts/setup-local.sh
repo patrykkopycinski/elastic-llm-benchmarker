@@ -11,8 +11,11 @@ set -euo pipefail
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 ES_CONTAINER="benchmarker-es"
-ES_IMAGE="docker.elastic.co/elasticsearch/elasticsearch:8.13.0"
-ES_PORT=9200
+ES_PORT=9223
+ES_DRA_CHANNEL="${ES_DRA_CHANNEL:-snapshot}"
+ES_DRA_BRANCH="${ES_DRA_BRANCH:-master}"
+# QA EIS endpoint — required for CCM (same as `yarn es snapshot --eis` in Kibana)
+EIS_QA_URL="${EIS_QA_URL:-https://inference.eu-west-1.aws.svc.qa.elastic.cloud}"
 
 EDOT_CONTAINER="edot-collector"
 EDOT_IMAGE="docker.elastic.co/observability/elastic-otel-collector:latest"
@@ -53,21 +56,33 @@ fi
 
 log "Starting Elasticsearch container: $ES_CONTAINER"
 
+ES_IMAGE="$("$SCRIPT_DIR/pull-dra-es-image.sh")"
+log "Using DRA ES image (${ES_DRA_CHANNEL}/${ES_DRA_BRANCH}): $ES_IMAGE"
+
 if docker ps -a --format '{{.Names}}' | grep -qx "$ES_CONTAINER"; then
   if docker ps --format '{{.Names}}' | grep -qx "$ES_CONTAINER"; then
-    ok "Elasticsearch container '$ES_CONTAINER' is already running"
+    CURRENT_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$ES_CONTAINER" 2>/dev/null || true)"
+    if [[ "$CURRENT_IMAGE" != "$ES_IMAGE" ]]; then
+      warn "Elasticsearch container image changed ($CURRENT_IMAGE -> $ES_IMAGE). Recreating..."
+      docker rm -f "$ES_CONTAINER" >/dev/null
+    else
+      ok "Elasticsearch container '$ES_CONTAINER' is already running ($ES_IMAGE)"
+    fi
   else
-    warn "Elasticsearch container '$ES_CONTAINER' exists but is stopped. Starting it..."
-    docker start "$ES_CONTAINER"
-    ok "Elasticsearch container started"
+    warn "Elasticsearch container '$ES_CONTAINER' exists but is stopped. Removing for recreate..."
+    docker rm -f "$ES_CONTAINER" >/dev/null
   fi
-else
+fi
+
+if ! docker ps -a --format '{{.Names}}' | grep -qx "$ES_CONTAINER"; then
   docker run -d \
     --name "$ES_CONTAINER" \
     --network "$NETWORK_NAME" \
-    -p "${ES_PORT}:${ES_PORT}" \
+    -p "${ES_PORT}:9200" \
     -e discovery.type=single-node \
     -e xpack.security.enabled=false \
+    -e xpack.license.self_generated.type=trial \
+    -e "xpack.inference.elastic.url=${EIS_QA_URL}" \
     -e "ES_JAVA_OPTS=-Xms1g -Xmx1g" \
     "$ES_IMAGE"
   ok "Elasticsearch container created and started"
@@ -103,8 +118,10 @@ if [[ ! -f "$MAPPINGS_FILE" ]]; then
 fi
 
 if command -v npx &>/dev/null && [[ -f "$PROJECT_ROOT/node_modules/.bin/tsx" ]]; then
-  "${PROJECT_ROOT}/node_modules/.bin/tsx" - <<'TSX' || warn "Some indices may have failed to create"
+  ES_PORT="$ES_PORT" "${PROJECT_ROOT}/node_modules/.bin/tsx" - <<'TSX' || warn "Some indices may have failed to create"
     import { INDEX_NAMES, INDEX_MAPPINGS } from "./src/services/es-index-mappings.ts";
+
+    const esPort = process.env.ES_PORT ?? '9223';
 
     async function createIndex(name: string) {
       const mapping = INDEX_MAPPINGS[name];
@@ -113,7 +130,7 @@ if command -v npx &>/dev/null && [[ -f "$PROJECT_ROOT/node_modules/.bin/tsx" ]];
         return;
       }
       try {
-        const res = await fetch(`http://localhost:9200/${name}`, {
+        const res = await fetch(`http://localhost:${esPort}/${name}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(mapping),
@@ -141,26 +158,36 @@ fi
 
 # ─── EDOT Collector ───────────────────────────────────────────────────────────
 
-log "Starting EDOT collector container: $EDOT_CONTAINER"
-
-if docker ps -a --format '{{.Names}}' | grep -qx "$EDOT_CONTAINER"; then
-  if docker ps --format '{{.Names}}' | grep -qx "$EDOT_CONTAINER"; then
-    ok "EDOT collector container '$EDOT_CONTAINER' is already running"
-  else
-    warn "EDOT collector container '$EDOT_CONTAINER' exists but is stopped. Starting it..."
-    docker start "$EDOT_CONTAINER"
-    ok "EDOT collector container started"
-  fi
+if [[ "${SKIP_EDOT:-false}" == "true" ]]; then
+  warn "Skipping EDOT collector (SKIP_EDOT=true)"
 else
-  docker run -d \
-    --name "$EDOT_CONTAINER" \
-    --network "$NETWORK_NAME" \
-    -p "${EDOT_OTLP_HTTP_PORT}:${EDOT_OTLP_HTTP_PORT}" \
-    -p "${EDOT_HEALTH_PORT}:${EDOT_HEALTH_PORT}" \
-    --restart unless-stopped \
-    -e ELASTICSEARCH_ENDPOINT="http://${ES_CONTAINER}:9200" \
-    "$EDOT_IMAGE"
-  ok "EDOT collector container created and started"
+  log "Starting EDOT collector container: $EDOT_CONTAINER"
+
+  if docker ps -a --format '{{.Names}}' | grep -qx "$EDOT_CONTAINER"; then
+    if docker ps --format '{{.Names}}' | grep -qx "$EDOT_CONTAINER"; then
+      ok "EDOT collector container '$EDOT_CONTAINER' is already running"
+    else
+      warn "EDOT collector container '$EDOT_CONTAINER' exists but is stopped. Starting it..."
+      if docker start "$EDOT_CONTAINER" >/dev/null 2>&1; then
+        ok "EDOT collector container started"
+      else
+        warn "Could not start EDOT collector — set SKIP_EDOT=true to silence"
+      fi
+    fi
+  else
+    if docker run -d \
+      --name "$EDOT_CONTAINER" \
+      --network "$NETWORK_NAME" \
+      -p "${EDOT_OTLP_HTTP_PORT}:${EDOT_OTLP_HTTP_PORT}" \
+      -p "${EDOT_HEALTH_PORT}:${EDOT_HEALTH_PORT}" \
+      --restart unless-stopped \
+      -e ELASTICSEARCH_ENDPOINT="http://${ES_CONTAINER}:9200" \
+      "$EDOT_IMAGE" >/dev/null 2>&1; then
+      ok "EDOT collector container created and started"
+    else
+      warn "EDOT image unavailable ($EDOT_IMAGE) — skipping. Set SKIP_EDOT=true to silence."
+    fi
+  fi
 fi
 
 # ─── Summary ──────────────────────────────────────────────────────────────────

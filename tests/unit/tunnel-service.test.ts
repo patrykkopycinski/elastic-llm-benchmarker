@@ -5,6 +5,7 @@ import {
   TunnelError,
   TunnelCreationError,
   TunnelProviderNotAvailableError,
+  isPublicTunnelUrl,
 } from '../../src/services/tunnel-service.js';
 import type { TunnelInfo, TunnelResult, TunnelStatus } from '../../src/services/tunnel-service.js';
 
@@ -333,3 +334,16 @@ function createMinimalGraphState() {
     kibanaConnectorId: null,
   };
 }
+
+describe('isPublicTunnelUrl', () => {
+  it('accepts ngrok public HTTPS URLs', () => {
+    expect(isPublicTunnelUrl('https://uninked-burton-unransomable.ngrok-free.dev')).toBe(true);
+    expect(isPublicTunnelUrl('https://abc123.ngrok-free.app')).toBe(true);
+  });
+
+  it('rejects ngrok local inspector and non-HTTPS URLs', () => {
+    expect(isPublicTunnelUrl('http://127.0.0.1:4040')).toBe(false);
+    expect(isPublicTunnelUrl('http://localhost:4040')).toBe(false);
+    expect(isPublicTunnelUrl('not-a-url')).toBe(false);
+  });
+});

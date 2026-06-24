@@ -48,7 +48,7 @@ function createMockConfig(): AppConfig {
       machineType: 'a2-ultragpu-2g',
     },
     stage2Thresholds: {
-      minItlP50Ms: 20,
+      maxItlP50Ms: 20,
       minThroughputTps: 10,
       maxTtftMs: 5000,
       minContextWindow: 128000,

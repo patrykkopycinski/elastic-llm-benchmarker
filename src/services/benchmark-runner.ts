@@ -367,7 +367,9 @@ export class BenchmarkRunnerService {
   buildBenchmarkCommand(modelId: string, concurrencyLevel: number, containerName?: string): string {
     const benchArgs = [
       'vllm bench serve',
-      `--base-url http://localhost:${this.options.apiPort}/v1`,
+      '--backend openai-chat',
+      `--base-url http://localhost:${this.options.apiPort}`,
+      `--endpoint /v1/chat/completions`,
       `--model ${modelId}`,
       `--num-prompts ${this.options.numPrompts}`,
       `--max-concurrency ${concurrencyLevel}`,

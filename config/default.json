@@ -1,10 +1,14 @@
 {
   "$schema": "../src/types/config.ts",
+  "elasticsearch": {
+    "url": "http://localhost:9223"
+  },
   "ssh": {
     "host": "your-gpu-vm-host",
     "port": 22,
     "username": "your_ssh_user",
-    "privateKeyPath": "/path/to/your/ssh/key"
+    "privateKeyPath": "/path/to/your/ssh/key",
+    "useSudo": true
   },
   "huggingfaceToken": "",
   "benchmarkThresholds": {
@@ -65,13 +69,21 @@
   "buildkite": {
     "enabled": false,
     "orgSlug": "elastic",
-    "onDemandPipelineSlug": "kibana-evals-on-demand",
+    "onDemandPipelineSlug": "kibana-evals-on-demand-llm-evals",
     "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
     "pollIntervalMs": 30000,
     "pollTimeoutMs": 3600000,
     "retryOnFailure": true,
     "defaultEvalSuites": ["security_ai_assistant"],
     "kibanaBranch": "main",
-    "triggerFullEval": false
+    "triggerFullEval": false,
+    "detachPoll": true
+  },
+  "agentBuilderBaseline": {
+    "enabled": true,
+    "minContextWindow": 128000,
+    "minParameterCountBillions": 7,
+    "requireToolCalling": true,
+    "requireInstructVariant": true
   }
 }

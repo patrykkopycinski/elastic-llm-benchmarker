@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
+import dotenv from 'dotenv';
 import express from 'express';
 import { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../services/queue-service.js';
@@ -36,7 +37,11 @@ interface RateLimitEntry {
 
 // ─── ES Client ──────────────────────────────────────────────────────
 function createEsClient(config: QueueServerConfig): Client {
-  const node = config.esUrl ?? process.env.ES_URL ?? 'http://localhost:9200';
+  const node =
+    config.esUrl ??
+    process.env.ES_URL ??
+    process.env.ELASTICSEARCH_URL ??
+    'http://localhost:9223';
   const apiKey = config.esApiKey ?? process.env.ES_API_KEY;
   const username = config.esUsername ?? process.env.ES_USERNAME;
   const password = config.esPassword ?? process.env.ES_PASSWORD;
@@ -647,9 +652,10 @@ export function startQueueServer(config: QueueServerConfig = {}) {
 
 // ─── CLI entrypoint ─────────────────────────────────────────────────
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  dotenv.config();
   startQueueServer({
     port: Number(process.env.PORT) || 3200,
-    esUrl: process.env.ES_URL,
+    esUrl: process.env.ES_URL ?? process.env.ELASTICSEARCH_URL,
     esApiKey: process.env.ES_API_KEY,
     esUsername: process.env.ES_USERNAME,
     esPassword: process.env.ES_PASSWORD,

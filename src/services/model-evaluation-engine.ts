@@ -20,7 +20,9 @@ import { createLogger } from '../utils/logger.js';
 export interface ModelEvaluationOptions {
   /** Minimum context window size in tokens (hard requirement, default: 128000) */
   minContextWindow?: number;
-  /** Minimum parallel tool calling success rate (0-1) (hard requirement, default: 1.0) */
+  /** Minimum single-tool calling success rate (0-1) (hard requirement, default: 1.0) */
+  minToolCallSuccessRate?: number;
+  /** @deprecated Use minToolCallSuccessRate — parallel tool calling is not required */
   minParallelToolCallSuccessRate?: number;
   /** Maximum acceptable inter-token latency in ms (preferred, default: 20). Ignored when benchmarkThresholds is set (tiered ITL used). */
   maxITLMs?: number;
@@ -35,7 +37,7 @@ export interface ModelEvaluationOptions {
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const DEFAULT_MIN_CONTEXT_WINDOW = 128_000;
-const DEFAULT_MIN_PARALLEL_TOOL_CALL_SUCCESS_RATE = 1.0;
+const DEFAULT_MIN_TOOL_CALL_SUCCESS_RATE = 1.0;
 const DEFAULT_MAX_ITL_MS = 20;
 const DEFAULT_MAX_TOOL_CALL_LATENCY_MS = 1000;
 
@@ -54,7 +56,7 @@ const DEFAULT_MAX_TOOL_CALL_LATENCY_MS = 1000;
  *
  * ## Hard Requirements (REJECTED if failed)
  * - Context window >= 128K tokens
- * - Parallel tool calling success rate = 100%
+ * - Single-tool calling success rate meets threshold (parallel/multi-tool NOT required)
  *
  * ## Preferred Criteria (CONDITIONAL if failed, hard requirements met)
  * - Inter-token latency (ITL) < 20ms
@@ -77,7 +79,7 @@ const DEFAULT_MAX_TOOL_CALL_LATENCY_MS = 1000;
 export class ModelEvaluationEngine {
   private readonly logger;
   private readonly minContextWindow: number;
-  private readonly minParallelToolCallSuccessRate: number;
+  private readonly minToolCallSuccessRate: number;
   private readonly maxITLMs: number;
   private readonly maxToolCallLatencyMs: number;
   private readonly benchmarkThresholds: BenchmarkThresholds | null;
@@ -92,8 +94,10 @@ export class ModelEvaluationEngine {
     this.logger = createLogger(logLevel);
     this.minContextWindow =
       options.minContextWindow ?? DEFAULT_MIN_CONTEXT_WINDOW;
-    this.minParallelToolCallSuccessRate =
-      options.minParallelToolCallSuccessRate ?? DEFAULT_MIN_PARALLEL_TOOL_CALL_SUCCESS_RATE;
+    this.minToolCallSuccessRate =
+      options.minToolCallSuccessRate ??
+      options.minParallelToolCallSuccessRate ??
+      DEFAULT_MIN_TOOL_CALL_SUCCESS_RATE;
     this.maxITLMs = options.maxITLMs ?? DEFAULT_MAX_ITL_MS;
     this.maxToolCallLatencyMs =
       options.maxToolCallLatencyMs ?? DEFAULT_MAX_TOOL_CALL_LATENCY_MS;
@@ -101,7 +105,7 @@ export class ModelEvaluationEngine {
 
     this.logger.info('ModelEvaluationEngine initialized', {
       minContextWindow: this.minContextWindow,
-      minParallelToolCallSuccessRate: this.minParallelToolCallSuccessRate,
+      minToolCallSuccessRate: this.minToolCallSuccessRate,
       maxITLMs: this.maxITLMs,
       maxToolCallLatencyMs: this.maxToolCallLatencyMs,
       tieredITL: !!this.benchmarkThresholds,
@@ -121,7 +125,7 @@ export class ModelEvaluationEngine {
   ): ModelEvaluationEngine {
     return new ModelEvaluationEngine(logLevel, {
       minContextWindow: thresholds.minContextWindow,
-      minParallelToolCallSuccessRate: thresholds.minToolCallSuccessRate,
+      minToolCallSuccessRate: thresholds.minToolCallSuccessRate,
       maxITLMs: thresholds.maxITLMs,
       maxToolCallLatencyMs: thresholds.maxToolCallLatencyMs,
       benchmarkThresholds: thresholds,
@@ -149,9 +153,9 @@ export class ModelEvaluationEngine {
       this.evaluateContextWindow(benchmarkResult, modelInfo),
     );
 
-    // ── Hard Requirement: Parallel Tool Calling ──────────────────────
+    // ── Hard Requirement: Tool Calling (single-tool; parallel not required) ──
     criteriaResults.push(
-      this.evaluateParallelToolCalling(benchmarkResult),
+      this.evaluateToolCalling(benchmarkResult),
     );
 
     // ── Preferred: Inter-Token Latency ───────────────────────────────
@@ -328,47 +332,41 @@ export class ModelEvaluationEngine {
   }
 
   /**
-   * Evaluates the parallel tool calling criterion (HARD requirement).
-   * Parallel tool calling success rate must be 100%.
+   * Evaluates single-tool calling success rate (HARD requirement).
+   * Agent Builder issues one tool at a time — parallel/multi-tool support is not required.
    */
-  private evaluateParallelToolCalling(
+  private evaluateToolCalling(
     benchmarkResult: BenchmarkResult,
   ): CriterionEvaluation {
     const toolCallResults = benchmarkResult.toolCallResults;
 
     if (!toolCallResults) {
       return {
-        criterion: 'parallel_tool_calling',
-        description: 'Parallel tool calling success rate = 100%',
+        criterion: 'tool_calling',
+        description: `Single-tool calling success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
         passed: false,
         severity: 'HARD',
         actualValue: 'no tool call data',
-        requiredValue: `success rate >= ${(this.minParallelToolCallSuccessRate * 100).toFixed(0)}%`,
+        requiredValue: `success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
         message: `No tool call benchmark data available for model ${benchmarkResult.modelId}. Cannot verify hard requirement.`,
       };
     }
 
     const successRate = toolCallResults.successRate;
-    const passed =
-      toolCallResults.supportsParallelCalls &&
-      successRate >= this.minParallelToolCallSuccessRate;
+    const passed = successRate >= this.minToolCallSuccessRate;
 
-    const actualDescription = toolCallResults.supportsParallelCalls
-      ? `${(successRate * 100).toFixed(1)}% success rate (${toolCallResults.totalTests} tests, max ${toolCallResults.maxConcurrentCalls} concurrent)`
-      : `Parallel calls not supported (success rate: ${(successRate * 100).toFixed(1)}%)`;
+    const actualDescription = `${(successRate * 100).toFixed(1)}% success rate (${toolCallResults.totalTests} tests)`;
 
     return {
-      criterion: 'parallel_tool_calling',
-      description: 'Parallel tool calling success rate = 100%',
+      criterion: 'tool_calling',
+      description: `Single-tool calling success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
       passed,
       severity: 'HARD',
       actualValue: actualDescription,
-      requiredValue: `success rate >= ${(this.minParallelToolCallSuccessRate * 100).toFixed(0)}%, parallel calls supported`,
+      requiredValue: `success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
       message: passed
-        ? `Parallel tool calling meets requirement with ${(successRate * 100).toFixed(1)}% success rate`
-        : toolCallResults.supportsParallelCalls
-          ? `Parallel tool calling success rate ${(successRate * 100).toFixed(1)}% is below the required ${(this.minParallelToolCallSuccessRate * 100).toFixed(0)}%`
-          : `Model does not support parallel tool calling`,
+        ? `Tool calling meets requirement with ${(successRate * 100).toFixed(1)}% success rate`
+        : `Tool calling success rate ${(successRate * 100).toFixed(1)}% is below the required ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
     };
   }
 

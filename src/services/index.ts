@@ -118,6 +118,13 @@ export {
   TunnelCreationError,
   TunnelProviderNotAvailableError,
 } from './tunnel-service.js';
+export {
+  VllmPublicEndpointResolver,
+} from './vllm-public-endpoint.js';
+export type {
+  VllmPublicEndpointOptions,
+  PublicEndpointResult,
+} from './vllm-public-endpoint.js';
 export type {
   TunnelInfo,
   TunnelResult,
@@ -140,6 +147,12 @@ export type { ReasoningPromptBuilder } from './reasoning-prompt-builder.js';
 export { LlmClientImpl } from './llm-client.js';
 export type { LlmClient, LlmResponse } from './llm-client.js';
 export { DiscoveryScheduler } from './discovery-scheduler.js';
+export {
+  createAgentBuilderFilter,
+  evaluateAgentBuilderBaseline,
+  formatBaselineRejections,
+  resolveModelInfo,
+} from './agent-builder-baseline.js';
 export type {
   ScoredModel,
   DiscoverySchedulerDependencies,
@@ -150,8 +163,6 @@ export { buildRecommendationReport } from './recommendation-report-builder.js';
 export type { ReportBuilderOptions } from './recommendation-report-builder.js';
 export { SlackNotifier } from './slack-notifier.js';
 export type { SlackNotifierOptions } from './slack-notifier.js';
-export { GoldenForwarder } from './golden-forwarder.js';
-export type { ReplicationError } from './golden-forwarder.js';
 export type { Connector } from './connector.js';
 export { ElasticsearchConnector } from './elasticsearch-connector.js';
 export { LocalConnector } from './local-connector.js';

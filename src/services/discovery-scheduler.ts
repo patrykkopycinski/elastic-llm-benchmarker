@@ -5,6 +5,7 @@ import type { HardwareEstimator } from './hardware-estimator.js';
 import type { HardwareProfileRegistry } from './hardware-profiles.js';
 import type { QueueService } from './queue-service.js';
 import type { HFModelConfig } from './hardware-estimator.js';
+import type { ModelCandidateFilter } from './model-candidate-filter.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
 
@@ -29,6 +30,8 @@ export interface DiscoverySchedulerDependencies {
   profileRegistry: HardwareProfileRegistry;
   queueService: QueueService;
   config: DiscoverySchedulerConfig;
+  /** Optional pre-deploy filter (e.g. Agent Builder baseline). */
+  candidateFilter?: ModelCandidateFilter;
   logger?: Logger;
 }
 
@@ -199,6 +202,16 @@ export class DiscoveryScheduler {
             `Skipping ${model.id}: trendingScore ${trendingScore.toFixed(2)} < ${this.deps.config.minTrendingScore}`,
           );
           continue;
+        }
+
+        if (this.deps.candidateFilter) {
+          const filterResult = this.deps.candidateFilter.evaluate(model);
+          if (!filterResult.passed) {
+            this.logger.debug(
+              `Skipping ${model.id}: Agent Builder baseline — ${filterResult.rejections.map((r) => r.criterion).join(', ')}`,
+            );
+            continue;
+          }
         }
 
         let fits = true;

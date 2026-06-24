@@ -69,7 +69,7 @@ function setupFetchMock(responses: {
     // Config.json endpoint
     if (urlStr.includes('/resolve/main/config.json')) {
       const modelId = urlStr
-        .replace('https://huggingface.co/api/models/', '')
+        .replace('https://huggingface.co/', '')
         .replace('/resolve/main/config.json', '');
       const config = configs.get(modelId);
       if (config) {

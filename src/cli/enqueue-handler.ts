@@ -3,6 +3,10 @@ import { QueueService } from '../services/queue-service.js';
 import { HardwareEstimator } from '../services/hardware-estimator.js';
 import { HardwareProfileRegistry } from '../services/hardware-profiles.js';
 import { ModelDiscoveryService } from '../services/model-discovery.js';
+import {
+  evaluateAgentBuilderBaseline,
+  formatBaselineRejections,
+} from '../services/agent-builder-baseline.js';
 import type { AppConfig } from '../types/config.js';
 
 export interface EnqueueOptions {
@@ -73,6 +77,26 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
       entryId: entry.id,
       message: `Enqueued ${modelId} (forced, no config.json available) with hardware profile ${hardwareProfileId}`,
     };
+  }
+
+  // Agent Builder baseline gate (pre-deploy filter)
+  if (config.agentBuilderBaseline.enabled && !force) {
+    const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config);
+    if (model && filter && !filter.passed) {
+      return {
+        success: false,
+        message:
+          `Model ${modelId} does not meet Agent Builder baseline requirements: ${formatBaselineRejections(filter)}. ` +
+          'Use --force to enqueue anyway.',
+      };
+    }
+    if (!model && !force) {
+      return {
+        success: false,
+        message:
+          `Could not resolve model metadata for ${modelId} (Agent Builder baseline check). Use --force to enqueue anyway.`,
+      };
+    }
   }
 
   // Resolve hardware profile

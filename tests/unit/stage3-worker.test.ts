@@ -35,7 +35,7 @@ function createMockConfig(): AppConfig {
     goldenCluster: {},
     edotCollector: {},
     kibanaRepo: {},
-    stage2Thresholds: { minItlP50Ms: 20, minThroughputTps: 10, maxTtftMs: 5000, minContextWindow: 128000 },
+    stage2Thresholds: { maxItlP50Ms: 20, minThroughputTps: 10, maxTtftMs: 5000, minContextWindow: 128000 },
   } as unknown as AppConfig;
 }
 

@@ -80,11 +80,36 @@ export class KibanaRepoService {
       return;
     }
 
-    this.logger.info(`Pulling latest changes for Kibana repo at ${repoPath}`);
+    this.logger.info(`Pulling latest changes for Kibana repo at ${repoPath}`, { branch });
     try {
-      await execFilePromise('git', ['fetch', 'origin'], { cwd: repoPath });
+      // Fast path: skip network fetch when already on the target branch and up to date.
+      const localHead = (
+        await execFilePromise('git', ['rev-parse', 'HEAD'], { cwd: repoPath })
+      ).stdout.trim();
+      let remoteHead: string | null = null;
+      try {
+        remoteHead = (
+          await execFilePromise('git', ['rev-parse', `origin/${branch}`], { cwd: repoPath })
+        ).stdout.trim();
+      } catch {
+        remoteHead = null;
+      }
+      if (remoteHead && localHead === remoteHead) {
+        this.logger.info('Kibana repo already up to date — skipping fetch', { branch, commit: localHead.slice(0, 8) });
+        return;
+      }
+
+      await execFilePromise('git', ['fetch', 'origin', branch], {
+        cwd: repoPath,
+        timeout: 120_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
       await execFilePromise('git', ['checkout', branch], { cwd: repoPath });
-      await execFilePromise('git', ['pull', 'origin', branch], { cwd: repoPath });
+      await execFilePromise('git', ['pull', '--ff-only', 'origin', branch], {
+        cwd: repoPath,
+        timeout: 120_000,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       throw new KibanaRepoError('checkout', message);

@@ -10,8 +10,6 @@ import type {
   HealthCheckResult,
 } from '../../src/services/health-check.js';
 import { SystemHealthChecker } from '../../src/services/system-health-check.js';
-import { GoldenForwarder } from '../../src/services/golden-forwarder.js';
-import type { AppConfig } from '../../src/types/config.js';
 import type { DiscoveryScheduler } from '../../src/services/discovery-scheduler.js';
 import type { QueueService } from '../../src/services/queue-service.js';
 
@@ -723,19 +721,13 @@ describe('HealthCheckService', () => {
   });
 
   describe('SystemHealthChecker', () => {
-    const baseConfig = {
-      goldenCluster: { enabled: false },
-    } as unknown as AppConfig;
-
     it('returns ok when no optional services are configured', async () => {
-      const checker = new SystemHealthChecker({ config: baseConfig });
+      const checker = new SystemHealthChecker({});
       const result = await checker.run();
 
       expect(result.ok).toBe(true);
       expect(result.checks['discovery_scheduler'].ok).toBe(true);
-      expect(result.checks['golden_forwarder'].ok).toBe(true);
       expect(result.checks['queue_depth'].ok).toBe(true);
-      expect(result.checks['golden_es'].ok).toBe(true);
     });
 
     it('reports discovery scheduler not running', async () => {
@@ -746,7 +738,6 @@ describe('HealthCheckService', () => {
       } as unknown as DiscoveryScheduler;
 
       const checker = new SystemHealthChecker({
-        config: baseConfig,
         discoveryScheduler: mockScheduler,
       });
       const result = await checker.run();
@@ -764,59 +755,12 @@ describe('HealthCheckService', () => {
       } as unknown as DiscoveryScheduler;
 
       const checker = new SystemHealthChecker({
-        config: baseConfig,
         discoveryScheduler: mockScheduler,
       });
       const result = await checker.run();
 
       expect(result.checks['discovery_scheduler'].ok).toBe(true);
       expect(result.checks['discovery_scheduler'].message).toContain('running');
-    });
-
-    it('reports golden forwarder healthy when pending < 100 and no errors', async () => {
-      const forwarder = new GoldenForwarder({ enabled: true, client: {} as never });
-      forwarder.enqueue('test', 'id1', { a: 1 });
-
-      const checker = new SystemHealthChecker({
-        config: baseConfig,
-        goldenForwarder: forwarder,
-      });
-      const result = await checker.run();
-
-      expect(result.checks['golden_forwarder'].ok).toBe(true);
-      expect(result.checks['golden_forwarder'].message).toContain('Pending: 1');
-    });
-
-    it('reports golden forwarder unhealthy when pending >= 100', async () => {
-      const forwarder = new GoldenForwarder({ enabled: true, client: {} as never, batchSize: 200 });
-      for (let i = 0; i < 100; i++) {
-        forwarder.enqueue('test', `id${i}`, { a: i });
-      }
-
-      const checker = new SystemHealthChecker({
-        config: baseConfig,
-        goldenForwarder: forwarder,
-      });
-      const result = await checker.run();
-
-      expect(result.ok).toBe(false);
-      expect(result.checks['golden_forwarder'].ok).toBe(false);
-      expect(result.checks['golden_forwarder'].message).toContain('Pending: 100');
-    });
-
-    it('reports golden forwarder unhealthy when recent replication errors exist', async () => {
-      const forwarder = new GoldenForwarder();
-      forwarder.recordReplicationError('connection timeout');
-
-      const checker = new SystemHealthChecker({
-        config: baseConfig,
-        goldenForwarder: forwarder,
-      });
-      const result = await checker.run();
-
-      expect(result.ok).toBe(false);
-      expect(result.checks['golden_forwarder'].ok).toBe(false);
-      expect(result.checks['golden_forwarder'].message).toContain('1 replication error(s)');
     });
 
     it('reports queue depth warning when count > 50', async () => {
@@ -827,7 +771,6 @@ describe('HealthCheckService', () => {
       } as unknown as QueueService;
 
       const checker = new SystemHealthChecker({
-        config: baseConfig,
         queueService: mockQueueService,
       });
       const result = await checker.run();
@@ -846,7 +789,6 @@ describe('HealthCheckService', () => {
       } as unknown as QueueService;
 
       const checker = new SystemHealthChecker({
-        config: baseConfig,
         queueService: mockQueueService,
       });
       const result = await checker.run();

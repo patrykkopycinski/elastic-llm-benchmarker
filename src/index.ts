@@ -238,8 +238,6 @@ export { ElasticsearchConnector } from './services/elasticsearch-connector.js';
 export { LocalConnector } from './services/local-connector.js';
 
 // Golden forwarder exports
-export { GoldenForwarder } from './services/golden-forwarder.js';
-export type { ReplicationError, GoldenForwarderOptions } from './services/golden-forwarder.js';
 
 // Slack notifier exports
 export { SlackNotifier } from './services/slack-notifier.js';

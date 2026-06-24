@@ -113,7 +113,7 @@ describe('TraceQueryBuilderImpl', () => {
       expect((warnArgs[1] as Record<string, unknown>).modelId).toBe(MODEL_ID);
     });
 
-    it('uses PascalCase field names in ES|QL strings', async () => {
+    it('uses OTel semconv field names in ES|QL strings', async () => {
       const client = createMockClient([
         { columns: [], values: [] },
         { columns: [], values: [] },
@@ -128,22 +128,18 @@ describe('TraceQueryBuilderImpl', () => {
       const q1 = calls[0][0].body.query;
       const q2 = calls[1][0].body.query;
 
-      // Verify PascalCase field names appear in the queries
-      expect(q1).toContain('Attributes.model_id');
-      expect(q1).toContain('StartTime');
-      expect(q1).toContain('Status.Code');
+      expect(q1).toContain('attributes.model_id');
+      expect(q1).toContain('start_time');
+      expect(q1).toContain('span.status.code');
       expect(q1).toContain('COUNT(*)');
-      expect(q1).toContain('SAMPLE(Attributes.error.message, 1)');
-      expect(q1).toContain('Name');
+      expect(q1).toContain('attributes.error.message');
+      expect(q1).toContain('span.name');
 
-      expect(q2).toContain('Attributes.model_id');
-      expect(q2).toContain('StartTime');
-      expect(q2).toContain('Duration');
-      expect(q2).toContain('PERCENTILE(Duration, 50)');
-      expect(q2).toContain('PERCENTILE(Duration, 95)');
-      expect(q2).toContain('PERCENTILE(Duration, 99)');
-      expect(q2).toContain('AVG(Duration)');
-      expect(q2).toContain('Status.Code');
+      expect(q2).toContain('attributes.model_id');
+      expect(q2).toContain('start_time');
+      expect(q2).toContain('span.duration.nanoseconds');
+      expect(q2).toContain('PERCENTILE(span.duration.nanoseconds, 50)');
+      expect(q2).toContain('span.status.code');
     });
 
     it('converts Duration from nanoseconds to milliseconds', async () => {

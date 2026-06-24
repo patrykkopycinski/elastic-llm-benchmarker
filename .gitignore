@@ -64,3 +64,4 @@ failed-reports/
 data/checkpoints.db
 data/*.db
 .hf-cache/
+.cache/

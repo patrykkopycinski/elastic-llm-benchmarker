@@ -11,10 +11,19 @@ export interface BuildkiteConfig {
   retryOnFailure?: boolean;
   defaultEvalSuites?: string[];
   kibanaBranch?: string;
+  /** Poll in background; caller keeps tunnel/model alive until poll completes. */
+  detachPoll?: boolean;
+}
+
+export interface BuildkiteTriggeredBuild {
+  pipelineSlug: string;
+  buildNumber: number;
+  buildUrl: string;
 }
 
 export interface TriggerOnDemandOptions {
   connectorJson: string;
+  connectorId: string;
   evalSuiteIds: string[];
   modelId: string;
 }
@@ -39,6 +48,16 @@ export interface BuildkiteBuildResult {
 export interface BuildkiteEvalTrigger {
   triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult>;
   triggerWeeklyEval(options: TriggerWeeklyOptions): Promise<BuildkiteBuildResult>;
+  /** Create a build without waiting for completion. */
+  createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
+  /** Poll an existing build until terminal state or timeout. */
+  waitForBuild(
+    pipelineSlug: string,
+    buildNumber: number,
+    buildUrl: string,
+  ): Promise<BuildkiteBuildResult>;
+  /** Download artifact body text (requires API token). */
+  downloadArtifact(url: string): Promise<string | undefined>;
 }
 
 interface BuildkiteBuildResponse {
@@ -67,23 +86,52 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     this.pollTimeoutMs = config.pollTimeoutMs ?? 3_600_000;
   }
 
-  async triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult> {
-    const { connectorJson, evalSuiteIds, modelId } = options;
-
-    const env: Record<string, string> = {
-      KIBANA_TESTING_AI_CONNECTORS: connectorJson,
-      LLM_EVAL_SUITES: evalSuiteIds.join(','),
-      BENCHMARK_MODEL_ID: modelId,
-    };
-
-    if (this.config.kibanaBranch) {
-      env['KIBANA_BRANCH'] = this.config.kibanaBranch;
-    }
-
-    return this.triggerAndPoll(
+  async createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild> {
+    const build = await this.createBuild(
       this.config.onDemandPipelineSlug,
-      `Benchmarker: ${modelId} on-demand eval`,
-      env,
+      `Benchmarker: ${options.modelId} on-demand eval`,
+      this.buildOnDemandEnv(options),
+    );
+    return {
+      pipelineSlug: this.config.onDemandPipelineSlug,
+      buildNumber: build.number,
+      buildUrl: build.web_url,
+    };
+  }
+
+  async waitForBuild(
+    pipelineSlug: string,
+    buildNumber: number,
+    buildUrl: string,
+  ): Promise<BuildkiteBuildResult> {
+    return this.pollBuild(pipelineSlug, buildNumber, buildUrl);
+  }
+
+  async downloadArtifact(url: string): Promise<string | undefined> {
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${this.config.apiToken}` },
+      });
+      if (!response.ok) return undefined;
+      return await response.text();
+    } catch {
+      return undefined;
+    }
+  }
+
+  async triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult> {
+    const triggered = await this.createOnDemandBuild(options);
+    if (this.config.detachPoll) {
+      return {
+        buildUrl: triggered.buildUrl,
+        buildNumber: triggered.buildNumber,
+        status: 'running',
+      };
+    }
+    return this.waitForBuild(
+      triggered.pipelineSlug,
+      triggered.buildNumber,
+      triggered.buildUrl,
     );
   }
 
@@ -99,20 +147,56 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       env['KIBANA_BRANCH'] = this.config.kibanaBranch;
     }
 
-    return this.triggerAndPoll(
+    const build = await this.createBuild(
       this.config.weeklyPipelineSlug,
       `Benchmarker: ${modelId} weekly eval`,
       env,
     );
+
+    if (this.config.detachPoll) {
+      return {
+        buildUrl: build.web_url,
+        buildNumber: build.number,
+        status: 'running',
+      };
+    }
+
+    return this.pollBuild(this.config.weeklyPipelineSlug, build.number, build.web_url);
   }
 
-  private async triggerAndPoll(
-    pipelineSlug: string,
-    message: string,
-    env: Record<string, string>,
-  ): Promise<BuildkiteBuildResult> {
-    const build = await this.createBuild(pipelineSlug, message, env);
-    return this.pollBuild(pipelineSlug, build.number, build.web_url);
+  private buildOnDemandEnv(options: TriggerOnDemandOptions): Record<string, string> {
+    const evalSuiteId = options.evalSuiteIds[0];
+    if (!evalSuiteId) {
+      throw new Error('At least one eval suite id is required for on-demand Buildkite eval');
+    }
+    if (options.evalSuiteIds.length > 1) {
+      this.logger.warn('On-demand Buildkite eval supports one suite per build; using first', {
+        evalSuiteId,
+        ignored: options.evalSuiteIds.slice(1),
+      });
+    }
+
+    const connectorId = options.connectorId;
+    if (!connectorId) {
+      throw new Error('connectorId is required for on-demand Buildkite eval');
+    }
+
+    const env: Record<string, string> = {
+      KIBANA_TESTING_AI_CONNECTORS: options.connectorJson,
+      // Kibana run_suite.sh requires EVAL_SUITE_ID (singular), not LLM_EVAL_SUITES.
+      EVAL_SUITE_ID: evalSuiteId,
+      BENCHMARK_MODEL_ID: options.modelId,
+      // Skip matrix fanout even when the pipeline step sets EVAL_FANOUT=1 (build env wins for unset step keys).
+      EVAL_PROJECT: connectorId,
+      EVAL_MODEL_GROUPS: options.modelId,
+      EVALUATION_CONNECTOR_ID: connectorId,
+    };
+
+    if (this.config.kibanaBranch) {
+      env['KIBANA_BRANCH'] = this.config.kibanaBranch;
+    }
+
+    return env;
   }
 
   private async createBuild(

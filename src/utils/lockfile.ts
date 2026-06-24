@@ -20,15 +20,30 @@ export class Lockfile {
   }
 
   /**
-   * Attempt to acquire the lock. Returns true if successful, false if already locked.
+   * Attempt to acquire the lock. Returns true if successful, false if already locked
+   * by a live process. Stale locks from dead PIDs are removed automatically.
    */
   acquire(): boolean {
     if (existsSync(this.path)) {
-      return false;
+      const pid = this.readPid();
+      if (pid !== null && this.isProcessRunning(pid)) {
+        return false;
+      }
+      this.forceRelease();
     }
     writeFileSync(this.path, String(process.pid), 'utf-8');
     this.acquired = true;
     return true;
+  }
+
+  private isProcessRunning(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      return code !== 'ESRCH';
+    }
   }
 
   /**

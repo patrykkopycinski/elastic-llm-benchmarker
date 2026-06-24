@@ -668,7 +668,7 @@ export class ModelDiscoveryService {
   async fetchModelConfig(modelId: string): Promise<HFModelConfig | null> {
     try {
       const response = await this.fetchWithAuth(
-        `${HF_API_BASE}/api/models/${modelId}/resolve/main/config.json`,
+        `${HF_API_BASE}/${modelId}/resolve/main/config.json`,
       );
       if (!response.ok) {
         this.logger.debug(`Failed to fetch config for ${modelId}: ${response.status}`);

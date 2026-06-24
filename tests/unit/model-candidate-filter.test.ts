@@ -638,7 +638,94 @@ describe('ModelCandidateFilter', () => {
     });
   });
 
+  describe('parameter count filter', () => {
+    it('should reject models below minimum parameter count', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minParameterCountBillions: 7,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen2.5-1.5B-Instruct',
+        parameterCount: 1_500_000_000,
+        architecture: 'qwen2',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.passed).toBe(false);
+      expect(result.rejections.some((r) => r.criterion === 'parameter_count')).toBe(true);
+    });
+
+    it('should accept models at or above minimum parameter count', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minParameterCountBillions: 7,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        parameterCount: 8_000_000_000,
+        architecture: 'qwen2',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.rejections.some((r) => r.criterion === 'parameter_count')).toBe(false);
+    });
+
+    it('should warn when parameter count is unknown', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minParameterCountBillions: 7,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({ parameterCount: null });
+      const result = filter.evaluate(model);
+
+      expect(result.warnings.some((r) => r.criterion === 'parameter_count')).toBe(true);
+    });
+  });
+
+  describe('instruct variant filter', () => {
+    it('should reject base models without instruct/chat in the id', () => {
+      const filter = new ModelCandidateFilter('error', { requireInstructVariant: true });
+      const model = createModelCandidate({
+        id: 'meta-llama/Llama-3.1-70B',
+        parameterCount: 70_000_000_000,
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.rejections.some((r) => r.criterion === 'instruct_variant')).toBe(true);
+    });
+
+    it('should accept instruct-tuned models', () => {
+      const filter = new ModelCandidateFilter('error', { requireInstructVariant: true });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen3-8B-Instruct',
+        parameterCount: 8_000_000_000,
+        architecture: 'qwen2',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.rejections.some((r) => r.criterion === 'instruct_variant')).toBe(false);
+    });
+  });
+
   describe('realistic model scenarios', () => {
+    it('should reject Qwen2.5-1.5B-Instruct for Agent Builder baseline', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minParameterCountBillions: 7,
+        requireInstructVariant: true,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen2.5-1.5B-Instruct',
+        name: 'Qwen2.5-1.5B-Instruct',
+        architecture: 'qwen2',
+        contextWindow: 131072,
+        parameterCount: 1_500_000_000,
+        supportsToolCalling: true,
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.passed).toBe(false);
+      expect(result.rejections.some((r) => r.criterion === 'parameter_count')).toBe(true);
+    });
+
     it('should accept Llama-3.1-70B-Instruct', () => {
       const filter = new ModelCandidateFilter('error');
       const model = createModelCandidate({

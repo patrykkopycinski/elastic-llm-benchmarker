@@ -8,7 +8,7 @@
 
 services:
   elasticsearch:
-    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:-8.17.0}
+    image: ${ES_IMAGE:-benchmarker-elasticsearch:snapshot-master}
     container_name: benchmarker-elasticsearch
     environment:
       - node.name=es01
@@ -28,7 +28,7 @@ services:
     volumes:
       - es-data:/usr/share/elasticsearch/data
     ports:
-      - "${ES_PORT:-9200}:9200"
+      - "${ES_PORT:-9223}:9200"
       - "9343:9300"
     healthcheck:
       test: ["CMD-SHELL", "curl -s -u elastic:${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health | grep -q '\"status\":\"green\"\\|\"status\":\"yellow\"'"]
@@ -59,7 +59,7 @@ services:
         echo "Done."
 
   kibana:
-    image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-8.17.0}
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION:-9.5.0-SNAPSHOT}
     container_name: benchmarker-kibana
     environment:
       - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
@@ -127,7 +127,7 @@ services:
         echo "Init done."
 
   fleet-server:
-    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-8.17.0}
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-9.5.0-SNAPSHOT}
     container_name: benchmarker-fleet-server
     profiles:
       - fleet
@@ -160,7 +160,7 @@ services:
   # EDOT Collector — scrapes vLLM Prometheus metrics and accepts OTLP traces,
   # then exports directly to Elasticsearch (no APM Server needed).
   edot-collector:
-    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-8.17.0}
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-9.5.0-SNAPSHOT}
     container_name: benchmarker-edot-collector
     profiles:
       - vllm

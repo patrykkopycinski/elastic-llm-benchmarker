@@ -57,11 +57,11 @@ export function buildRecommendationReport(
   if (!stage1Passed && stage1?.metrics) {
     const m = stage1.metrics;
     const thresholds = config.stage2Thresholds;
-    if (m.itl_p50_ms > thresholds.maxTtftMs) {
+    if (m.itl_p50_ms > thresholds.maxItlP50Ms) {
       blockingIssues.push({
         severity: 'critical',
         category: 'performance',
-        message: `ITL p50 (${m.itl_p50_ms}ms) exceeds threshold (${thresholds.maxTtftMs}ms)`,
+        message: `ITL p50 (${m.itl_p50_ms}ms) exceeds threshold (${thresholds.maxItlP50Ms}ms)`,
       });
     }
     if (m.throughput_tps < thresholds.minThroughputTps) {

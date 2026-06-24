@@ -768,22 +768,34 @@ export class SSHClientPool {
         keepaliveCountMax: 3,
       };
 
-      // Authentication: prefer private key, fall back to password
+      // Authentication: prefer SSH agent, then private key file, then password.
+      const sshAuthSock = process.env['SSH_AUTH_SOCK'];
+      if (sshAuthSock) {
+        connectConfig.agent = sshAuthSock;
+      }
+
       if (config.privateKeyPath) {
         try {
-          connectConfig.privateKey = fs.readFileSync(config.privateKeyPath);
+          const keyData = fs.readFileSync(config.privateKeyPath);
           if (config.passphrase) {
+            connectConfig.privateKey = keyData;
             connectConfig.passphrase = config.passphrase;
+          } else if (!sshAuthSock) {
+            connectConfig.privateKey = keyData;
           }
+          // When agent is available and no passphrase, skip setting privateKey
+          // to avoid ssh2 failing on encrypted OpenSSH keys. The agent handles it.
         } catch (err) {
-          reject(
-            new SSHError(
-              `Failed to read private key: ${config.privateKeyPath}: ${err instanceof Error ? err.message : String(err)}`,
-              config.host,
-              err instanceof Error ? err : undefined,
-            ),
-          );
-          return;
+          if (!sshAuthSock) {
+            reject(
+              new SSHError(
+                `Failed to read private key: ${config.privateKeyPath}: ${err instanceof Error ? err.message : String(err)}`,
+                config.host,
+                err instanceof Error ? err : undefined,
+              ),
+            );
+            return;
+          }
         }
       } else if (config.password) {
         connectConfig.password = config.password;
@@ -910,12 +922,15 @@ export class SSHClientPool {
     // Wrap with sudo if requested
     if (options.sudo) {
       const sudoPassword = options.sudoPassword ?? config.password;
+      const hasShellOps = /[;&|]/.test(actualCommand);
+      const wrappedCmd = hasShellOps
+        ? `sh -c ${this.shellEscape(actualCommand)}`
+        : actualCommand;
+
       if (sudoPassword) {
-        // Use stdin for password to avoid it appearing in process list
-        actualCommand = `echo ${this.shellEscape(sudoPassword)} | sudo -S -p '' ${actualCommand}`;
+        actualCommand = `echo ${this.shellEscape(sudoPassword)} | sudo -S -p '' ${wrappedCmd}`;
       } else {
-        // Passwordless sudo (e.g., NOPASSWD in sudoers)
-        actualCommand = `sudo ${actualCommand}`;
+        actualCommand = `sudo ${wrappedCmd}`;
       }
     }
 

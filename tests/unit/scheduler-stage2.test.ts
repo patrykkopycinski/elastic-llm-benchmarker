@@ -11,13 +11,15 @@ function createMockQueueService(): QueueService {
   const mock = {
     esClient: {} as unknown as QueueService['esClient'],
     enqueue: vi.fn(),
-    dequeue: vi.fn(),
+    dequeue: vi.fn().mockResolvedValue(null),
     getQueue: vi.fn(),
     getById: vi.fn(),
-    getCurrent: vi.fn(),
+    getCurrent: vi.fn().mockResolvedValue(null),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn(),
     findPending: vi.fn().mockResolvedValue([]),
+    failActiveEntries: vi.fn().mockResolvedValue(0),
+    getActiveEntries: vi.fn().mockResolvedValue([]),
     hasPending: vi.fn(),
     shouldAutoStop: vi.fn(),
   };
@@ -105,7 +107,7 @@ describe('Scheduler Stage 2 chaining', () => {
 
   describe('without stage2', () => {
     it('should process entry and mark completed when stage1 succeeds', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
       scheduler = new Scheduler(queueService, stage1Worker, {
         pollIntervalMs: 1000,
         maxConcurrentRuns: 1,
@@ -119,7 +121,7 @@ describe('Scheduler Stage 2 chaining', () => {
     });
 
     it('should mark failed when stage1 fails', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
       stage1Worker = createMockStage1Worker({
         execute: vi.fn().mockResolvedValue({
           runId: 'run-1',
@@ -146,7 +148,7 @@ describe('Scheduler Stage 2 chaining', () => {
 
   describe('with stage2', () => {
     it('should run stage2 after stage1 success and mark completed when stage2 succeeds', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
       scheduler = new Scheduler(
         queueService,
         stage1Worker,
@@ -167,7 +169,7 @@ describe('Scheduler Stage 2 chaining', () => {
     });
 
     it('should mark completed when stage2 is skipped', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
       stage2Worker = createMockStage2Worker({
         execute: vi.fn().mockResolvedValue({
           runId: 'run-1',
@@ -195,7 +197,7 @@ describe('Scheduler Stage 2 chaining', () => {
     });
 
     it('should mark failed when stage2 errors', async () => {
-      queueService.findPending.mockResolvedValue([createQueueEntry()]);
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
       stage2Worker = createMockStage2Worker({
         execute: vi.fn().mockResolvedValue({
           runId: 'run-1',

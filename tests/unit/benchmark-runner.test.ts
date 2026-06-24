@@ -120,7 +120,9 @@ describe('BenchmarkRunnerService', () => {
       );
 
       expect(command).toContain('vllm bench serve');
-      expect(command).toContain('--base-url http://localhost:8000/v1');
+      expect(command).toContain('--backend openai-chat');
+      expect(command).toContain('--base-url http://localhost:8000');
+      expect(command).toContain('--endpoint /v1/chat/completions');
       expect(command).toContain('--model meta-llama/Llama-3-70B-Instruct');
       expect(command).toContain('--num-prompts 200');
       expect(command).toContain('--max-concurrency 4');
@@ -133,7 +135,7 @@ describe('BenchmarkRunnerService', () => {
       service = new BenchmarkRunnerService(pool, 'error', { apiPort: 9000 });
 
       const command = service.buildBenchmarkCommand('test-model', 1);
-      expect(command).toContain('--base-url http://localhost:9000/v1');
+      expect(command).toContain('--base-url http://localhost:9000');
     });
 
     it('uses custom number of prompts', () => {

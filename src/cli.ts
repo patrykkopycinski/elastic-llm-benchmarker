@@ -20,13 +20,14 @@ import type { PipelineRun } from './scheduler/pipeline-state.js';
  */
 
 import { Command } from 'commander';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, openSync } from 'node:fs';
 import { resolve, dirname, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { Client } from '@elastic/elasticsearch';
 import { loadConfig } from './config/index.js';
 import { ElasticsearchResultsStore } from './services/elasticsearch-results-store.js';
+import { ensureIndices } from './services/es-index-mappings.js';
 import { ResultsStore } from './services/results-store.js';
 import { QueueService } from './services/queue-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
@@ -39,8 +40,12 @@ import { VllmEngine } from './engines/vllm-engine.js';
 import { createLogger } from './utils/logger.js';
 import { registerIngestPipelines } from './services/es-ingest-pipelines.js';
 import { TraceQueryBuilderImpl } from './services/trace-query-builder.js';
+import { LocalTraceQueryBuilder } from './services/local-trace-query-builder.js';
+import { CompositeTraceQueryBuilder } from './services/composite-trace-query-builder.js';
 import { ReasoningPromptBuilderImpl } from './services/reasoning-prompt-builder.js';
 import { LlmClientImpl } from './services/llm-client.js';
+import type { LlmClient } from './services/llm-client.js';
+import { EisLlmClient } from './services/eis-llm-client.js';
 import type { BenchmarkResult } from './types/benchmark.js';
 import type { ModelBenchmarkSummary } from './services/elasticsearch-results-store.js';
 import type { AppConfig } from './types/config.js';
@@ -52,6 +57,7 @@ import { SystemHealthChecker } from './services/system-health-check.js';
 import { SlackNotifier } from './services/slack-notifier.js';
 import { LocalConnector } from './services/local-connector.js';
 import { DiscoveryScheduler } from './services/discovery-scheduler.js';
+import { createAgentBuilderFilter } from './services/agent-builder-baseline.js';
 import { ModelDiscoveryService } from './services/model-discovery.js';
 import { HardwareEstimator } from './services/hardware-estimator.js';
 import { HardwareProfileRegistry } from './services/hardware-profiles.js';
@@ -913,6 +919,25 @@ program
     }
   });
 
+function createLlmClient(config: AppConfig, esClient: Client, logger: ReturnType<typeof createLogger>): LlmClient | undefined {
+  if (config.eisApiKey) {
+    logger.info('Stage 3 reasoning: using EIS (Elastic Inference Service)', { model: config.eisModel });
+    return new EisLlmClient(
+      esClient,
+      config.eisApiKey,
+      config.eisModel,
+      config.elasticsearch.url ?? 'http://localhost:9223',
+      logger,
+    );
+  }
+  if (config.llmApiKey) {
+    logger.info('Stage 3 reasoning: using OpenAI-compatible LLM', { model: config.llmModel });
+    return new LlmClientImpl(config, logger);
+  }
+  logger.warn('Stage 3 reasoning: no LLM configured (set EIS_CCM_API_KEY or LLM_API_KEY)');
+  return undefined;
+}
+
 function printReport(r: { modelId: string; verdict: string; confidence: string; hardwareProfile: string; stage1Passed: boolean; stage2Ran: boolean; stage2Passed: boolean | null; stage3Ran: boolean; stage1Metrics: { itl: { p50: number }; ttft: { p50: number }; throughputTps: number } | null; passingEvals: Array<{ suite: string; score: number; threshold: number; passed: boolean }>; blockingIssues: Array<{ severity: string; message: string }>; suggestions: Array<{ title: string; description: string }>; evaluatedAt: string; runId: string }): void {
   const verdictColor = r.verdict === 'support' ? '\x1b[32m' : r.verdict === 'reject' ? '\x1b[31m' : '\x1b[33m';
   console.error(`\n=== Recommendation Report: ${r.modelId} ===\n`);
@@ -1162,6 +1187,12 @@ if (_binaryName === 'benchmarker-queue') {
     .option('--discovery', 'Enable HuggingFace model discovery scheduler', false)
     .option('--ci-evals', 'Enable CI eval pipeline (smoke test → Buildkite on-demand eval)', false)
     .option('--full-eval', 'Also trigger weekly eval after on-demand passes (requires --ci-evals)', false)
+    .option('--daemonize', 'Fork into a background process and exit (survives shell disconnect)', false)
+    .option('--clear-pending', 'Cancel all pending queue entries before starting (validation runs)', false)
+    .option(
+      '--enqueue-after-clear <modelId>',
+      'Enqueue a model after --clear-pending (avoids cancelling the validation target)',
+    )
     .option('--connector <type>', 'Output connector: "elasticsearch" (default) or "local"', 'elasticsearch')
     .option('--output-dir <path>', 'Output directory for local connector', './benchmark-output')
     .action(async (opts) => {
@@ -1172,6 +1203,9 @@ if (_binaryName === 'benchmarker-queue') {
       const enableDiscovery = opts['discovery'] as boolean;
       const enableCIEvals = opts['ciEvals'] as boolean;
       const enableFullEval = opts['fullEval'] as boolean;
+      const daemonize = opts['daemonize'] as boolean;
+      const clearPending = opts['clearPending'] as boolean;
+      const enqueueAfterClear = opts['enqueueAfterClear'] as string | undefined;
       const queueModel = opts['queueModel'] as string | undefined;
       const connectorType = opts['connector'] as string;
       const outputDir = opts['outputDir'] as string;
@@ -1180,6 +1214,28 @@ if (_binaryName === 'benchmarker-queue') {
       // Load config first — needed for both one-off enqueue and scheduler start
       const config = loadAppConfig({ config: configPath, json: false });
       if (!config) process.exit(1);
+
+      if (daemonize && !queueModel) {
+        const childArgs = process.argv.slice(2).filter((arg) => arg !== '--daemonize');
+        const cliEntry = process.argv[1] ?? resolve(process.cwd(), 'dist/cli.js');
+        const logPath = resolve(process.cwd(), '.smoke-logs/daemon.log');
+        mkdirSync(dirname(logPath), { recursive: true });
+        const logFd = openSync(logPath, 'a');
+        const child = spawn(process.execPath, [cliEntry, ...childArgs], {
+          detached: true,
+          stdio: ['ignore', logFd, logFd],
+          env: process.env,
+          cwd: process.cwd(),
+        });
+        child.unref();
+        console.log(`benchmarker-queue daemon started (pid ${child.pid ?? 'unknown'}, log ${logPath})`);
+        process.exit(0);
+      }
+
+      // Keep the event loop alive when stdin is closed (agent shells, nohup, launchd).
+      if (process.stdin.isTTY !== true) {
+        process.stdin.resume();
+      }
 
       // One-off enqueue mode (for CI)
       if (queueModel) {
@@ -1226,9 +1282,19 @@ if (_binaryName === 'benchmarker-queue') {
         process.exit(1);
       }
 
-      // Pre-flight health check
+      // Pre-flight health check — pass config values as env vars
       try {
-        execSync('bash scripts/health-check.sh', { stdio: 'inherit' });
+        const healthEnv: Record<string, string> = {
+          ...process.env as Record<string, string>,
+          ELASTICSEARCH_URL: config.elasticsearch.url,
+          SSH_HOST: config.ssh.host,
+          SSH_PORT: String(config.ssh.port),
+          SSH_USERNAME: config.ssh.username,
+        };
+        if (config.ssh.privateKeyPath) {
+          healthEnv['SSH_KEY_PATH'] = config.ssh.privateKeyPath;
+        }
+        execSync('bash scripts/health-check.sh', { stdio: 'inherit', env: healthEnv });
       } catch {
         lockfile.release();
         console.error('Error: Health check failed. Fix issues and try again.');
@@ -1246,9 +1312,54 @@ if (_binaryName === 'benchmarker-queue') {
         process.exit(1);
       }
 
+      // Ensure all ES indices exist with correct mappings
+      await ensureIndices(esClient);
+      logger.info('ES indices verified');
+
       // Create queue service
       const queueService = new QueueService(esClient);
       logger.info('Queue service ready');
+
+      const orphanedActive = await queueService.failActiveEntries(
+        'Orphaned active entry — previous daemon exited before completion',
+      );
+      if (orphanedActive > 0) {
+        logger.warn('Cleared orphaned active queue entries before starting scheduler', {
+          count: orphanedActive,
+        });
+      }
+
+      if (clearPending) {
+        const cancelled = await queueService.cancelAllPending();
+        if (cancelled > 0) {
+          logger.info('Cancelled pending queue entries before starting scheduler', {
+            count: cancelled,
+          });
+        }
+      }
+
+      if (enqueueAfterClear) {
+        const enqueueResult = await runEnqueue({
+          modelId: enqueueAfterClear,
+          config,
+          esClient,
+          hardwareProfileId: config.hardwareProfileId,
+          priority: 999,
+          force: true,
+        });
+        if (!enqueueResult.success) {
+          lockfile.release();
+          logger.error('Failed to enqueue validation model after clear-pending', {
+            modelId: enqueueAfterClear,
+            error: enqueueResult.message,
+          });
+          process.exit(1);
+        }
+        logger.info('Enqueued validation model after clear-pending', {
+          modelId: enqueueAfterClear,
+          queueEntryId: enqueueResult.entryId,
+        });
+      }
 
       // Create worker dependencies
       const sshPool = new SSHClientPool({}, config.logLevel ?? 'info');
@@ -1259,12 +1370,16 @@ if (_binaryName === 'benchmarker-queue') {
           gpuMemoryUtilization: config.engine?.vllmGpuMemoryUtilization,
           maxModelLen: config.engine?.maxModelLen,
           huggingfaceToken: config.huggingfaceToken,
+          useSudo: config.ssh.useSudo,
         },
       });
 
-      // Optionally create Stage 2 worker
+      const ciEvalsEnabled =
+        (enableCIEvals || config.buildkite.enabled) && Boolean(config.buildkite.apiToken);
+
+      // Optionally create Stage 2 worker (local Kibana clone path — skipped when CI evals are enabled)
       const stage2Worker =
-        enableStage2 || config.enableStage2
+        (enableStage2 || config.enableStage2) && !ciEvalsEnabled
           ? new Stage2WorkerImpl({
               config,
               gate: new Stage2Gate(config),
@@ -1276,24 +1391,29 @@ if (_binaryName === 'benchmarker-queue') {
           : undefined;
 
       if (stage2Worker) {
-        logger.info('Stage 2 pipeline enabled');
+        logger.info('Stage 2 local eval pipeline enabled');
+      } else if ((enableStage2 || config.enableStage2) && ciEvalsEnabled) {
+        logger.info('Stage 2 uses Buildkite Kibana CI evals (local eval-suite-runner disabled)');
       }
 
       // Optionally create Stage 3 worker
-      const stage3Worker =
-        enableStage3
-          ? new Stage3WorkerImpl({
-              config,
-              traceQueryBuilder: new TraceQueryBuilderImpl(esClient, logger),
-              promptBuilder: new ReasoningPromptBuilderImpl(),
-              llmClient: new LlmClientImpl(config, logger),
-              resultsStore,
-              logger,
-            })
-          : undefined;
-
-      if (stage3Worker) {
-        logger.info('Stage 3 reasoning pipeline enabled');
+      let stage3Worker: Stage3WorkerImpl | undefined;
+      if (enableStage3) {
+        const llmClient = createLlmClient(config, esClient, logger);
+        if (llmClient) {
+          stage3Worker = new Stage3WorkerImpl({
+            config,
+            traceQueryBuilder: new CompositeTraceQueryBuilder(
+              new TraceQueryBuilderImpl(esClient, logger),
+              new LocalTraceQueryBuilder(),
+            ),
+            promptBuilder: new ReasoningPromptBuilderImpl(),
+            llmClient,
+            resultsStore,
+            logger,
+          });
+          logger.info('Stage 3 reasoning pipeline enabled');
+        }
       }
 
       // Optionally create Slack notifier
@@ -1338,10 +1458,15 @@ if (_binaryName === 'benchmarker-queue') {
           profileRegistry,
           queueService,
           config: config.discoveryScheduler,
+          candidateFilter: config.agentBuilderBaseline.enabled
+            ? createAgentBuilderFilter(config)
+            : undefined,
           logger,
         });
         discoveryScheduler.start();
-        logger.info('HuggingFace discovery scheduler started (interval: %d min)', config.discoveryScheduler.intervalMinutes);
+        logger.info(
+          `HuggingFace discovery scheduler started (interval: ${config.discoveryScheduler.intervalMinutes} min)`,
+        );
       } else {
         logger.info('HuggingFace discovery scheduler disabled (set discoveryScheduler.enabled=true to enable)');
       }
@@ -1360,14 +1485,23 @@ if (_binaryName === 'benchmarker-queue') {
           retryOnFailure: config.buildkite.retryOnFailure,
           defaultEvalSuites: config.buildkite.defaultEvalSuites,
           kibanaBranch: config.buildkite.kibanaBranch,
+          detachPoll: config.buildkite.detachPoll,
         }, config.logLevel);
         ciEvalsOptions = {
           enabled: true,
           fullEval: enableFullEval || config.buildkite.triggerFullEval,
+          detachPoll: config.buildkite.detachPoll,
           smokeTest,
           buildkiteTrigger,
         };
-        logger.info('CI eval pipeline enabled (on-demand + %s)', ciEvalsOptions.fullEval ? 'weekly' : 'no weekly');
+        logger.info(
+          `CI eval pipeline enabled (on-demand + ${ciEvalsOptions.fullEval ? 'weekly' : 'no weekly'})`,
+        );
+        logger.info('Buildkite eval config', {
+          kibanaBranch: config.buildkite.kibanaBranch,
+          defaultEvalSuites: config.buildkite.defaultEvalSuites,
+          kibanaRepoBranch: config.kibanaRepo.branch,
+        });
       } else if (enableCIEvals) {
         logger.warn('CI evals requested but buildkite.apiToken is missing — skipping');
       }
@@ -1392,12 +1526,17 @@ if (_binaryName === 'benchmarker-queue') {
         ciEvalsOptions,
       );
 
-      logger.info('Scheduler starting. Polling every %d ms...', pollInterval);
+      logger.info(`Scheduler starting. Polling every ${pollInterval} ms...`);
       scheduler.start();
+
+      // Graceful shutdown — ignore SIGHUP so agent/shell disconnect does not kill mid-Buildkite poll.
+      process.on('SIGHUP', () => {
+        logger.warn('Received SIGHUP — ignoring (daemon keeps running)');
+      });
 
       // Graceful shutdown
       const shutdown = async (signal: string) => {
-        logger.info('Received %s. Stopping scheduler...', signal);
+        logger.info(`Received ${signal}. Stopping scheduler...`);
         discoveryScheduler?.stop();
         await scheduler.stop();
         lockfile.release();
@@ -1450,7 +1589,6 @@ if (_binaryName === 'benchmarker-queue') {
     .option('--format <fmt>', 'Output format: text or json', 'text')
     .action(async (opts) => {
       const json = opts['format'] === 'json';
-      const config = loadAppConfig({ config: undefined, json });
 
       let bashOk = true;
       let bashOutput = '';
@@ -1461,9 +1599,7 @@ if (_binaryName === 'benchmarker-queue') {
         bashOutput = String(err);
       }
 
-      const checker = new SystemHealthChecker({
-        config: config ?? undefined,
-      });
+      const checker = new SystemHealthChecker({});
       const tsResult = await checker.run();
 
       if (json) {
@@ -1528,11 +1664,20 @@ if (_binaryName === 'benchmarker-queue') {
 
       const resultsStore = new ElasticsearchResultsStore(esClient);
 
+      const llmClient = createLlmClient(config, esClient, logger);
+      if (!llmClient) {
+        console.error('Error: No LLM configured — set EIS_CCM_API_KEY or LLM_API_KEY');
+        process.exit(1);
+      }
+
       const stage3Worker = new Stage3WorkerImpl({
         config,
-        traceQueryBuilder: new TraceQueryBuilderImpl(esClient, logger),
+        traceQueryBuilder: new CompositeTraceQueryBuilder(
+          new TraceQueryBuilderImpl(esClient, logger),
+          new LocalTraceQueryBuilder(),
+        ),
         promptBuilder: new ReasoningPromptBuilderImpl(),
-        llmClient: new LlmClientImpl(config, logger),
+        llmClient,
         resultsStore,
         logger,
       });

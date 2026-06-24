@@ -60,7 +60,7 @@ function createMockConfig(overrides?: Partial<AppConfig['stage2Thresholds']>): A
     edotCollector: {},
     kibanaRepo: {},
     stage2Thresholds: {
-      minItlP50Ms: 20,
+      maxItlP50Ms: 20,
       minThroughputTps: 10,
       maxTtftMs: 5000,
       minContextWindow: 128000,
@@ -86,8 +86,8 @@ describe('Stage2Gate', () => {
   it('should proceed when all thresholds pass', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 100,
-      itl_p99_ms: 200,
+      itl_p50_ms: 15,
+      itl_p99_ms: 20,
       ttft_ms: 200,
       throughput_tps: 50,
       duration_sec: 60,
@@ -99,11 +99,11 @@ describe('Stage2Gate', () => {
     expect(decision.reason).toBe('All thresholds passed');
   });
 
-  it('should fail when ITL p50 exceeds maxTtftMs threshold', () => {
+  it('should fail when ITL p50 exceeds maxItlP50Ms threshold', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 5001,
-      itl_p99_ms: 6000,
+      itl_p50_ms: 21,
+      itl_p99_ms: 30,
       ttft_ms: 100,
       throughput_tps: 50,
       duration_sec: 60,
@@ -113,15 +113,15 @@ describe('Stage2Gate', () => {
 
     expect(decision.proceed).toBe(false);
     expect(decision.reason).toContain('ITL p50');
-    expect(decision.reason).toContain('5001ms');
-    expect(decision.reason).toContain('5000ms');
+    expect(decision.reason).toContain('21ms');
+    expect(decision.reason).toContain('20ms');
   });
 
   it('should fail when throughput is below minThroughputTps', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 100,
-      itl_p99_ms: 200,
+      itl_p50_ms: 15,
+      itl_p99_ms: 20,
       ttft_ms: 100,
       throughput_tps: 9,
       duration_sec: 60,
@@ -138,8 +138,8 @@ describe('Stage2Gate', () => {
   it('should fail when TTFT exceeds maxTtftMs', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 100,
-      itl_p99_ms: 200,
+      itl_p50_ms: 15,
+      itl_p99_ms: 20,
       ttft_ms: 5001,
       throughput_tps: 50,
       duration_sec: 60,
@@ -166,8 +166,8 @@ describe('Stage2Gate', () => {
   it('should pass when ITL p50 is exactly at the threshold', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 5000,
-      itl_p99_ms: 6000,
+      itl_p50_ms: 20,
+      itl_p99_ms: 25,
       ttft_ms: 100,
       throughput_tps: 50,
       duration_sec: 60,
@@ -181,8 +181,8 @@ describe('Stage2Gate', () => {
   it('should pass when throughput is exactly at the threshold', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 100,
-      itl_p99_ms: 200,
+      itl_p50_ms: 15,
+      itl_p99_ms: 20,
       ttft_ms: 100,
       throughput_tps: 10,
       duration_sec: 60,
@@ -196,8 +196,8 @@ describe('Stage2Gate', () => {
   it('should pass when TTFT is exactly at the threshold', () => {
     const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 100,
-      itl_p99_ms: 200,
+      itl_p50_ms: 15,
+      itl_p99_ms: 20,
       ttft_ms: 5000,
       throughput_tps: 50,
       duration_sec: 60,
@@ -210,7 +210,7 @@ describe('Stage2Gate', () => {
 
   it('should use custom threshold overrides', () => {
     const gate = new Stage2Gate(
-      createMockConfig({ maxTtftMs: 100, minThroughputTps: 100 }),
+      createMockConfig({ maxItlP50Ms: 100, maxTtftMs: 100, minThroughputTps: 100 }),
     );
     const result = createStage1Result({
       itl_p50_ms: 50,
@@ -227,7 +227,7 @@ describe('Stage2Gate', () => {
 
   it('should fail with custom threshold overrides when TTFT exceeds overridden value', () => {
     const gate = new Stage2Gate(
-      createMockConfig({ maxTtftMs: 100 }),
+      createMockConfig({ maxItlP50Ms: 100, maxTtftMs: 100 }),
     );
     const result = createStage1Result({
       itl_p50_ms: 50,

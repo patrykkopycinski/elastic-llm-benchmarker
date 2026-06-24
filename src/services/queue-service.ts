@@ -234,6 +234,37 @@ export class QueueService {
     return toEntry(hit._id!, hit._source!);
   }
 
+  /** All in-flight queue entries (deploying or benchmarking). */
+  async getActiveEntries(): Promise<QueueEntry[]> {
+    const res = await this.esClient.search<EsSource>({
+      index: INDEX,
+      query: {
+        bool: {
+          should: [
+            { term: { status: 'deploying' } },
+            { term: { status: 'benchmarking' } },
+          ],
+          minimum_should_match: 1,
+        },
+      },
+      sort: [{ started_at: { order: 'asc' } }],
+      size: 100,
+    });
+    return res.hits.hits.map((h) => toEntry(h._id!, h._source!));
+  }
+
+  /**
+   * Mark all deploying/benchmarking entries as failed.
+   * Used when a new daemon starts after an unclean shutdown.
+   */
+  async failActiveEntries(errorMessage: string): Promise<number> {
+    const entries = await this.getActiveEntries();
+    for (const entry of entries) {
+      await this.updateStatus(entry.id, 'failed', errorMessage);
+    }
+    return entries.length;
+  }
+
   async updateStatus(
     id: string,
     status: QueueEntry['status'],
@@ -293,6 +324,16 @@ export class QueueService {
       }
       throw err;
     }
+  }
+
+  async cancelAllPending(): Promise<number> {
+    const pending = await this.findPending(500);
+    let cancelled = 0;
+    for (const entry of pending) {
+      const result = await this.cancel(entry.id);
+      if (result === true) cancelled++;
+    }
+    return cancelled;
   }
 
   async findPending(limit: number = 10): Promise<QueueEntry[]> {

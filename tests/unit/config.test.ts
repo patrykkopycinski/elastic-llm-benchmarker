@@ -288,4 +288,19 @@ describe('formatValidationErrors', () => {
     expect(messages[0]).toBe('ssh.host: SSH host is required');
     expect(messages[1]).toBe('huggingfaceToken: HuggingFace token is required');
   });
+
+  it('loads smoke-full.json with git@ kibana repo URL and aligned branches', () => {
+    process.env['HUGGINGFACE_TOKEN'] = 'hf_test_token';
+    process.env['BUILDKITE_API_TOKEN'] = 'bk_test';
+
+    const config = loadConfig(undefined, {
+      configPath: 'config/smoke-full.json',
+      skipDotenv: true,
+    });
+
+    expect(config.kibanaRepo.url).toBe('git@github.com:elastic/kibana.git');
+    expect(config.buildkite.kibanaBranch).toBe('fix/weekly-evals-matrix');
+    expect(config.kibanaRepo.branch).toBe('fix/weekly-evals-matrix');
+    expect(config.buildkite.defaultEvalSuites).toEqual(['security-alert-triage']);
+  });
 });

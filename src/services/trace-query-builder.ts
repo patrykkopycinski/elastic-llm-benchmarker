@@ -78,9 +78,10 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
     timeRange: { from: string; to: string },
   ): Promise<EsqlResponse> {
     const query = `FROM .benchmark-traces-*
-| WHERE Attributes.model_id == "${modelId}" AND StartTime >= "${timeRange.from}" AND StartTime <= "${timeRange.to}"
-| WHERE Status.Code == "Error"
-| STATS count = COUNT(*), sample = SAMPLE(Attributes.error.message, 1) BY Name
+| WHERE (attributes.model_id == "${modelId}" OR attributes.modelId == "${modelId}")
+| WHERE start_time >= "${timeRange.from}" AND start_time <= "${timeRange.to}"
+| WHERE span.status.code == "Error"
+| STATS count = COUNT(*), sample = SAMPLE(attributes.error.message, 1) BY span.name
 | SORT count DESC
 | LIMIT 10`;
 
@@ -96,8 +97,9 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
     timeRange: { from: string; to: string },
   ): Promise<EsqlResponse> {
     const query = `FROM .benchmark-traces-*
-| WHERE Attributes.model_id == "${modelId}" AND StartTime >= "${timeRange.from}" AND StartTime <= "${timeRange.to}"
-| STATS count = COUNT(*), p50 = PERCENTILE(Duration, 50), p95 = PERCENTILE(Duration, 95), p99 = PERCENTILE(Duration, 99), avgDur = AVG(Duration), errors = COUNT(*) WHERE Status.Code == "Error" BY Name
+| WHERE (attributes.model_id == "${modelId}" OR attributes.modelId == "${modelId}")
+| WHERE start_time >= "${timeRange.from}" AND start_time <= "${timeRange.to}"
+| STATS count = COUNT(*), p50 = PERCENTILE(span.duration.nanoseconds, 50), p95 = PERCENTILE(span.duration.nanoseconds, 95), p99 = PERCENTILE(span.duration.nanoseconds, 99), avgDur = AVG(span.duration.nanoseconds), errors = COUNT(*) WHERE span.status.code == "Error" BY span.name
 | SORT p95 DESC`;
 
     return this.client.transport.request<EsqlResponse>({
@@ -111,7 +113,7 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
     const cols = resp.columns ?? [];
     const rows = resp.values ?? [];
 
-    const idxName = cols.findIndex((c) => c.name === 'Name');
+    const idxName = cols.findIndex((c) => c.name === 'span.name' || c.name === 'Name');
     const idxCount = cols.findIndex((c) => c.name === 'count');
     const idxSample = cols.findIndex((c) => c.name === 'sample');
 
@@ -131,7 +133,7 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
     const cols = resp.columns ?? [];
     const rows = resp.values ?? [];
 
-    const idxName = cols.findIndex((c) => c.name === 'Name');
+    const idxName = cols.findIndex((c) => c.name === 'span.name' || c.name === 'Name');
     const idxCount = cols.findIndex((c) => c.name === 'count');
     const idxP50 = cols.findIndex((c) => c.name === 'p50');
     const idxP95 = cols.findIndex((c) => c.name === 'p95');

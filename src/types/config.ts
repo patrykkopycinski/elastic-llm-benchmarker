@@ -53,7 +53,8 @@ export const benchmarkThresholdsSchema = z.object({
  * Stage 2 thresholds for the gate between Stage 1 and Stage 2 benchmarks.
  */
 export const stage2ThresholdsSchema = z.object({
-  minItlP50Ms: z.number().positive().default(20),
+  /** Maximum inter-token latency p50 (ms). Lower is better. */
+  maxItlP50Ms: z.number().positive().default(20),
   minThroughputTps: z.number().positive().default(10),
   maxTtftMs: z.number().positive().default(5000),
   minContextWindow: z.number().int().positive().default(128_000),
@@ -357,7 +358,7 @@ export const elasticAgentConfigSchema = z.object({
   enrollmentToken: z.string().optional(),
   mode: z.enum(['fleet', 'standalone']).default('fleet'),
   policyId: z.string().optional(),
-  version: z.string().default('8.17.0'),
+  version: z.string().default('9.5.0-SNAPSHOT'),
 });
 
 /**
@@ -384,8 +385,19 @@ export const edotCollectorConfigSchema = z.object({
 /**
  * Kibana repository configuration for cloning the Kibana main repo.
  */
+const gitCloneUrlSchema = z
+  .string()
+  .min(1)
+  .refine(
+    (value) =>
+      value.startsWith('https://') ||
+      value.startsWith('http://') ||
+      value.startsWith('git@'),
+    { message: 'Must be an http(s):// or git@ clone URL' },
+  );
+
 export const kibanaRepoConfigSchema = z.object({
-  url: z.string().url().default('https://github.com/elastic/kibana.git'),
+  url: gitCloneUrlSchema.default('https://github.com/elastic/kibana.git'),
   pinToCommit: z.string().optional(),
   pinToTag: z.string().optional(),
   clonePath: z.string().default('./.kibana-cache'),
@@ -430,7 +442,7 @@ export const buildkiteConfigSchema = z.object({
   /** Buildkite organization slug. */
   orgSlug: z.string().default('elastic'),
   /** Pipeline slug for on-demand eval runs. */
-  onDemandPipelineSlug: z.string().default('kibana-evals-on-demand'),
+  onDemandPipelineSlug: z.string().default('kibana-evals-on-demand-llm-evals'),
   /** Pipeline slug for weekly eval runs. */
   weeklyPipelineSlug: z.string().default('kibana-evals-weekly-llm-evals'),
   /** Polling interval in milliseconds when waiting for build completion. */
@@ -445,6 +457,36 @@ export const buildkiteConfigSchema = z.object({
   kibanaBranch: z.string().default('main'),
   /** Whether to also trigger weekly evals after on-demand passes. */
   triggerFullEval: z.boolean().default(false),
+  /**
+   * When true, trigger Buildkite and poll in a background task while Stage 2/3 continue.
+   * Tunnel + vLLM deployment stay up until the poll finishes (or times out).
+   */
+  detachPoll: z.boolean().default(true),
+  /** Max output tokens passed to the Kibana .gen-ai connector (optional). */
+  connectorMaxTokens: z.number().int().positive().optional(),
+});
+
+/**
+ * Pre-deployment baseline for models entering Kibana Agent Builder evals.
+ * See elastic/security-team#15545 — parallel tool calling is NOT required.
+ */
+export const agentBuilderBaselineSchema = z.object({
+  /** Apply baseline gate on enqueue, discovery, and CI eval paths. */
+  enabled: z.boolean().default(true),
+  /** Minimum context window (tokens). Agent Builder security evals need long context. */
+  minContextWindow: z.number().int().positive().default(128_000),
+  /**
+   * Minimum parameter count in billions. Excludes sub-agentic models (e.g. 1.5B).
+   * 7B default: pragmatic floor for Agent Builder; override to 4 for broader sweeps.
+   */
+  minParameterCountBillions: z.number().positive().default(7),
+  /**
+   * Require single-tool calling support via a known vLLM parser family.
+   * Does NOT require parallel/multi-tool calling.
+   */
+  requireToolCalling: z.boolean().default(true),
+  /** Require instruct/chat-tuned checkpoint (instruct/chat/-it in model id). */
+  requireInstructVariant: z.boolean().default(true),
 });
 
 /**
@@ -513,12 +555,17 @@ export const appConfigSchema = z.object({
   smokeTest: smokeTestConfigSchema.default({}),
   /** Buildkite CI eval configuration. */
   buildkite: buildkiteConfigSchema.default({}),
+  /** Pre-deployment gate for Kibana Agent Builder eval eligibility. */
+  agentBuilderBaseline: agentBuilderBaselineSchema.default({}),
   /** LLM configuration for reasoning and evaluation tasks. */
   llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
   llmBaseUrl: z.string().url().optional().describe('Base URL for OpenAI-compatible API'),
   llmModel: z.string().default('gpt-4o').describe('Model name for reasoning'),
   llmMaxTokens: z.number().int().positive().default(4096),
   llmTemperature: z.number().min(0).max(2).default(0.3),
+  /** EIS (Elastic Inference Service) configuration — preferred over llmApiKey when set. */
+  eisApiKey: z.string().optional().describe('EIS CCM API key for Elastic Inference Service'),
+  eisModel: z.string().default('eis/anthropic-claude-4.6-opus').describe('EIS model ID for reasoning'),
 });
 
 export type SSHConfig = z.infer<typeof sshConfigSchema>;
@@ -572,3 +619,4 @@ export type KibanaRepoConfig = z.infer<typeof kibanaRepoConfigSchema>;
 export type DiscoverySchedulerConfig = z.infer<typeof discoverySchedulerConfigSchema>;
 export type SmokeTestConfig = z.infer<typeof smokeTestConfigSchema>;
 export type BuildkiteConfig = z.infer<typeof buildkiteConfigSchema>;
+export type AgentBuilderBaselineConfig = z.infer<typeof agentBuilderBaselineSchema>;

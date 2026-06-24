@@ -1,0 +1,106 @@
+{
+  "$schema": "../src/types/config.ts",
+  "elasticsearch": {
+    "url": "http://localhost:9223"
+  },
+  "ssh": {
+    "host": "your-gpu-vm-host",
+    "port": 22,
+    "username": "your_ssh_user",
+    "privateKeyPath": "/path/to/your/ssh/key",
+    "useSudo": true
+  },
+  "huggingfaceToken": "",
+  "benchmarkThresholds": {
+    "minContextWindow": 128000,
+    "maxITLMs": 20,
+    "maxToolCallLatencyMs": 1000,
+    "minToolCallSuccessRate": 1.0,
+    "concurrencyLevels": [1, 4, 16],
+    "healthCheckTimeoutSeconds": 600
+  },
+  "hardwareProfileId": "2xa100-80gb",
+  "vmHardwareProfile": {
+    "gpuType": "nvidia-a100-80gb",
+    "gpuCount": 2,
+    "ramGb": 340,
+    "cpuCores": 24,
+    "diskGb": 1000,
+    "machineType": "a2-ultragpu-2g"
+  },
+  "engine": {
+    "type": "vllm",
+    "vllmGpuMemoryUtilization": 0.95
+  },
+  "logLevel": "info",
+  "resultsDir": "./results",
+  "enableStage2": true,
+  "daemon": {
+    "enabled": false,
+    "sleepIntervalMs": 60000,
+    "maxConsecutiveErrors": 10,
+    "maxCycles": 0,
+    "recursionLimit": 25,
+    "stateFilePath": "./data/daemon-state.json",
+    "pauseWindows": [],
+    "errorBackoffMultiplier": 1.5,
+    "maxSleepIntervalMs": 300000
+  },
+  "tunnel": {
+    "enabled": true,
+    "provider": "ngrok",
+    "ngrokRegion": "us",
+    "localPort": 18000,
+    "timeoutMs": 30000,
+    "retryAttempts": 3,
+    "retryDelayMs": 5000
+  },
+  "kibanaConnector": {
+    "enabled": false,
+    "connectorNamePrefix": "vllm-",
+    "requestTimeoutMs": 30000
+  },
+  "kibanaRepo": {
+    "url": "git@github.com:elastic/kibana.git",
+    "branch": "fix/weekly-evals-matrix",
+    "clonePath": "./.kibana-cache",
+    "autoPull": true,
+    "bootstrapTimeoutMs": 1800000
+  },
+  "smokeTest": {
+    "healthTimeoutMs": 10000,
+    "inferenceTimeoutMs": 30000,
+    "toolCallingTimeoutMs": 60000,
+    "maxRetries": 2,
+    "depth": "full"
+  },
+  "buildkite": {
+    "enabled": true,
+    "orgSlug": "elastic",
+    "onDemandPipelineSlug": "kibana-evals-on-demand-llm-evals",
+    "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
+    "pollIntervalMs": 30000,
+    "pollTimeoutMs": 10800000,
+    "retryOnFailure": true,
+    "defaultEvalSuites": ["security-alert-triage"],
+    "kibanaBranch": "fix/weekly-evals-matrix",
+    "connectorMaxTokens": 4096,
+    "triggerFullEval": true,
+    "detachPoll": true
+  },
+  "discoveryScheduler": {
+    "enabled": false,
+    "intervalMinutes": 1440,
+    "maxModelsPerRun": 1,
+    "minTrendingScore": 30,
+    "autoQueue": true,
+    "hardwareProfileId": "2xa100-80gb"
+  },
+  "agentBuilderBaseline": {
+    "enabled": true,
+    "minContextWindow": 128000,
+    "minParameterCountBillions": 7,
+    "requireToolCalling": true,
+    "requireInstructVariant": true
+  }
+}

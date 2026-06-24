@@ -90,7 +90,7 @@ describe('ModelEvaluationEngine', () => {
     it('should accept custom options', () => {
       const engine = new ModelEvaluationEngine('error', {
         minContextWindow: 64000,
-        minParallelToolCallSuccessRate: 0.9,
+        minToolCallSuccessRate: 0.9,
         maxITLMs: 30,
         maxToolCallLatencyMs: 2000,
       });
@@ -139,7 +139,7 @@ describe('ModelEvaluationEngine', () => {
 
       const criteria = report.criteriaResults.map((c) => c.criterion);
       expect(criteria).toContain('context_window');
-      expect(criteria).toContain('parallel_tool_calling');
+      expect(criteria).toContain('tool_calling');
       expect(criteria).toContain('itl_latency');
       expect(criteria).toContain('tool_call_latency');
     });
@@ -271,22 +271,22 @@ describe('ModelEvaluationEngine', () => {
       ).toBe('HARD');
     });
 
-    it('should REJECT when parallel tool calling is not supported', () => {
+    it('should APPROVE when parallel calls are unsupported but success rate meets threshold', () => {
       const engine = new ModelEvaluationEngine('error');
       const result = createBenchmarkResult({
         toolCallResults: createToolCallResult({
           supportsParallelCalls: false,
-          successRate: 0.5,
+          successRate: 1.0,
         }),
       });
       const modelInfo = createModelInfo();
 
       const report = engine.evaluate(result, modelInfo);
 
-      expect(report.classification).toBe('REJECTED');
+      expect(report.classification).toBe('APPROVED');
       expect(
-        report.failedCriteria.some((c) => c.criterion === 'parallel_tool_calling'),
-      ).toBe(true);
+        report.failedCriteria.some((c) => c.criterion === 'tool_calling'),
+      ).toBe(false);
     });
 
     it('should REJECT when tool call success rate is below 100%', () => {
@@ -303,7 +303,7 @@ describe('ModelEvaluationEngine', () => {
 
       expect(report.classification).toBe('REJECTED');
       expect(
-        report.failedCriteria.some((c) => c.criterion === 'parallel_tool_calling'),
+        report.failedCriteria.some((c) => c.criterion === 'tool_calling'),
       ).toBe(true);
     });
 
@@ -356,7 +356,7 @@ describe('ModelEvaluationEngine', () => {
       const result = createBenchmarkResult({
         benchmarkMetrics: [createBenchmarkMetrics({ itlMs: 5 })],
         toolCallResults: createToolCallResult({
-          supportsParallelCalls: false,
+          successRate: 0.5,
           avgToolCallLatencyMs: 200,
         }),
       });
@@ -429,7 +429,7 @@ describe('ModelEvaluationEngine', () => {
         minContextWindow: 64_000,
         maxITLMs: 50,
         maxToolCallLatencyMs: 5000,
-        minParallelToolCallSuccessRate: 0.9,
+        minToolCallSuccessRate: 0.9,
       });
 
       const result = createBenchmarkResult({
@@ -457,7 +457,7 @@ describe('ModelEvaluationEngine', () => {
       const report = engine.evaluate(result, modelInfo);
 
       const toolCriterion = report.criteriaResults.find(
-        (c) => c.criterion === 'parallel_tool_calling',
+        (c) => c.criterion === 'tool_calling',
       );
       expect(toolCriterion!.passed).toBe(true);
     });
@@ -475,7 +475,7 @@ describe('ModelEvaluationEngine', () => {
         }),
         createBenchmarkResult({
           modelId: 'org/model-rejected',
-          toolCallResults: createToolCallResult({ supportsParallelCalls: false }),
+          toolCallResults: null,
         }),
       ];
 
@@ -487,7 +487,7 @@ describe('ModelEvaluationEngine', () => {
       );
       modelInfoMap.set(
         'org/model-rejected',
-        createModelInfo({ id: 'org/model-rejected' }),
+        createModelInfo({ id: 'org/model-rejected', contextWindow: 4096 }),
       );
 
       const reports = engine.evaluateBatch(results, modelInfoMap);

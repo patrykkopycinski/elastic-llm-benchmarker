@@ -20,6 +20,8 @@ export type FilterCriterion =
   | 'model_size'
   | 'vllm_architecture'
   | 'tool_calling'
+  | 'parameter_count'
+  | 'instruct_variant'
   | 'known_failure';
 
 /** Result of filtering a single model candidate */
@@ -58,6 +60,10 @@ export interface CandidateFilterOptions {
   targetHardwareProfile?: VMHardwareProfile;
   /** Whether to require tool calling support (default: true) */
   requireToolCalling?: boolean;
+  /** Minimum parameter count in billions (Agent Builder floor). Unknown count → warning only. */
+  minParameterCountBillions?: number;
+  /** Require instruct/chat-tuned variant in model id (instruct, chat, -it). */
+  requireInstructVariant?: boolean;
   /** Whether to check against known failure list (default: true) */
   checkKnownFailures?: boolean;
 }
@@ -194,9 +200,12 @@ const KNOWN_FAILURE_LIST: ReadonlyMap<string, string> = new Map([
  * 1. **Context Size** (hard): Model must support >= 128K tokens
  * 2. **Model Size** (hard): Model must fit in target hardware (2x A100 80GB)
  * 3. **vLLM Architecture** (hard): Architecture must be supported by vLLM
- * 4. **Tool Calling** (configurable): Model family must support tool calling
- *    with a known vLLM parser (hermes, mistral, llama3_json)
- * 5. **Known Failures** (hard): Auto-skip models known to fail
+ * 4. **Tool Calling** (configurable): Model family must support **single** tool/function
+ *    calls via a known vLLM parser (hermes, mistral, llama3_json). Parallel/multi-tool
+ *    calling is NOT required — Agent Builder uses one tool at a time.
+ * 5. **Parameter Count** (optional): Minimum billions of parameters for Agent Builder evals
+ * 6. **Instruct Variant** (optional): Model id should indicate chat/instruct tuning
+ * 7. **Known Failures** (hard): Auto-skip models known to fail
  *
  * @example
  * ```typescript
@@ -215,6 +224,8 @@ export class ModelCandidateFilter {
   private readonly minContextWindow: number;
   private readonly targetHardware: VMHardwareProfile;
   private readonly requireToolCalling: boolean;
+  private readonly minParameterCountBillions: number | undefined;
+  private readonly requireInstructVariant: boolean;
   private readonly checkKnownFailures: boolean;
 
   /**
@@ -228,12 +239,16 @@ export class ModelCandidateFilter {
     this.minContextWindow = options.minContextWindow ?? DEFAULT_MIN_CONTEXT_WINDOW;
     this.targetHardware = options.targetHardwareProfile ?? DEFAULT_TARGET_HARDWARE;
     this.requireToolCalling = options.requireToolCalling ?? true;
+    this.minParameterCountBillions = options.minParameterCountBillions;
+    this.requireInstructVariant = options.requireInstructVariant ?? false;
     this.checkKnownFailures = options.checkKnownFailures ?? true;
 
     this.logger.info('ModelCandidateFilter initialized', {
       minContextWindow: this.minContextWindow,
       targetGpu: `${this.targetHardware.gpuCount}x ${this.targetHardware.gpuType}`,
       requireToolCalling: this.requireToolCalling,
+      minParameterCountBillions: this.minParameterCountBillions,
+      requireInstructVariant: this.requireInstructVariant,
     });
   }
 
@@ -279,7 +294,23 @@ export class ModelCandidateFilter {
       }
     }
 
-    // Filter 5: Tool calling capability
+    // Filter 5: Minimum parameter count (Agent Builder agentic floor)
+    const paramResult = this.checkParameterCount(model);
+    if (paramResult) {
+      if (paramResult.isHardRequirement) {
+        rejections.push(paramResult);
+      } else {
+        warnings.push(paramResult);
+      }
+    }
+
+    // Filter 6: Instruct/chat variant
+    const instructResult = this.checkInstructVariant(model);
+    if (instructResult) {
+      rejections.push(instructResult);
+    }
+
+    // Filter 7: Tool calling capability (single-tool via vLLM parser)
     const toolResult = this.checkToolCalling(model);
     if (toolResult) {
       if (this.requireToolCalling) {
@@ -497,11 +528,7 @@ export class ModelCandidateFilter {
 
   /**
    * Checks if the model supports tool calling via a known vLLM parser.
-   *
-   * Valid tool call parsers for vLLM:
-   * - hermes: Qwen family models
-   * - mistral: Mistral/Mixtral family models
-   * - llama3_json: Llama 3 family models
+   * Agent Builder issues one tool call at a time — parallel tool calling is not required.
    */
   private checkToolCalling(model: ModelInfo): FilterRejection | null {
     // First check: does the model claim tool calling support?
@@ -519,6 +546,51 @@ export class ModelCandidateFilter {
       return {
         criterion: 'tool_calling',
         reason: `No known vLLM tool call parser for architecture '${model.architecture}'. Supported families: Qwen (hermes), Mistral/Mixtral (mistral), Llama (llama3_json)`,
+        isHardRequirement: true,
+      };
+    }
+
+    return null;
+  }
+
+  private checkParameterCount(model: ModelInfo): FilterRejection | null {
+    if (this.minParameterCountBillions === undefined) {
+      return null;
+    }
+
+    if (!model.parameterCount) {
+      return {
+        criterion: 'parameter_count',
+        reason: `Parameter count unknown; cannot verify minimum ${this.minParameterCountBillions}B for Agent Builder`,
+        isHardRequirement: false,
+      };
+    }
+
+    const billions = model.parameterCount / 1_000_000_000;
+    if (billions < this.minParameterCountBillions) {
+      return {
+        criterion: 'parameter_count',
+        reason: `Model has ~${billions.toFixed(1)}B parameters; Agent Builder baseline requires >= ${this.minParameterCountBillions}B`,
+        isHardRequirement: true,
+      };
+    }
+
+    return null;
+  }
+
+  private checkInstructVariant(model: ModelInfo): FilterRejection | null {
+    if (!this.requireInstructVariant) {
+      return null;
+    }
+
+    const id = model.id.toLowerCase();
+    const instructIndicators = ['instruct', 'chat', '-it', '_it'];
+    const matched = instructIndicators.some((s) => id.includes(s));
+    if (!matched) {
+      return {
+        criterion: 'instruct_variant',
+        reason:
+          'Model id does not indicate an instruct/chat-tuned variant (expected instruct, chat, or -it in the name)',
         isHardRequirement: true,
       };
     }

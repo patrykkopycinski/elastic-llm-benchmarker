@@ -64,7 +64,7 @@ function createMockConfig(overrides?: Partial<AppConfig>): AppConfig {
     elasticsearch: {},
     elasticAgent: {},
     stage2Thresholds: {
-      minItlP50Ms: 50,
+      maxItlP50Ms: 50,
       minThroughputTps: 1000,
       maxTtftMs: 200,
       minContextWindow: 8192,

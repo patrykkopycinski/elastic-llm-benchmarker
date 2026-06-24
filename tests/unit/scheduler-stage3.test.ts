@@ -11,13 +11,15 @@ function createMockQueueService(): QueueService {
   const mock = {
     esClient: {} as unknown as QueueService['esClient'],
     enqueue: vi.fn(),
-    dequeue: vi.fn(),
+    dequeue: vi.fn().mockResolvedValue(null),
     getQueue: vi.fn(),
     getById: vi.fn(),
-    getCurrent: vi.fn(),
+    getCurrent: vi.fn().mockResolvedValue(null),
     updateStatus: vi.fn().mockResolvedValue(undefined),
     cancel: vi.fn(),
     findPending: vi.fn().mockResolvedValue([]),
+    failActiveEntries: vi.fn().mockResolvedValue(0),
+    getActiveEntries: vi.fn().mockResolvedValue([]),
     hasPending: vi.fn(),
     shouldAutoStop: vi.fn(),
   };
@@ -128,7 +130,7 @@ describe('Scheduler Stage 3 chaining', () => {
   });
 
   it('should call stage3Worker.execute when stage3Worker is provided', async () => {
-    queueService.findPending.mockResolvedValue([createQueueEntry()]);
+    queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
     scheduler = new Scheduler(
       queueService,
       stage1Worker,
@@ -147,7 +149,7 @@ describe('Scheduler Stage 3 chaining', () => {
   });
 
   it('should transition run to COMPLETED when stage3 succeeds', async () => {
-    queueService.findPending.mockResolvedValue([createQueueEntry()]);
+    queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
     scheduler = new Scheduler(
       queueService,
       stage1Worker,
@@ -163,8 +165,8 @@ describe('Scheduler Stage 3 chaining', () => {
     expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
   });
 
-  it('should transition run to FAILED when stage3 returns error', async () => {
-    queueService.findPending.mockResolvedValue([createQueueEntry()]);
+  it('should complete pipeline even when stage3 returns error (non-fatal)', async () => {
+    queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
     stage3Worker = createMockStage3Worker({
       execute: vi.fn().mockResolvedValue({
         runId: 'run-1',
@@ -188,11 +190,11 @@ describe('Scheduler Stage 3 chaining', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(stage3Worker.execute).toHaveBeenCalledTimes(1);
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'failed', 'LLM API key missing');
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
   });
 
   it('should transition directly to COMPLETED when no stage3Worker is provided', async () => {
-    queueService.findPending.mockResolvedValue([createQueueEntry()]);
+    queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
     scheduler = new Scheduler(
       queueService,
       stage1Worker,

@@ -470,6 +470,12 @@ export class VllmDeploymentService {
       this.options.stopTimeoutMs,
     );
 
+    // If the combined command failed (e.g. 'docker rm' lacks sudo because
+    // sudo only wraps the first half of the && chain), try rm separately.
+    if (!result.success && !result.stderr.includes('No such container')) {
+      await this.execSSH(sshConfig, `docker rm -f ${containerName}`, this.options.stopTimeoutMs);
+    }
+
     if (result.success) {
       this.logger.info(`Container stopped and removed: ${containerName}`);
       return true;
