@@ -114,7 +114,7 @@ The CLI has two binaries that share the same entry point (`src/cli.ts`):
     "host": "your-gpu-vm-host",
     "port": 22,
     "username": "your_ssh_user",
-    "privateKeyPath": "/path/to/key"
+    "privateKeyPath": "/path/to/your/ssh/key"
   },
   "huggingfaceToken": "",
   "hardwareProfileId": "2xa100-80gb",

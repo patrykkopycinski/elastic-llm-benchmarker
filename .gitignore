@@ -9,6 +9,10 @@ dist/
 .env.local
 .env.*.local
 
+# Local operator config (copy from config/default.json — never commit real hosts/keys)
+config/local.json
+config/*-local.json
+
 # IDE
 .vscode/
 .idea/

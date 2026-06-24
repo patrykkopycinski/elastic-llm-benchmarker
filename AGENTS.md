@@ -204,10 +204,11 @@ context/
 ## Security Rules
 
 1. **Never commit credentials**: SSH passwords, private keys, API tokens, and `.env` files must never be committed. Use `.env.example` for documentation only.
-2. **Never log secrets**: Winston loggers must redact sensitive fields (`password`, `apiKey`, `token`, `privateKey`). Use a structured log serializer.
-3. **Config schemas expose field shapes, not values**: The Zod schema for `ssh.password` and `ssh.privateKeyPath` documents what the app accepts — never put real values in committed config files.
-4. **API key hashing**: When storing or comparing API keys, always hash with SHA-256. Never store plaintext in Elasticsearch or config files.
-5. **Golden cluster is write-only**: Read access is prohibited. This prevents accidental leakage of shared eval data back into local contexts.
+2. **Placeholder-only committed config**: `config/default.json`, `config/smoke-full.json`, and docs must use placeholders (`your-gpu-vm-host`, `your_ssh_user`, `/path/to/your/ssh/key`) — never real VM IPs, usernames, or home-directory key paths. Copy to `config/local.json` (gitignored) for operator values.
+3. **Never log secrets**: Winston loggers must redact sensitive fields (`password`, `apiKey`, `token`, `privateKey`). Use a structured log serializer.
+4. **Config schemas expose field shapes, not values**: The Zod schema for `ssh.password` and `ssh.privateKeyPath` documents what the app accepts — never put real values in committed config files.
+5. **API key hashing**: When storing or comparing API keys, always hash with SHA-256. Never store plaintext in Elasticsearch or config files.
+6. **Golden cluster is write-only**: Read access is prohibited. This prevents accidental leakage of shared eval data back into local contexts.
 
 ## Type Safety Rules
 

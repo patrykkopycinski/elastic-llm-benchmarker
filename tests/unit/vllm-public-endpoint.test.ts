@@ -24,9 +24,9 @@ vi.mock('../../src/services/tunnel-service.js', () => ({
 }));
 
 const ssh: SSHConfig = {
-  host: 'your-gpu-vm-host',
+  host: '203.0.113.10',
   port: 22,
-  username: 'patryk',
+  username: 'testuser',
   privateKeyPath: '/tmp/key',
   useSudo: true,
 };
@@ -62,9 +62,9 @@ describe('VllmPublicEndpointResolver', () => {
     };
 
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
-    const result = await resolver.resolve('http://your-gpu-vm-host:8000');
+    const result = await resolver.resolve('http://203.0.113.10:8000');
 
-    expect(result.endpointUrl).toBe('http://your-gpu-vm-host:8000');
+    expect(result.endpointUrl).toBe('http://203.0.113.10:8000');
     expect(result.tunneled).toBe(false);
     expect(mockStart).not.toHaveBeenCalled();
     expect(mockConnect).not.toHaveBeenCalled();
@@ -83,7 +83,7 @@ describe('VllmPublicEndpointResolver', () => {
     };
 
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
-    const directUrl = 'http://your-gpu-vm-host:8000';
+    const directUrl = 'http://203.0.113.10:8000';
     const result = await resolver.resolve(directUrl);
 
     expect(mockStart).toHaveBeenCalled();
@@ -110,7 +110,7 @@ describe('VllmPublicEndpointResolver', () => {
     };
 
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
-    const directUrl = 'http://your-gpu-vm-host:8000';
+    const directUrl = 'http://203.0.113.10:8000';
     const result = await resolver.resolve(directUrl);
 
     expect(result.endpointUrl).toBe(directUrl);
@@ -133,7 +133,7 @@ describe('VllmPublicEndpointResolver', () => {
     };
 
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
-    const directUrl = 'http://your-gpu-vm-host:8000';
+    const directUrl = 'http://203.0.113.10:8000';
     const result = await resolver.resolve(directUrl);
 
     expect(result.endpointUrl).toBe(directUrl);
