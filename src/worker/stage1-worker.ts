@@ -6,6 +6,11 @@ import type {
 } from '../types/config.js';
 import type { BenchmarkResult, ModelInfo } from '../types/benchmark.js';
 import { HFCardParser } from '../services/hf-card-parser.js';
+import {
+  enrichModelInfoFromHfConfig,
+  normalizeParameterCount,
+} from '../services/agent-builder-baseline.js';
+import { ModelDiscoveryService } from '../services/model-discovery.js';
 import type { VllmEngine } from '../engines/vllm-engine.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import type { QueueService } from '../services/queue-service.js';
@@ -105,6 +110,23 @@ export class Stage1WorkerImpl implements Stage1Worker {
     this.resultsStore = deps.resultsStore;
     this.queueService = deps.queueService;
     this.logger = deps.logger ?? createLogger(deps.config.logLevel);
+  }
+
+  private async resolveContextWindow(modelId: string, modelInfo: ModelInfo): Promise<number> {
+    const discovery = new ModelDiscoveryService(
+      this.config.huggingfaceToken,
+      [],
+      this.config.logLevel,
+    );
+    const hfConfig = await discovery.fetchModelConfig(modelId);
+    if (!hfConfig) {
+      return modelInfo.contextWindow;
+    }
+    const enriched = enrichModelInfoFromHfConfig(
+      { ...modelInfo, parameterCount: normalizeParameterCount(modelInfo.parameterCount) },
+      hfConfig,
+    );
+    return enriched.contextWindow;
   }
 
   async execute(run: PipelineRun): Promise<Stage1Result> {
@@ -265,7 +287,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
         metrics.length > 0
           ? metrics.reduce((sum, m) => sum + m.ttftMs, 0) / metrics.length
           : Infinity;
-      const contextWindow = parsedCard.card.contextWindow;
+      const contextWindow = await this.resolveContextWindow(run.modelId, modelInfo);
 
       const stage2Thresholds = this.config.stage2Thresholds;
       const stage2Eligible =

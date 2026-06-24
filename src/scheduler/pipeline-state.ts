@@ -35,6 +35,8 @@ export interface DeploymentInfo {
   deploymentName: string;
   containerId: string;
   endpointUrl: string;
+  /** Public ngrok URL for Buildkite; set when tunnel succeeds */
+  publicEndpointUrl?: string;
   status: 'deployed' | 'failed' | 'stopped';
 }
 

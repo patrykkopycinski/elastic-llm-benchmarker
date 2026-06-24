@@ -13,8 +13,10 @@ export interface VllmPublicEndpointOptions {
 }
 
 export interface PublicEndpointResult {
-  /** URL downstream consumers should call (ngrok when tunneled, else direct VM URL) */
+  /** URL for local smoke tests (localhost SSH forward when available) */
   endpointUrl: string;
+  /** Public ngrok URL for Buildkite; undefined when only local forward is available */
+  publicEndpointUrl?: string;
   /** Original VM-direct URL before tunneling */
   directUrl: string;
   /** Whether a public ngrok URL was established */
@@ -26,10 +28,10 @@ export interface PublicEndpointResult {
 const DEFAULT_API_PORT = 8000;
 
 /**
- * Exposes the GPU VM vLLM API via SSH local forward + ngrok when tunneling is enabled.
+ * Exposes the GPU VM vLLM API via SSH local forward + optional ngrok.
  *
  * Flow: laptop `localhost:localPort` → SSH → VM `localhost:apiPort` → ngrok public URL.
- * Buildkite CI smoke tests and weekly evals use the ngrok URL.
+ * Smoke tests use the SSH forward (localhost). Buildkite requires the ngrok URL.
  */
 export class VllmPublicEndpointResolver {
   private readonly ssh: SSHConfig;
@@ -47,34 +49,15 @@ export class VllmPublicEndpointResolver {
   }
 
   /**
-   * Resolves the endpoint URL for CI evals, Stage 2, and connector creation.
-   * When tunneling is disabled, returns `directUrl` unchanged.
+   * Resolves endpoint URLs for CI evals and connector creation.
+   * Always attempts SSH port forward; ngrok is optional but required for Buildkite.
    */
   async resolve(directUrl: string): Promise<PublicEndpointResult> {
     const noopCleanup = async (): Promise<void> => {};
 
-    if (!this.tunnel.enabled) {
-      return {
-        endpointUrl: directUrl,
-        directUrl,
-        tunneled: false,
-        cleanup: noopCleanup,
-      };
-    }
-
-    if (!this.tunnel.ngrokAuthToken) {
-      this.logger.warn(
-        'Tunnel enabled but NGROK_AUTH_TOKEN missing — using direct VM URL (CI evals may fail)',
-      );
-      return {
-        endpointUrl: directUrl,
-        directUrl,
-        tunneled: false,
-        cleanup: noopCleanup,
-      };
-    }
-
     const localPort = this.tunnel.localPort;
+    const localUrl = `http://127.0.0.1:${localPort}`;
+
     const sshForward = new SshPortForward({
       ssh: this.ssh,
       localPort,
@@ -99,13 +82,35 @@ export class VllmPublicEndpointResolver {
       sshForward.start();
       const forwardReady = await sshForward.waitUntilReady();
       if (!forwardReady) {
-        this.logger.warn('SSH port forward failed — using direct VM URL');
-        await cleanup();
+        this.logger.warn('SSH port forward failed — using direct VM URL (may be unreachable locally)');
+        sshForward.stop();
         return {
           endpointUrl: directUrl,
           directUrl,
           tunneled: false,
           cleanup: noopCleanup,
+        };
+      }
+
+      if (!this.tunnel.enabled) {
+        this.logger.info('Tunnel disabled — using SSH local forward for smoke tests', { localUrl });
+        return {
+          endpointUrl: localUrl,
+          directUrl,
+          tunneled: false,
+          cleanup,
+        };
+      }
+
+      if (!this.tunnel.ngrokAuthToken) {
+        this.logger.warn(
+          'Tunnel enabled but NGROK_AUTH_TOKEN missing — local smoke via SSH forward only',
+        );
+        return {
+          endpointUrl: localUrl,
+          directUrl,
+          tunneled: false,
+          cleanup,
         };
       }
 
@@ -116,15 +121,14 @@ export class VllmPublicEndpointResolver {
 
       const tunnelResult = await tunnelService.connect();
       if (!tunnelResult.success || !tunnelResult.tunnel) {
-        this.logger.warn('Ngrok tunnel failed — using direct VM URL', {
+        this.logger.warn('Ngrok tunnel failed — local smoke via SSH forward only', {
           error: tunnelResult.error,
         });
-        await cleanup();
         return {
-          endpointUrl: directUrl,
+          endpointUrl: localUrl,
           directUrl,
           tunneled: false,
-          cleanup: noopCleanup,
+          cleanup,
         };
       }
 
@@ -138,6 +142,7 @@ export class VllmPublicEndpointResolver {
 
       return {
         endpointUrl: publicUrl,
+        publicEndpointUrl: publicUrl,
         directUrl,
         tunneled: true,
         cleanup,

@@ -163,6 +163,7 @@ export class Scheduler {
         });
         const resolved = await resolver.resolve(run.deployment.endpointUrl);
         run.deployment.endpointUrl = resolved.endpointUrl;
+        run.deployment.publicEndpointUrl = resolved.publicEndpointUrl;
         if (resolved.tunneled) {
           this.logger.info('Scheduler: using public vLLM endpoint', {
             endpointUrl: resolved.endpointUrl,
@@ -377,11 +378,25 @@ export class Scheduler {
     }
     this.logger.info('CI Evals: smoke test passed all tiers', { modelId: run.modelId });
 
+    const buildkiteEndpointUrl = run.deployment.publicEndpointUrl;
+    if (!buildkiteEndpointUrl) {
+      this.logger.warn('CI Evals: no public ngrok URL — cannot trigger Buildkite', {
+        modelId: run.modelId,
+        smokeEndpoint: endpointUrl,
+      });
+      return {
+        deferTeardown: false,
+        aborted: true,
+        abortReason:
+          'CI evals require a public ngrok URL (set TUNNEL_ENABLED=true and NGROK_AUTH_TOKEN in .env)',
+      };
+    }
+
     const { buildConnectorPayload } = await import('../services/buildkite-connector-builder.js');
     const buildkiteConfig = this.config.buildkite;
     const evalSuites = buildkiteConfig?.defaultEvalSuites ?? ['security_ai_assistant'];
     const { connectorId, connectorJson } = buildConnectorPayload({
-      endpointUrl,
+      endpointUrl: buildkiteEndpointUrl,
       modelId: run.modelId,
       maxTokens: buildkiteConfig?.connectorMaxTokens,
     });

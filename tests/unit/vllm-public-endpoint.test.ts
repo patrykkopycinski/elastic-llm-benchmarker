@@ -50,7 +50,7 @@ describe('VllmPublicEndpointResolver', () => {
     });
   });
 
-  it('returns direct URL when tunnel disabled', async () => {
+  it('uses SSH local forward when tunnel disabled', async () => {
     const tunnel: TunnelConfig = {
       enabled: false,
       provider: 'ngrok',
@@ -64,9 +64,10 @@ describe('VllmPublicEndpointResolver', () => {
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
     const result = await resolver.resolve('http://203.0.113.10:8000');
 
-    expect(result.endpointUrl).toBe('http://203.0.113.10:8000');
+    expect(result.endpointUrl).toBe('http://127.0.0.1:18000');
+    expect(result.publicEndpointUrl).toBeUndefined();
     expect(result.tunneled).toBe(false);
-    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockStart).toHaveBeenCalled();
     expect(mockConnect).not.toHaveBeenCalled();
   });
 
@@ -90,6 +91,7 @@ describe('VllmPublicEndpointResolver', () => {
     expect(mockWaitUntilReady).toHaveBeenCalled();
     expect(mockConnect).toHaveBeenCalled();
     expect(result.endpointUrl).toBe('https://abc123.ngrok-free.app');
+    expect(result.publicEndpointUrl).toBe('https://abc123.ngrok-free.app');
     expect(result.directUrl).toBe(directUrl);
     expect(result.tunneled).toBe(true);
 
@@ -98,7 +100,7 @@ describe('VllmPublicEndpointResolver', () => {
     expect(mockStop).toHaveBeenCalled();
   });
 
-  it('falls back to direct URL when ngrok token missing', async () => {
+  it('uses local forward when ngrok token missing', async () => {
     const tunnel: TunnelConfig = {
       enabled: true,
       provider: 'ngrok',
@@ -113,9 +115,34 @@ describe('VllmPublicEndpointResolver', () => {
     const directUrl = 'http://203.0.113.10:8000';
     const result = await resolver.resolve(directUrl);
 
-    expect(result.endpointUrl).toBe(directUrl);
+    expect(result.endpointUrl).toBe('http://127.0.0.1:18000');
+    expect(result.publicEndpointUrl).toBeUndefined();
     expect(result.tunneled).toBe(false);
-    expect(mockStart).not.toHaveBeenCalled();
+    expect(mockStart).toHaveBeenCalled();
+    expect(mockConnect).not.toHaveBeenCalled();
+  });
+
+  it('uses local forward when ngrok fails', async () => {
+    mockConnect.mockResolvedValue({ success: false, error: 'failed to start tunnel' });
+
+    const tunnel: TunnelConfig = {
+      enabled: true,
+      provider: 'ngrok',
+      ngrokAuthToken: 'test-token',
+      ngrokRegion: 'us',
+      localPort: 18000,
+      timeoutMs: 30_000,
+      retryAttempts: 3,
+      retryDelayMs: 5_000,
+    };
+
+    const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
+    const directUrl = 'http://203.0.113.10:8000';
+    const result = await resolver.resolve(directUrl);
+
+    expect(result.endpointUrl).toBe('http://127.0.0.1:18000');
+    expect(result.tunneled).toBe(false);
+    expect(mockConnect).toHaveBeenCalled();
   });
 
   it('falls back to direct URL when SSH forward fails', async () => {
