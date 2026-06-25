@@ -1,8 +1,37 @@
-import { spawn, type ChildProcess } from 'child_process';
+import { spawn, execFile, type ChildProcess } from 'child_process';
+import { promisify } from 'util';
 import { createLogger } from '../utils/logger.js';
 import type { TunnelConfig, TunnelProvider } from '../types/config.js';
 
 const NGROK_LOCAL_API = 'http://127.0.0.1:4040';
+const execFileAsync = promisify(execFile);
+
+/** Kill zombie `ngrok http <port>` processes left by a prior daemon (API on :4040 may be dead). */
+async function killOrphanNgrokForPort(localPort: number): Promise<void> {
+  const pattern = `ngrok http ${localPort}`;
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern]);
+    const pids = stdout
+      .trim()
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await Promise.all(
+      pids.map(async (pid) => {
+        try {
+          await execFileAsync('kill', ['-TERM', pid]);
+        } catch {
+          // already exited
+        }
+      }),
+    );
+    if (pids.length > 0) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  } catch {
+    // pgrep exit 1 = no matches
+  }
+}
 
 interface NgrokApiTunnel {
   name?: string;
@@ -230,6 +259,22 @@ class NgrokProvider implements TunnelProvider_Impl {
     }
 
     await this.disconnect();
+    await killOrphanNgrokForPort(localPort);
+
+    const apiDeadline = Date.now() + 15_000;
+    while (Date.now() < apiDeadline) {
+      try {
+        const res = await fetch(`http://127.0.0.1:${localPort}/v1/models`, {
+          signal: AbortSignal.timeout(3_000),
+        });
+        if (res.ok) {
+          break;
+        }
+      } catch {
+        // wait for SSH forward / vLLM to become reachable
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
 
     const bin = process.env['NGROK_BIN'] ?? 'ngrok';
     const args = ['http', String(localPort), '--log=stdout', '--log-level=warn'];
@@ -255,7 +300,7 @@ class NgrokProvider implements TunnelProvider_Impl {
       detached: false,
     });
 
-    const deadlineMs = 20_000;
+    const deadlineMs = 45_000;
     const started = Date.now();
     while (Date.now() - started < deadlineMs) {
       await new Promise((resolve) => setTimeout(resolve, 500));
@@ -548,6 +593,20 @@ export class TunnelService {
       error: creationError.message,
       reused: false,
     };
+  }
+
+  /**
+   * Tear down and re-establish the public tunnel (used when ngrok dies mid-poll).
+   */
+  async reconnect(): Promise<TunnelResult> {
+    this.logger.info('Reconnecting tunnel', {
+      provider: this.config.provider,
+      localPort: this.config.localPort,
+    });
+    await this.provider.disconnect();
+    this.currentTunnel = null;
+    await killOrphanNgrokForPort(this.config.localPort);
+    return this.connect();
   }
 
   /**

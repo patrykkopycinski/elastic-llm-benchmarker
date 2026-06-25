@@ -131,15 +131,34 @@ describe('TunnelService', () => {
       const config = createDefaultTunnelConfig({
         enabled: true,
         retryAttempts: 0,
+        timeoutMs: 100,
       });
       const service = new TunnelService({ config, logLevel: 'error' });
 
-      // Since ngrok is not installed, this will fail but shouldn't throw
-      const result = await service.connect();
-      // It will fail because ngrok is not installed, but it should handle gracefully
-      expect(result.success).toBe(false);
-      expect(result.tunnel).toBeNull();
-      expect(result.error).toBeDefined();
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ tunnels: [] }),
+        } as Response),
+      );
+
+      const originalBin = process.env['NGROK_BIN'];
+      process.env['NGROK_BIN'] = '/nonexistent/ngrok-binary';
+
+      try {
+        const result = await service.connect();
+        expect(result.success).toBe(false);
+        expect(result.tunnel).toBeNull();
+        expect(result.error).toBeDefined();
+      } finally {
+        if (originalBin === undefined) {
+          delete process.env['NGROK_BIN'];
+        } else {
+          process.env['NGROK_BIN'] = originalBin;
+        }
+        vi.unstubAllGlobals();
+      }
     });
   });
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   mapBuildkiteResultToStage2,
+  mergeStage2Results,
   parseEvalArtifactJson,
 } from '../../src/services/ci-eval-stage2-mapper.js';
 
@@ -40,6 +41,32 @@ describe('mapBuildkiteResultToStage2', () => {
     expect(result.status).toBe('failed');
     expect(result.suiteResults).toHaveLength(2);
     expect(result.scores?.['security-alert-triage']).toBe(0.5);
+  });
+});
+
+describe('mergeStage2Results', () => {
+  it('merges per-suite Stage2 results into one matrix result', () => {
+    const triage = mapBuildkiteResultToStage2(
+      'run-1',
+      'Qwen/Qwen2.5-7B-Instruct',
+      ['security-alert-triage'],
+      { buildUrl: 'https://buildkite.com/build/1', buildNumber: 1, status: 'passed' },
+      { total: 3, passed: 3, passRate: 1 },
+    );
+    const rag = mapBuildkiteResultToStage2(
+      'run-1',
+      'Qwen/Qwen2.5-7B-Instruct',
+      ['security-alerts-rag-regression'],
+      { buildUrl: 'https://buildkite.com/build/2', buildNumber: 2, status: 'failed' },
+      { total: 10, passed: 8, passRate: 0.8 },
+    );
+
+    const merged = mergeStage2Results([triage, rag]);
+
+    expect(merged.status).toBe('failed');
+    expect(merged.scores?.['security-alert-triage']).toBe(1);
+    expect(merged.scores?.['security-alerts-rag-regression']).toBe(0.8);
+    expect(merged.suiteResults?.length).toBe(2);
   });
 });
 

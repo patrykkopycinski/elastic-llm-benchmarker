@@ -212,7 +212,7 @@ describe('Scheduler', () => {
     );
   });
 
-  it('does not dequeue while another entry is in flight', async () => {
+  it('resumes in-flight entry instead of dequeuing another', async () => {
     getCurrentMock.mockResolvedValue({
       ...baseEntry,
       status: 'benchmarking',
@@ -223,6 +223,6 @@ describe('Scheduler', () => {
     await scheduler.stop();
 
     expect(dequeueMock).not.toHaveBeenCalled();
-    expect(stage1Worker.execute).not.toHaveBeenCalled();
+    expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
   });
 });

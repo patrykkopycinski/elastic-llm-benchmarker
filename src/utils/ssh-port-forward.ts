@@ -60,6 +60,10 @@ export class SshPortForward {
       'StrictHostKeyChecking=no',
       '-o',
       'ExitOnForwardFailure=yes',
+      '-o',
+      'ServerAliveInterval=30',
+      '-o',
+      'ServerAliveCountMax=3',
       '-p',
       String(ssh.port),
     ];
@@ -84,7 +88,11 @@ export class SshPortForward {
       }
     });
     this.proc.on('exit', (code) => {
-      this.logger.debug('SSH port forward exited', { code });
+      if (code !== 0 && code !== null) {
+        this.logger.warn('SSH port forward exited unexpectedly', { code, localPort });
+      } else {
+        this.logger.debug('SSH port forward exited', { code });
+      }
       this.proc = null;
     });
   }

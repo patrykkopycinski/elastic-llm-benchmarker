@@ -301,6 +301,10 @@ describe('formatValidationErrors', () => {
     expect(config.kibanaRepo.url).toBe('git@github.com:elastic/kibana.git');
     expect(config.buildkite.kibanaBranch).toBe('fix/weekly-evals-matrix');
     expect(config.kibanaRepo.branch).toBe('fix/weekly-evals-matrix');
-    expect(config.buildkite.defaultEvalSuites).toEqual(['security-alert-triage']);
+    expect(config.buildkite.defaultEvalSuites).toEqual([
+      'security-alert-triage',
+      'security-alerts-rag-regression',
+      'security-esql-generation-regression',
+    ]);
   });
 });

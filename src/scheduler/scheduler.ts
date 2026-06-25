@@ -11,12 +11,18 @@ import type { ModelSmokeTest } from '../services/model-smoke-test.js';
 import type { BuildkiteEvalTrigger, BuildkiteBuildResult } from '../services/buildkite-eval-trigger.js';
 import {
   mapBuildkiteResultToStage2,
+  mergeStage2Results,
   parseEvalArtifactJson,
 } from '../services/ci-eval-stage2-mapper.js';
 import type { Stage2Result } from './pipeline-state.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
 import { VllmPublicEndpointResolver } from '../services/vllm-public-endpoint.js';
+import { CiEvalInfrastructureGuard } from '../services/ci-eval-infrastructure-guard.js';
+import { getCompletedEvalSuites } from '../services/ci-eval-resume.js';
+import type { SSHClientPool } from '../services/ssh-client.js';
+import type { TunnelService } from '../services/tunnel-service.js';
+import type { SshPortForward } from '../utils/ssh-port-forward.js';
 
 export interface SchedulerOptions {
   pollIntervalMs: number;
@@ -25,16 +31,17 @@ export interface SchedulerOptions {
 
 export interface CIEvalsOptions {
   enabled: boolean;
-  fullEval: boolean;
   detachPoll: boolean;
   smokeTest: ModelSmokeTest;
   buildkiteTrigger: BuildkiteEvalTrigger;
+  sshPool?: SSHClientPool;
 }
 
 interface DeferredInfrastructureCleanup {
   releasePublicEndpoint?: () => Promise<void>;
   deploymentName: string;
   pollPromise: Promise<void>;
+  stopGuard?: () => void;
 }
 
 interface CIEvalRunResult {
@@ -53,6 +60,7 @@ export class Scheduler {
   private shuttingDown = false;
   private readonly logger: Logger;
   private readonly deferredCleanups = new Map<string, DeferredInfrastructureCleanup>();
+  private readonly entryInProcess = new Set<string>();
 
   constructor(
     private queueService: QueueService,
@@ -104,6 +112,20 @@ export class Scheduler {
     try {
       const inFlight = await this.queueService.getCurrent();
       if (inFlight) {
+        if (this.entryInProcess.has(inFlight.id) || this.deferredCleanups.has(inFlight.id)) {
+          return;
+        }
+        this.logger.info('Scheduler: resuming in-flight queue entry', {
+          queueEntryId: inFlight.id,
+          modelId: inFlight.modelId,
+          status: inFlight.status,
+        });
+        this.activeRuns++;
+        this.entryInProcess.add(inFlight.id);
+        this.processEntry(inFlight, { resume: true }).finally(() => {
+          this.activeRuns--;
+          this.entryInProcess.delete(inFlight.id);
+        });
         return;
       }
 
@@ -111,17 +133,22 @@ export class Scheduler {
       if (!entry) return;
 
       this.activeRuns++;
+      this.entryInProcess.add(entry.id);
 
       // Run in background (don't await)
       this.processEntry(entry).finally(() => {
         this.activeRuns--;
+        this.entryInProcess.delete(entry.id);
       });
     } catch (err) {
       console.error('Scheduler poll error:', err);
     }
   }
 
-  private async processEntry(entry: QueueEntry): Promise<void> {
+  private async processEntry(
+    entry: QueueEntry,
+    options?: { resume?: boolean },
+  ): Promise<void> {
     const run: PipelineRun = {
       runId: crypto.randomUUID(),
       modelId: entry.modelId,
@@ -134,25 +161,69 @@ export class Scheduler {
     let deferInfrastructureTeardown = false;
 
     try {
-      await this.queueService.updateStatus(entry.id, 'deploying');
-      const result = await this.stage1Worker.execute(run);
-      run.benchmarkResult = result;
-
-      // Populate run.deployment from Stage 1 so downstream stages can
-      // reach the still-running model endpoint.
-      if (result.endpointUrl && result.deploymentName) {
-        run.deployment = {
-          deploymentName: result.deploymentName,
-          containerId: '',
-          endpointUrl: result.endpointUrl,
-          status: 'deployed',
-        };
+      let stage1Skipped = false;
+      if (options?.resume && this.ciEvals?.enabled && this.engine && this.config) {
+        const findRunning = this.engine.findRunningDeployment;
+        const existing = findRunning
+          ? await findRunning.call(this.engine, this.config.ssh, entry.modelId)
+          : null;
+        if (existing) {
+          stage1Skipped = true;
+          await this.queueService.updateStatus(entry.id, 'benchmarking');
+          const now = new Date().toISOString();
+          run.benchmarkResult = {
+            runId: run.runId,
+            modelId: entry.modelId,
+            queueEntryId: entry.id,
+            status: 'skipped',
+            metrics: null,
+            rawOutput: '',
+            startedAt: now,
+            completedAt: now,
+            deploymentName: existing.deploymentName,
+            endpointUrl: existing.endpointUrl,
+          };
+          run.deployment = {
+            deploymentName: existing.deploymentName,
+            containerId: '',
+            endpointUrl: existing.endpointUrl,
+            status: 'deployed',
+          };
+          this.logger.info('Scheduler: resumed with existing vLLM deployment (skipped Stage 1)', {
+            modelId: entry.modelId,
+            deploymentName: existing.deploymentName,
+          });
+        }
       }
 
-      if (result.status !== 'success') {
-        await this.queueService.updateStatus(entry.id, 'failed', result.error);
-        return;
+      if (!stage1Skipped) {
+        await this.queueService.updateStatus(entry.id, 'deploying');
+        const result = await this.stage1Worker.execute(run);
+        run.benchmarkResult = result;
+
+        // Populate run.deployment from Stage 1 so downstream stages can
+        // reach the still-running model endpoint.
+        if (result.endpointUrl && result.deploymentName) {
+          run.deployment = {
+            deploymentName: result.deploymentName,
+            containerId: '',
+            endpointUrl: result.endpointUrl,
+            status: 'deployed',
+          };
+        }
+
+        if (result.status !== 'success') {
+          await this.queueService.updateStatus(entry.id, 'failed', result.error);
+          return;
+        }
       }
+
+      let publicEndpointMeta:
+        | Pick<
+            Awaited<ReturnType<VllmPublicEndpointResolver['resolve']>>,
+            'localPort' | 'sshForward' | 'tunnelService' | 'publicEndpointUrl'
+          >
+        | undefined;
 
       // SSH forward + ngrok when tunnel.enabled — CI smoke and Buildkite need a public URL.
       if (run.deployment && this.config) {
@@ -164,6 +235,7 @@ export class Scheduler {
         const resolved = await resolver.resolve(run.deployment.endpointUrl);
         run.deployment.endpointUrl = resolved.endpointUrl;
         run.deployment.publicEndpointUrl = resolved.publicEndpointUrl;
+        publicEndpointMeta = resolved;
         if (resolved.tunneled) {
           this.logger.info('Scheduler: using public vLLM endpoint', {
             endpointUrl: resolved.endpointUrl,
@@ -173,13 +245,37 @@ export class Scheduler {
         releasePublicEndpoint = resolved.cleanup;
       }
 
-      // CI Evals pipeline (smoke test → on-demand Buildkite → optional weekly)
+      // CI Evals pipeline (smoke test → on-demand Buildkite per security matrix suite)
       let deferPostStage2 = false;
       if (this.ciEvals?.enabled && run.deployment) {
-        const ciOutcome = await this.runCIEvals(run, entry.id, {
-          releasePublicEndpoint,
-          deploymentName: run.deployment.deploymentName,
-        });
+        let skipSuiteIds: string[] | undefined;
+        if (options?.resume && this.resultsStore && this.config) {
+          const priorResults = await this.resultsStore.getCIEvalResults(run.modelId, {
+            limit: 30,
+          });
+          const evalSuites = this.config.buildkite?.defaultEvalSuites ?? [];
+          skipSuiteIds = getCompletedEvalSuites(priorResults, evalSuites);
+          if (skipSuiteIds.length > 0) {
+            this.logger.info('CI Evals: skipping suites already completed before resume', {
+              modelId: run.modelId,
+              skipSuiteIds,
+            });
+          }
+        }
+
+        const ciOutcome = await this.runCIEvals(
+          run,
+          entry.id,
+          {
+            releasePublicEndpoint,
+            deploymentName: run.deployment.deploymentName,
+            localPort: publicEndpointMeta?.localPort,
+            sshForward: publicEndpointMeta?.sshForward,
+            tunnelService: publicEndpointMeta?.tunnelService,
+            publicEndpointUrl: publicEndpointMeta?.publicEndpointUrl,
+          },
+          skipSuiteIds,
+        );
 
         if (ciOutcome.aborted) {
           await this.queueService.updateStatus(entry.id, 'failed', ciOutcome.abortReason);
@@ -202,8 +298,8 @@ export class Scheduler {
 
       // Local Stage 2 evals — skip when Buildkite CI evals are the source of truth
       const useCiEvalsAsStage2 = Boolean(this.ciEvals?.enabled);
-      if (this.stage2Worker && !useCiEvalsAsStage2) {
-        const stage2Result = await this.stage2Worker.execute(run, result);
+      if (this.stage2Worker && !useCiEvalsAsStage2 && run.benchmarkResult) {
+        const stage2Result = await this.stage2Worker.execute(run, run.benchmarkResult);
         run.stage2Result = stage2Result;
 
         if (this.resultsStore) {
@@ -310,7 +406,11 @@ export class Scheduler {
   private async releaseInfrastructure(options: {
     releasePublicEndpoint?: () => Promise<void>;
     deploymentName?: string;
+    stopGuard?: () => void;
   }): Promise<void> {
+    if (options.stopGuard) {
+      options.stopGuard();
+    }
     if (options.releasePublicEndpoint) {
       try {
         await options.releasePublicEndpoint();
@@ -353,7 +453,12 @@ export class Scheduler {
     infrastructure: {
       releasePublicEndpoint?: () => Promise<void>;
       deploymentName: string;
+      localPort?: number;
+      sshForward?: SshPortForward;
+      tunnelService?: TunnelService;
+      publicEndpointUrl?: string;
     },
+    skipSuiteIds?: string[],
   ): Promise<CIEvalRunResult> {
     if (!this.ciEvals || !run.deployment || !this.config) {
       return { deferTeardown: false };
@@ -398,10 +503,9 @@ export class Scheduler {
     const { connectorId, connectorJson } = buildConnectorPayload({
       endpointUrl: buildkiteEndpointUrl,
       modelId: run.modelId,
-      maxTokens: buildkiteConfig?.connectorMaxTokens,
     });
 
-    this.logger.info('CI Evals: triggering on-demand Buildkite eval', {
+    this.logger.info('CI Evals: triggering on-demand Buildkite evals', {
       modelId: run.modelId,
       suites: evalSuites,
       kibanaBranch: buildkiteConfig?.kibanaBranch,
@@ -409,32 +513,12 @@ export class Scheduler {
       detachPoll,
     });
 
-    const triggered = await buildkiteTrigger.createOnDemandBuild({
-      connectorJson,
-      connectorId,
-      evalSuiteIds: evalSuites,
-      modelId: run.modelId,
-    });
-
     const startedAt = new Date().toISOString();
-
-    const buildStage2FromBuild = async (
-      buildResult: BuildkiteBuildResult,
-    ): Promise<Stage2Result> => {
-      const artifactSummary = await this.resolveEvalArtifactSummary(buildkiteTrigger, buildResult);
-      return mapBuildkiteResultToStage2(
-        run.runId,
-        run.modelId,
-        evalSuites,
-        buildResult,
-        artifactSummary,
-        startedAt,
-      );
-    };
 
     const persistOnDemandResult = async (
       result: BuildkiteBuildResult,
       retryCount: number,
+      suiteIds: string[],
     ): Promise<void> => {
       if (!this.resultsStore) return;
       await this.resultsStore.saveCIEvalResult({
@@ -444,7 +528,7 @@ export class Scheduler {
         buildkiteBuildNumber: result.buildNumber,
         pipelineSlug: buildkiteConfig?.onDemandPipelineSlug ?? 'kibana-evals-on-demand-llm-evals',
         status: result.status === 'running' ? 'running' : result.status,
-        evalSuites,
+        evalSuites: suiteIds,
         artifacts: result.artifacts
           ? Object.fromEntries(result.artifacts.map((a) => [a.filename, a.url]))
           : undefined,
@@ -455,87 +539,135 @@ export class Scheduler {
       });
     };
 
-    const pollOnDemand = async (): Promise<Stage2Result> => {
-      let onDemandResult = await buildkiteTrigger.waitForBuild(
-        triggered.pipelineSlug,
-        triggered.buildNumber,
-        triggered.buildUrl,
-      );
+    const runOneSuite = async (suiteId: string): Promise<Stage2Result> => {
+      const suiteStartedAt = new Date().toISOString();
 
-      if (onDemandResult.status === 'failed' && buildkiteConfig?.retryOnFailure !== false) {
-        this.logger.info('CI Evals: retrying on-demand eval (attempt 2)', { modelId: run.modelId });
-        const retryTriggered = await buildkiteTrigger.createOnDemandBuild({
+      this.logger.info('CI Evals: triggering on-demand suite', {
+        modelId: run.modelId,
+        suite: suiteId,
+      });
+
+      const triggerSuiteBuild = async (): Promise<BuildkiteBuildResult> => {
+        const triggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
           connectorJson,
           connectorId,
-          evalSuiteIds: evalSuites,
+          evalSuiteIds: [suiteId],
           modelId: run.modelId,
         });
-        onDemandResult = await buildkiteTrigger.waitForBuild(
-          retryTriggered.pipelineSlug,
-          retryTriggered.buildNumber,
-          retryTriggered.buildUrl,
+
+        this.logger.info(
+          triggered.adopted
+            ? 'CI Evals: on-demand suite build adopted'
+            : 'CI Evals: on-demand suite build created',
+          {
+            modelId: run.modelId,
+            suite: suiteId,
+            buildNumber: triggered.buildNumber,
+            buildUrl: triggered.buildUrl,
+            adopted: Boolean(triggered.adopted),
+          },
         );
-        await persistOnDemandResult(onDemandResult, 1);
+
+        await persistOnDemandResult(
+          {
+            buildUrl: triggered.buildUrl,
+            buildNumber: triggered.buildNumber,
+            status: 'running',
+          },
+          0,
+          [suiteId],
+        );
+
+        return buildkiteTrigger.waitForBuild(
+          triggered.pipelineSlug,
+          triggered.buildNumber,
+          triggered.buildUrl,
+        );
+      };
+
+      let onDemandResult = await triggerSuiteBuild();
+
+      if (onDemandResult.status === 'failed' && buildkiteConfig?.retryOnFailure !== false) {
+        this.logger.info('CI Evals: retrying on-demand suite (attempt 2)', {
+          modelId: run.modelId,
+          suite: suiteId,
+        });
+        onDemandResult = await triggerSuiteBuild();
+        await persistOnDemandResult(onDemandResult, 1, [suiteId]);
       } else {
-        await persistOnDemandResult(onDemandResult, 0);
+        await persistOnDemandResult(onDemandResult, 0, [suiteId]);
       }
 
-      this.logger.info('CI Evals: on-demand eval completed', {
+      this.logger.info('CI Evals: on-demand suite completed', {
         modelId: run.modelId,
+        suite: suiteId,
         status: onDemandResult.status,
         buildUrl: onDemandResult.buildUrl,
       });
 
-      if (this.ciEvals?.fullEval && onDemandResult.status === 'passed') {
-        this.logger.info('CI Evals: triggering full weekly eval', { modelId: run.modelId });
-        const weeklyTriggered = await buildkiteTrigger.triggerWeeklyEval({
-          connectorJson,
+      const artifactSummary = await this.resolveEvalArtifactSummary(
+        buildkiteTrigger,
+        onDemandResult,
+      );
+      return mapBuildkiteResultToStage2(
+        run.runId,
+        run.modelId,
+        [suiteId],
+        onDemandResult,
+        artifactSummary,
+        suiteStartedAt,
+      );
+    };
+
+    const pollOnDemand = async (): Promise<Stage2Result> => {
+      const suitesToRun = evalSuites.filter((id) => !skipSuiteIds?.includes(id));
+      if (suitesToRun.length === 0) {
+        this.logger.warn('CI Evals: all suites already completed — nothing to run', {
           modelId: run.modelId,
         });
-
-        let weeklyResult = weeklyTriggered;
-        if (weeklyTriggered.status === 'running') {
-          weeklyResult = await buildkiteTrigger.waitForBuild(
-            buildkiteConfig?.weeklyPipelineSlug ?? 'kibana-evals-weekly-llm-evals',
-            weeklyTriggered.buildNumber,
-            weeklyTriggered.buildUrl,
-          );
-        }
-
-        if (this.resultsStore) {
-          await this.resultsStore.saveCIEvalResult({
-            runId: run.runId,
-            modelId: run.modelId,
-            buildkiteBuildUrl: weeklyResult.buildUrl,
-            buildkiteBuildNumber: weeklyResult.buildNumber,
-            pipelineSlug: buildkiteConfig?.weeklyPipelineSlug ?? 'kibana-evals-weekly-llm-evals',
-            status: weeklyResult.status === 'running' ? 'running' : weeklyResult.status,
-            evalSuites: ['weekly-full'],
-            startedAt: new Date().toISOString(),
-            completedAt: new Date().toISOString(),
-            retryCount: 0,
-            connectorJson,
-          });
-        }
-
-        this.logger.info('CI Evals: weekly eval completed', {
+        return {
+          status: 'success',
           modelId: run.modelId,
-          status: weeklyResult.status,
-        });
+          runId: run.runId,
+          suiteResults: evalSuites.map((suite) => ({ suite, status: 'passed' })),
+          reason: 'All suites completed before resume',
+          startedAt,
+          completedAt: new Date().toISOString(),
+        };
       }
 
-      return buildStage2FromBuild(onDemandResult);
+      const suiteResults: Stage2Result[] = [];
+      for (const suiteId of suitesToRun) {
+        suiteResults.push(await runOneSuite(suiteId));
+      }
+      return mergeStage2Results(suiteResults);
     };
 
     if (detachPoll) {
-      await persistOnDemandResult(
-        {
-          buildUrl: triggered.buildUrl,
-          buildNumber: triggered.buildNumber,
-          status: 'running',
-        },
-        0,
-      );
+      let stopGuard: (() => void) | undefined;
+      if (
+        this.ciEvals?.sshPool &&
+        infrastructure.localPort &&
+        infrastructure.sshForward &&
+        this.config
+      ) {
+        const guard = new CiEvalInfrastructureGuard({
+          ssh: this.config.ssh,
+          sshPool: this.ciEvals.sshPool,
+          localPort: infrastructure.localPort,
+          deploymentName: infrastructure.deploymentName,
+          sshForward: infrastructure.sshForward,
+          tunnelService: infrastructure.tunnelService,
+          publicEndpointUrl: infrastructure.publicEndpointUrl,
+          logLevel: this.config.logLevel,
+        });
+        guard.start();
+        stopGuard = () => guard.stop();
+        this.logger.info('CI Evals: infrastructure guard active during Buildkite poll', {
+          modelId: run.modelId,
+          localPort: infrastructure.localPort,
+        });
+      }
 
       const pollPromise = pollOnDemand()
         .then(async (stage2Result) => {
@@ -560,6 +692,7 @@ export class Scheduler {
           this.releaseInfrastructure({
             releasePublicEndpoint: infrastructure.releasePublicEndpoint,
             deploymentName: infrastructure.deploymentName,
+            stopGuard,
           }),
         );
 
@@ -567,6 +700,7 @@ export class Scheduler {
         releasePublicEndpoint: infrastructure.releasePublicEndpoint,
         deploymentName: infrastructure.deploymentName,
         pollPromise,
+        stopGuard,
       });
 
       return { deferTeardown: true };

@@ -2,7 +2,7 @@
 #
 # smoke-full-e2e.sh — Full pipeline smoke: HF discovery → Stage 1/2/3 → CI evals → dashboard.
 #
-# Uses Kibana branch fix/weekly-evals-matrix (elastic/kibana#274606) for Stage 2 + weekly Buildkite.
+# Uses Kibana branch fix/weekly-evals-matrix (elastic/kibana#274606) for Stage 2 on-demand Buildkite evals.
 #
 # Usage:
 #   source .env && ./scripts/smoke-full-e2e.sh
@@ -25,7 +25,7 @@ mkdir -p "$LOG_DIR"
 export BUILDKITE_API_TOKEN="${BUILDKITE_API_TOKEN:-$(cat "${HOME}/.buildkite/token" 2>/dev/null || true)}"
 export BUILDKITE_ENABLED="${BUILDKITE_ENABLED:-true}"
 export BUILDKITE_KIBANA_BRANCH="${BUILDKITE_KIBANA_BRANCH:-$KIBANA_BRANCH}"
-export BUILDKITE_TRIGGER_FULL_EVAL="${BUILDKITE_TRIGGER_FULL_EVAL:-true}"
+export BUILDKITE_TRIGGER_FULL_EVAL="${BUILDKITE_TRIGGER_FULL_EVAL:-false}"
 export KIBANA_REPO_BRANCH="${KIBANA_REPO_BRANCH:-$KIBANA_BRANCH}"
 export ELASTICSEARCH_URL="$ES_URL"
 

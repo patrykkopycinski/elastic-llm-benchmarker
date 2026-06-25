@@ -5,7 +5,6 @@ export interface BuildkiteConfig {
   apiToken: string;
   orgSlug: string;
   onDemandPipelineSlug: string;
-  weeklyPipelineSlug: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   retryOnFailure?: boolean;
@@ -13,23 +12,26 @@ export interface BuildkiteConfig {
   kibanaBranch?: string;
   /** Poll in background; caller keeps tunnel/model alive until poll completes. */
   detachPoll?: boolean;
+  /** Reuse in-flight Benchmarker build when env matches instead of POSTing duplicate. */
+  adoptRunningBuild?: boolean;
+  /** Wait until pipeline has no running builds before POSTing a new build. */
+  waitForPipelineIdle?: boolean;
+  pipelineIdleWaitMs?: number;
+  pipelineIdlePollMs?: number;
 }
 
 export interface BuildkiteTriggeredBuild {
   pipelineSlug: string;
   buildNumber: number;
   buildUrl: string;
+  /** True when an existing running build was reused instead of creating a new one. */
+  adopted?: boolean;
 }
 
 export interface TriggerOnDemandOptions {
   connectorJson: string;
   connectorId: string;
   evalSuiteIds: string[];
-  modelId: string;
-}
-
-export interface TriggerWeeklyOptions {
-  connectorJson: string;
   modelId: string;
 }
 
@@ -47,9 +49,12 @@ export interface BuildkiteBuildResult {
 
 export interface BuildkiteEvalTrigger {
   triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult>;
-  triggerWeeklyEval(options: TriggerWeeklyOptions): Promise<BuildkiteBuildResult>;
   /** Create a build without waiting for completion. */
   createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
+  /**
+   * Adopt a matching in-flight Benchmarker build, wait for pipeline idle, then create if needed.
+   */
+  createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
   /** Poll an existing build until terminal state or timeout. */
   waitForBuild(
     pipelineSlug: string,
@@ -58,18 +63,24 @@ export interface BuildkiteEvalTrigger {
   ): Promise<BuildkiteBuildResult>;
   /** Download artifact body text (requires API token). */
   downloadArtifact(url: string): Promise<string | undefined>;
+  /** Fetch raw Buildkite build state (running, passed, failed, canceled, …). */
+  getBuildState(pipelineSlug: string, buildNumber: number): Promise<string | undefined>;
 }
 
 interface BuildkiteBuildResponse {
   number: number;
   web_url: string;
   state: string;
+  message?: string;
+  env?: Record<string, string>;
 }
 
 interface BuildkiteArtifactResponse {
   filename: string;
   download_url: string;
 }
+
+const BENCHMARKER_BUILD_MESSAGE_PREFIX = 'Benchmarker:';
 
 export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
   private readonly logger: Logger;
@@ -89,14 +100,36 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
   async createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild> {
     const build = await this.createBuild(
       this.config.onDemandPipelineSlug,
-      `Benchmarker: ${options.modelId} on-demand eval`,
+      `${BENCHMARKER_BUILD_MESSAGE_PREFIX} ${options.modelId} on-demand eval`,
       this.buildOnDemandEnv(options),
     );
     return {
       pipelineSlug: this.config.onDemandPipelineSlug,
       buildNumber: build.number,
       buildUrl: build.web_url,
+      adopted: false,
     };
+  }
+
+  async createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild> {
+    if (this.config.adoptRunningBuild !== false) {
+      const adopted = await this.findAdoptableRunningBuild(options);
+      if (adopted) {
+        this.logger.info('Buildkite: adopting existing running eval build', {
+          buildNumber: adopted.buildNumber,
+          modelId: options.modelId,
+          suite: options.evalSuiteIds[0],
+          connectorId: options.connectorId,
+        });
+        return adopted;
+      }
+    }
+
+    if (this.config.waitForPipelineIdle !== false) {
+      await this.waitForPipelineIdle();
+    }
+
+    return this.createOnDemandBuild(options);
   }
 
   async waitForBuild(
@@ -119,8 +152,13 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     }
   }
 
+  async getBuildState(pipelineSlug: string, buildNumber: number): Promise<string | undefined> {
+    const build = await this.fetchBuild(pipelineSlug, buildNumber);
+    return build?.state;
+  }
+
   async triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult> {
-    const triggered = await this.createOnDemandBuild(options);
+    const triggered = await this.createOnDemandBuildOrAdopt(options);
     if (this.config.detachPoll) {
       return {
         buildUrl: triggered.buildUrl,
@@ -133,35 +171,6 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       triggered.buildNumber,
       triggered.buildUrl,
     );
-  }
-
-  async triggerWeeklyEval(options: TriggerWeeklyOptions): Promise<BuildkiteBuildResult> {
-    const { connectorJson, modelId } = options;
-
-    const env: Record<string, string> = {
-      KIBANA_TESTING_AI_CONNECTORS: connectorJson,
-      BENCHMARK_MODEL_ID: modelId,
-    };
-
-    if (this.config.kibanaBranch) {
-      env['KIBANA_BRANCH'] = this.config.kibanaBranch;
-    }
-
-    const build = await this.createBuild(
-      this.config.weeklyPipelineSlug,
-      `Benchmarker: ${modelId} weekly eval`,
-      env,
-    );
-
-    if (this.config.detachPoll) {
-      return {
-        buildUrl: build.web_url,
-        buildNumber: build.number,
-        status: 'running',
-      };
-    }
-
-    return this.pollBuild(this.config.weeklyPipelineSlug, build.number, build.web_url);
   }
 
   private buildOnDemandEnv(options: TriggerOnDemandOptions): Record<string, string> {
@@ -197,6 +206,137 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     }
 
     return env;
+  }
+
+  private matchesBenchmarkerOptions(
+    build: BuildkiteBuildResponse,
+    options: TriggerOnDemandOptions,
+  ): boolean {
+    const suiteId = options.evalSuiteIds[0];
+    if (!suiteId) return false;
+
+    const env = build.env ?? {};
+    const connectorId = options.connectorId;
+    const connectorMatch =
+      env['EVAL_PROJECT'] === connectorId ||
+      env['EVALUATION_CONNECTOR_ID'] === connectorId;
+    const suiteMatch = env['EVAL_SUITE_ID'] === suiteId;
+    const modelMatch =
+      env['BENCHMARK_MODEL_ID'] === options.modelId ||
+      env['EVAL_MODEL_GROUPS'] === options.modelId;
+
+    return connectorMatch && suiteMatch && modelMatch;
+  }
+
+  private isBenchmarkerBuildMessage(message: string | undefined): boolean {
+    return (message ?? '').startsWith(BENCHMARKER_BUILD_MESSAGE_PREFIX);
+  }
+
+  private async findAdoptableRunningBuild(
+    options: TriggerOnDemandOptions,
+  ): Promise<BuildkiteTriggeredBuild | undefined> {
+    const running = await this.listPipelineBuilds(this.config.onDemandPipelineSlug, 'running');
+
+    for (const summary of running) {
+      if (!this.isBenchmarkerBuildMessage(summary.message)) {
+        continue;
+      }
+
+      const detail = await this.fetchBuild(
+        this.config.onDemandPipelineSlug,
+        summary.number,
+      );
+      if (!detail || !this.matchesBenchmarkerOptions(detail, options)) {
+        continue;
+      }
+
+      return {
+        pipelineSlug: this.config.onDemandPipelineSlug,
+        buildNumber: detail.number,
+        buildUrl: detail.web_url,
+        adopted: true,
+      };
+    }
+
+    return undefined;
+  }
+
+  private async waitForPipelineIdle(): Promise<void> {
+    const idleWaitMs = this.config.pipelineIdleWaitMs ?? this.pollTimeoutMs;
+    const idlePollMs = this.config.pipelineIdlePollMs ?? this.pollIntervalMs;
+    const deadline = Date.now() + idleWaitMs;
+
+    while (Date.now() < deadline) {
+      const running = await this.listPipelineBuilds(this.config.onDemandPipelineSlug, 'running');
+      if (running.length === 0) {
+        return;
+      }
+
+      this.logger.info('Buildkite: waiting for on-demand pipeline to become idle', {
+        pipeline: this.config.onDemandPipelineSlug,
+        runningBuilds: running.map((b) => ({
+          number: b.number,
+          message: (b.message ?? '').slice(0, 80),
+        })),
+        elapsedMs: idleWaitMs - (deadline - Date.now()),
+      });
+
+      await new Promise((r) => setTimeout(r, idlePollMs));
+    }
+
+    const stillRunning = await this.listPipelineBuilds(this.config.onDemandPipelineSlug, 'running');
+    throw new Error(
+      `Buildkite pipeline ${this.config.onDemandPipelineSlug} still has ${stillRunning.length} running build(s) after ${idleWaitMs}ms`,
+    );
+  }
+
+  private async listPipelineBuilds(
+    pipelineSlug: string,
+    state: 'running' | 'scheduled',
+  ): Promise<BuildkiteBuildResponse[]> {
+    const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds?state=${state}&per_page=10`;
+
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${this.config.apiToken}` },
+      });
+      if (!response.ok) {
+        this.logger.warn('Buildkite list builds returned non-OK', {
+          pipelineSlug,
+          state,
+          status: response.status,
+        });
+        return [];
+      }
+      const data: unknown = await response.json();
+      return Array.isArray(data) ? (data as BuildkiteBuildResponse[]) : [];
+    } catch (err) {
+      this.logger.warn('Buildkite list builds failed', {
+        pipelineSlug,
+        state,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return [];
+    }
+  }
+
+  private async fetchBuild(
+    pipelineSlug: string,
+    buildNumber: number,
+  ): Promise<BuildkiteBuildResponse | undefined> {
+    const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds/${buildNumber}`;
+
+    try {
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${this.config.apiToken}` },
+      });
+      if (!response.ok) {
+        return undefined;
+      }
+      return (await response.json()) as BuildkiteBuildResponse;
+    } catch {
+      return undefined;
+    }
   }
 
   private async createBuild(

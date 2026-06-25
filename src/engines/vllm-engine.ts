@@ -8,6 +8,7 @@ import type {
 } from './engine-types.js';
 import { VllmDeploymentService } from '../services/vllm-deployment.js';
 import type { VllmDeploymentOptions } from '../services/vllm-deployment.js';
+import { modelIdToContainerName } from '../services/vllm-deployment.js';
 import { BenchmarkRunnerService } from '../services/benchmark-runner.js';
 import type { BenchmarkRunnerOptions } from '../services/benchmark-runner.js';
 import { createLogger } from '../utils/logger.js';
@@ -135,6 +136,28 @@ export class VllmEngine implements InferenceEngine {
   async stop(sshConfig: SSHConfig, deploymentName: string): Promise<boolean> {
     this.logger.info(`[vLLM] Stopping deployment: ${deploymentName}`);
     return this.deploymentService.stop(sshConfig, deploymentName);
+  }
+
+  /**
+   * Returns deployment metadata when the model's vLLM container is already running on the VM.
+   * Used to skip redeploy after daemon restart during CI eval polling.
+   */
+  async findRunningDeployment(
+    sshConfig: SSHConfig,
+    modelId: string,
+  ): Promise<{ deploymentName: string; endpointUrl: string } | null> {
+    const expectedName = modelIdToContainerName(modelId);
+    const containers = await this.deploymentService.listContainers(sshConfig);
+    const match = containers.find(
+      (c) => c.containerName === expectedName && c.state.toLowerCase() === 'running',
+    );
+    if (!match) {
+      return null;
+    }
+    return {
+      deploymentName: match.containerName,
+      endpointUrl: `http://127.0.0.1:${this.apiPort}`,
+    };
   }
 
   /**

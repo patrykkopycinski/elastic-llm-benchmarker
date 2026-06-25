@@ -63,6 +63,7 @@ import { HardwareEstimator } from './services/hardware-estimator.js';
 import { HardwareProfileRegistry } from './services/hardware-profiles.js';
 import { ModelSmokeTestImpl } from './services/model-smoke-test.js';
 import { BuildkiteEvalTriggerImpl } from './services/buildkite-eval-trigger.js';
+import { recoverOrFailActiveEntries } from './services/ci-eval-resume.js';
 import type { CIEvalsOptions } from './scheduler/scheduler.js';
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -91,13 +92,34 @@ function createEsClient(config: AppConfig | null): Client | null {
 // ─── Helper Functions ──────────────────────────────────────────────────────────
 
 /**
+ * Prefer the `start` subcommand's `--config` from raw argv over the program-level default.
+ */
+function resolveStartConfigPath(fallback: string): string {
+  if (process.env['BENCHMARKER_CONFIG']) {
+    return process.env['BENCHMARKER_CONFIG'];
+  }
+  const args = process.argv.slice(2);
+  const startIdx = args.indexOf('start');
+  const searchFrom = startIdx >= 0 ? startIdx + 1 : 0;
+  for (let i = searchFrom; i < args.length; i++) {
+    if ((args[i] === '--config' || args[i] === '-c') && args[i + 1] !== undefined) {
+      return args[i + 1]!;
+    }
+  }
+  return fallback;
+}
+
+/**
  * Loads app configuration safely, returning null on failure.
  * Prints the error to stderr in non-JSON mode.
  */
 function loadAppConfig(options: { config?: string; json?: boolean }): AppConfig | null {
   try {
+    const configPath = options.config
+      ? resolve(process.cwd(), options.config)
+      : undefined;
     return loadConfig(undefined, {
-      configPath: options.config,
+      configPath,
     });
   } catch (err) {
     if (!options.json) {
@@ -1186,7 +1208,6 @@ if (_binaryName === 'benchmarker-queue') {
     .option('--queue-model <modelId>', 'Enqueue a single model and exit (does not start scheduler)')
     .option('--discovery', 'Enable HuggingFace model discovery scheduler', false)
     .option('--ci-evals', 'Enable CI eval pipeline (smoke test → Buildkite on-demand eval)', false)
-    .option('--full-eval', 'Also trigger weekly eval after on-demand passes (requires --ci-evals)', false)
     .option('--daemonize', 'Fork into a background process and exit (survives shell disconnect)', false)
     .option('--clear-pending', 'Cancel all pending queue entries before starting (validation runs)', false)
     .option(
@@ -1196,13 +1217,12 @@ if (_binaryName === 'benchmarker-queue') {
     .option('--connector <type>', 'Output connector: "elasticsearch" (default) or "local"', 'elasticsearch')
     .option('--output-dir <path>', 'Output directory for local connector', './benchmark-output')
     .action(async (opts) => {
-      const configPath = opts['config'] as string;
+      const configPath = resolveStartConfigPath(opts['config'] as string);
       const pollInterval = parseInt(opts['pollInterval'] as string, 10);
       const enableStage2 = opts['stage2'] as boolean;
       const enableStage3 = opts['stage3'] as boolean;
       const enableDiscovery = opts['discovery'] as boolean;
       const enableCIEvals = opts['ciEvals'] as boolean;
-      const enableFullEval = opts['fullEval'] as boolean;
       const daemonize = opts['daemonize'] as boolean;
       const clearPending = opts['clearPending'] as boolean;
       const enqueueAfterClear = opts['enqueueAfterClear'] as string | undefined;
@@ -1216,7 +1236,18 @@ if (_binaryName === 'benchmarker-queue') {
       if (!config) process.exit(1);
 
       if (daemonize && !queueModel) {
+        const absConfigPath = resolve(process.cwd(), configPath);
         const childArgs = process.argv.slice(2).filter((arg) => arg !== '--daemonize');
+        for (let i = 0; i < childArgs.length; i++) {
+          if (childArgs[i] === '--config' || childArgs[i] === '-c') {
+            childArgs[i + 1] = absConfigPath;
+          }
+        }
+        if (!childArgs.includes(absConfigPath)) {
+          const startIdx = childArgs.indexOf('start');
+          const insertAt = startIdx >= 0 ? startIdx + 1 : 0;
+          childArgs.splice(insertAt, 0, '--config', absConfigPath);
+        }
         const cliEntry = process.argv[1] ?? resolve(process.cwd(), 'dist/cli.js');
         const logPath = resolve(process.cwd(), '.smoke-logs/daemon.log');
         mkdirSync(dirname(logPath), { recursive: true });
@@ -1302,7 +1333,11 @@ if (_binaryName === 'benchmarker-queue') {
       }
 
       const logger = createLogger(config.logLevel ?? 'info');
-      logger.info('Config loaded successfully');
+      logger.info('Config loaded successfully', {
+        configPath: resolve(process.cwd(), configPath),
+        buildkiteBranch: config.buildkite.kibanaBranch,
+        evalSuites: config.buildkite.defaultEvalSuites,
+      });
 
       // Create ES client
       const esClient = createEsClient(config);
@@ -1320,13 +1355,56 @@ if (_binaryName === 'benchmarker-queue') {
       const queueService = new QueueService(esClient);
       logger.info('Queue service ready');
 
-      const orphanedActive = await queueService.failActiveEntries(
-        'Orphaned active entry — previous daemon exited before completion',
-      );
-      if (orphanedActive > 0) {
-        logger.warn('Cleared orphaned active queue entries before starting scheduler', {
-          count: orphanedActive,
-        });
+      const resultsStore = new ElasticsearchResultsStore(esClient);
+
+      const ciEvalsEnabled =
+        (enableCIEvals || config.buildkite.enabled) && Boolean(config.buildkite.apiToken);
+
+      if (ciEvalsEnabled && config.buildkite.apiToken) {
+        const buildkiteTrigger = new BuildkiteEvalTriggerImpl(
+          {
+            apiToken: config.buildkite.apiToken,
+            orgSlug: config.buildkite.orgSlug,
+            onDemandPipelineSlug: config.buildkite.onDemandPipelineSlug,
+            pollIntervalMs: config.buildkite.pollIntervalMs,
+            pollTimeoutMs: config.buildkite.pollTimeoutMs,
+            retryOnFailure: config.buildkite.retryOnFailure,
+            defaultEvalSuites: config.buildkite.defaultEvalSuites,
+            kibanaBranch: config.buildkite.kibanaBranch,
+            detachPoll: config.buildkite.detachPoll,
+            adoptRunningBuild: config.buildkite.adoptRunningBuild,
+            waitForPipelineIdle: config.buildkite.waitForPipelineIdle,
+            pipelineIdleWaitMs: config.buildkite.pipelineIdleWaitMs,
+            pipelineIdlePollMs: config.buildkite.pipelineIdlePollMs,
+          },
+          config.logLevel,
+        );
+        const { recovered, failed } = await recoverOrFailActiveEntries(
+          queueService,
+          resultsStore,
+          buildkiteTrigger,
+          config.buildkite.defaultEvalSuites ?? [],
+          logger,
+        );
+        if (recovered > 0) {
+          logger.info('Recovered in-flight CI eval queue entries after daemon restart', {
+            recovered,
+          });
+        }
+        if (failed > 0) {
+          logger.warn('Cleared orphaned active queue entries before starting scheduler', {
+            count: failed,
+          });
+        }
+      } else {
+        const orphanedActive = await queueService.failActiveEntries(
+          'Orphaned active entry — previous daemon exited before completion',
+        );
+        if (orphanedActive > 0) {
+          logger.warn('Cleared orphaned active queue entries before starting scheduler', {
+            count: orphanedActive,
+          });
+        }
       }
 
       if (clearPending) {
@@ -1363,7 +1441,6 @@ if (_binaryName === 'benchmarker-queue') {
 
       // Create worker dependencies
       const sshPool = new SSHClientPool({}, config.logLevel ?? 'info');
-      const resultsStore = new ElasticsearchResultsStore(esClient);
       const vllmEngine = new VllmEngine(sshPool, config.logLevel ?? 'info', {
         deployment: {
           dockerImage: config.engine?.dockerImage,
@@ -1374,8 +1451,7 @@ if (_binaryName === 'benchmarker-queue') {
         },
       });
 
-      const ciEvalsEnabled =
-        (enableCIEvals || config.buildkite.enabled) && Boolean(config.buildkite.apiToken);
+      // ciEvalsEnabled computed above for startup recovery
 
       // Optionally create Stage 2 worker (local Kibana clone path — skipped when CI evals are enabled)
       const stage2Worker =
@@ -1479,24 +1555,25 @@ if (_binaryName === 'benchmarker-queue') {
           apiToken: config.buildkite.apiToken,
           orgSlug: config.buildkite.orgSlug,
           onDemandPipelineSlug: config.buildkite.onDemandPipelineSlug,
-          weeklyPipelineSlug: config.buildkite.weeklyPipelineSlug,
           pollIntervalMs: config.buildkite.pollIntervalMs,
           pollTimeoutMs: config.buildkite.pollTimeoutMs,
           retryOnFailure: config.buildkite.retryOnFailure,
           defaultEvalSuites: config.buildkite.defaultEvalSuites,
           kibanaBranch: config.buildkite.kibanaBranch,
           detachPoll: config.buildkite.detachPoll,
+          adoptRunningBuild: config.buildkite.adoptRunningBuild,
+          waitForPipelineIdle: config.buildkite.waitForPipelineIdle,
+          pipelineIdleWaitMs: config.buildkite.pipelineIdleWaitMs,
+          pipelineIdlePollMs: config.buildkite.pipelineIdlePollMs,
         }, config.logLevel);
         ciEvalsOptions = {
           enabled: true,
-          fullEval: enableFullEval || config.buildkite.triggerFullEval,
           detachPoll: config.buildkite.detachPoll,
           smokeTest,
           buildkiteTrigger,
+          sshPool,
         };
-        logger.info(
-          `CI eval pipeline enabled (on-demand + ${ciEvalsOptions.fullEval ? 'weekly' : 'no weekly'})`,
-        );
+        logger.info('CI eval pipeline enabled (on-demand security matrix suites only)');
         logger.info('Buildkite eval config', {
           kibanaBranch: config.buildkite.kibanaBranch,
           defaultEvalSuites: config.buildkite.defaultEvalSuites,

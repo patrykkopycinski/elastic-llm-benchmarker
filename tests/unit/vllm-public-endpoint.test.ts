@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { VllmPublicEndpointResolver } from '../../src/services/vllm-public-endpoint.js';
 import type { SSHConfig, TunnelConfig } from '../../src/types/config.js';
 
@@ -8,11 +8,22 @@ const mockStop = vi.fn();
 const mockConnect = vi.fn();
 const mockDisconnect = vi.fn();
 
+let running = false;
+
 vi.mock('../../src/utils/ssh-port-forward.js', () => ({
   SshPortForward: vi.fn().mockImplementation(() => ({
-    start: mockStart,
+    start: () => {
+      mockStart();
+      running = true;
+    },
     waitUntilReady: mockWaitUntilReady,
-    stop: mockStop,
+    stop: () => {
+      mockStop();
+      running = false;
+    },
+    get isRunning() {
+      return running;
+    },
   })),
 }));
 
@@ -34,6 +45,8 @@ const ssh: SSHConfig = {
 describe('VllmPublicEndpointResolver', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    running = false;
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
     mockWaitUntilReady.mockResolvedValue(true);
     mockConnect.mockResolvedValue({
       success: true,
@@ -48,6 +61,10 @@ describe('VllmPublicEndpointResolver', () => {
       error: null,
       reused: false,
     });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it('uses SSH local forward when tunnel disabled', async () => {

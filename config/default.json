@@ -30,7 +30,8 @@
   },
   "engine": {
     "type": "vllm",
-    "vllmGpuMemoryUtilization": 0.95
+    "vllmGpuMemoryUtilization": 0.95,
+    "maxModelLen": 65536
   },
   "logLevel": "info",
   "resultsDir": "./results",
@@ -72,10 +73,14 @@
     "onDemandPipelineSlug": "kibana-evals-on-demand-llm-evals",
     "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
     "pollIntervalMs": 30000,
-    "pollTimeoutMs": 3600000,
+    "pollTimeoutMs": 10800000,
     "retryOnFailure": true,
-    "defaultEvalSuites": ["security_ai_assistant"],
-    "kibanaBranch": "main",
+    "defaultEvalSuites": [
+      "security-alert-triage",
+      "security-alerts-rag-regression",
+      "security-esql-generation-regression"
+    ],
+    "kibanaBranch": "fix/weekly-evals-matrix",
     "triggerFullEval": false,
     "detachPoll": true
   },

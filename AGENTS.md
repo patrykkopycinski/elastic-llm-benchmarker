@@ -233,6 +233,7 @@ context/
 - **Proactive 10x skills**: Evaluate and invoke 10x skills (shape, prd, plan) for multi-step features without waiting for the user to ask.
 - **Avoid port 3100**: Run the built-in dashboard/API on **3200** (or another free port) — 3100 collides with patryks-treadmill.
 - **No commit unless asked**: Do not commit, push, or put credentials in tracked files unless the user explicitly requests it.
+- **Sanitize before push**: If real VM IPs, SSH paths, or tokens land in tracked files or commits, rewrite to placeholders (including git history) before pushing — never leave operator values on the remote.
 - **One model at a time**: Never deploy or benchmark multiple models concurrently on the GPU VM — keep scheduler `maxConcurrentRuns` at 1.
 
 ## Learned Workspace Facts
@@ -243,11 +244,10 @@ context/
 - **Dashboard/API server**: Built-in UI is **not** started by `setup-local.sh` — run `npm run api` separately; `queue-server.ts` loads `.env`, honors `PORT` (defaults **3200**) and `ELASTICSEARCH_URL`.
 - **vLLM deploy defaults**: Docker image `vllm/vllm-openai:latest`; `tensor-parallel-size` = VM `gpuCount`; resolved pip version logged after deploy.
 - **Model discovery**: `DiscoveryScheduler` polls HuggingFace and auto-queues hardware-fit candidates — no manual seeding.
-- **CI eval platform**: `buildkite.enabled` + `tunnel.enabled` → ngrok public URL → Buildkite on-demand pipeline with `EVAL_SUITE_ID`, `EVAL_PROJECT`, `KIBANA_TESTING_AI_CONNECTORS`. Results map to `Stage2Result`; Stage 3 uses composite trace queries (ES + local JSONL fallback).
+- **CI eval platform**: `buildkite.enabled` + `tunnel.enabled` → SSH `-L` (local port → VM vLLM) → ngrok public URL → Buildkite on-demand with `EVAL_SUITE_ID`, `EVAL_PROJECT`, `KIBANA_TESTING_AI_CONNECTORS`. `buildkite.detachPoll: true` keeps tunnel/vLLM up during deferred poll; `pollTimeoutMs` default **3h**. Results map to `Stage2Result`; Stage 3 uses composite trace queries (ES + local JSONL fallback).
 - **Stage 2 ITL gate**: `stage2Thresholds.maxItlP50Ms` (default 20ms) — not `maxTtftMs`.
 - **Stage 3 EIS reasoning**: `EisLlmClient` is preferred when `EIS_CCM_API_KEY` is set (Hermes is not an LLM proxy); calls `/_inference/chat_completion/<id>/_stream`; maps `eis/<model>` → `.<model>-chat_completion`.
-- **EIS local ES setup**: `scripts/setup-local.sh` starts ES with trial license + QA `xpack.inference.elastic.url`; Vault path `secret/kibana-issues/dev/inference/kibana-eis-ccm` (`essu_` QA key is correct for CCM).
-- **DRA local ES images**: Pull snapshot **master** (9.x) via `scripts/pull-dra-es-image.sh` (`ES_DRA_CHANNEL=snapshot`); ES 8.17 lacks `/_inference/_ccm` — 9.x DRA is required for local EIS Stage 3.
-- **Stage 2 CI tunnel**: Buildkite evals need a public vLLM URL — set `TUNNEL_ENABLED=true` and `NGROK_AUTH_TOKEN` in `.env`; SSH port-forward alone cannot reach Buildkite agents.
-- **Stage 3 smoke test**: `npm run smoke:stage3` runs EIS validation → Stage 3 reasoning → ES persistence E2E.
-- **Full pipeline smoke test**: `npm run smoke:full` runs HF discovery → Stage 1 → Stage 2 (CI evals + tunnel) → Stage 3 → dashboard verification.
+- **Local EIS/ES for Stage 3**: `scripts/setup-local.sh` starts ES with trial license + QA `xpack.inference.elastic.url`; pull 9.x DRA snapshot via `scripts/pull-dra-es-image.sh` (`ES_DRA_CHANNEL=snapshot`) — ES 8.17 lacks `/_inference/_ccm`. Vault: `secret/kibana-issues/dev/inference/kibana-eis-ccm`.
+- **Graceful daemon stop**: Use `./scripts/stop-local.sh` or `benchmarker-queue stop` (SIGTERM) — never `pkill` during CI eval polling; the scheduler waits for deferred Buildkite polls before exit.
+- **Operator daemon start**: `./scripts/start-local.sh [--daemonize]` sources `.env` + Buildkite token and passes an **absolute** `--config` path to `config/local.json` (gitignored operator values). Missing config files log a warning — no silent `{}` fallback to wrong Buildkite defaults.
+- **Smoke tests & pipeline doc**: `npm run smoke:stage3` (EIS → Stage 3 → ES); `npm run smoke:full` (HF discovery → Stage 1 → CI evals + tunnel → Stage 3 → dashboard). Visual reference: `docs/pipeline-how-it-works.html`.

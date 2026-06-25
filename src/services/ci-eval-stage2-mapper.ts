@@ -83,6 +83,49 @@ export function mapBuildkiteResultToStage2(
   };
 }
 
+/** Merge per-suite on-demand Buildkite results into one Stage2Result for the matrix. */
+export function mergeStage2Results(results: Stage2Result[]): Stage2Result {
+  if (results.length === 0) {
+    throw new Error('mergeStage2Results requires at least one Stage2Result');
+  }
+  if (results.length === 1) {
+    return results[0]!;
+  }
+
+  const first = results[0]!;
+  const scores: Record<string, number> = {};
+  const suiteResults: NonNullable<Stage2Result['suiteResults']> = [];
+  for (const result of results) {
+    if (result.scores) {
+      Object.assign(scores, result.scores);
+    }
+    if (result.suiteResults) {
+      suiteResults.push(...result.suiteResults);
+    }
+  }
+
+  const failed = results.filter((r) => r.status !== 'success');
+  const status = failed.length === 0 ? 'success' : 'failed';
+  const reason =
+    failed.length === 0
+      ? undefined
+      : failed
+          .map((r) => r.reason ?? `${r.modelId} suite failed`)
+          .filter(Boolean)
+          .join('; ');
+
+  return {
+    runId: first.runId,
+    modelId: first.modelId,
+    status,
+    scores,
+    suiteResults,
+    reason,
+    startedAt: first.startedAt,
+    completedAt: results[results.length - 1]!.completedAt,
+  };
+}
+
 /**
  * Best-effort parse of eval summary JSON from Buildkite artifacts.
  * Supports @kbn/evals junit-style summaries and plain JSON tallies.

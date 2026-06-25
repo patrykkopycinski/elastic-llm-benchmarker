@@ -39,6 +39,15 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
   set +a
 fi
 
+if [[ -z "${ELASTIC_PASSWORD:-}" && -f "$PROJECT_ROOT/.env.docker" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$PROJECT_ROOT/.env.docker"
+  set +a
+fi
+
+ES_URL="${ELASTICSEARCH_URL:-http://localhost:9223}"
+
 SSH_HOST="${SSH_HOST:-}"
 SSH_PORT="${SSH_PORT:-22}"
 SSH_USERNAME="${SSH_USERNAME:-}"
@@ -93,8 +102,14 @@ if [[ "$JSON_MODE" == "false" ]]; then
 fi
 
 # 1. Elasticsearch
+ES_CURL_AUTH=()
+if [[ -n "${ELASTIC_PASSWORD:-}" ]]; then
+  ES_CURL_AUTH=(-u "elastic:${ELASTIC_PASSWORD}")
+elif [[ -n "${ELASTICSEARCH_API_KEY:-}" ]]; then
+  ES_CURL_AUTH=(-H "Authorization: ApiKey ${ELASTICSEARCH_API_KEY}")
+fi
 run_check "Elasticsearch is reachable and healthy (yellow/green)" \
-  sh -c "curl -sf '${ES_URL}/_cluster/health' | grep -qE '\"status\":\"(green|yellow)\"'"
+  sh -c "curl -sf ${ES_CURL_AUTH[*]+"${ES_CURL_AUTH[@]}"} '${ES_URL}/_cluster/health' | grep -qE '\"status\":\"(green|yellow)\"'"
 
 # 2. EDOT collector (optional by default — set EDOT_CHECK=required to enforce)
 if [[ "$EDOT_CHECK" == "required" ]]; then

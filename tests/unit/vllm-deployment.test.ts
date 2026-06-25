@@ -177,6 +177,7 @@ describe('VllmDeploymentService', () => {
 
       expect(command).toContain('docker run -d');
       expect(command).toContain('--name vllm-model-test');
+      expect(command).toContain('--restart unless-stopped');
       expect(command).toContain('--gpus all');
       expect(command).toContain('--shm-size=16g');
       expect(command).toContain('-p 8000:8000');
@@ -218,6 +219,18 @@ describe('VllmDeploymentService', () => {
       );
 
       expect(command).toContain('--max-model-len 4096');
+      expect(command).not.toContain('VLLM_ALLOW_LONG_MAX_MODEL_LEN');
+    });
+
+    it('sets VLLM_ALLOW_LONG_MAX_MODEL_LEN when max-model-len exceeds native context', () => {
+      const pool = createMockSSHPool();
+      service = new VllmDeploymentService(pool, 'error', { maxModelLen: 65_536 });
+      const model = createTestModel();
+
+      const command = service.buildDockerRunCommand(model, 'vllm-model-test', 2, 'llama3_json');
+
+      expect(command).toContain('-e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1');
+      expect(command).toContain('--max-model-len 65536');
     });
 
     it('uses custom docker image', () => {

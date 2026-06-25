@@ -94,6 +94,21 @@ export interface ContainerStatus {
 
 const DEFAULT_DOCKER_IMAGE = 'vllm/vllm-openai:latest';
 const DEFAULT_CONTAINER_NAME_PREFIX = 'vllm-model';
+
+/** Docker-safe container name for a HuggingFace model id (matches deploy naming). */
+export function modelIdToContainerName(
+  modelId: string,
+  prefix: string = DEFAULT_CONTAINER_NAME_PREFIX,
+): string {
+  const sanitized = modelId
+    .toLowerCase()
+    .replace(/\//g, '-')
+    .replace(/[^a-z0-9_.-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  return `${prefix}-${sanitized}`;
+}
 const DEFAULT_API_PORT = 8000;
 const DEFAULT_PULL_TIMEOUT_MS = 600_000; // 10 minutes
 const DEFAULT_RUN_TIMEOUT_MS = 30_000; // 30 seconds
@@ -133,6 +148,7 @@ export function buildDeployCommandWithToolCalling(options: {
   const args: string[] = [
     'docker run -d',
     `--name ${containerName}`,
+    '--restart unless-stopped',
     '--gpus all',
     '--shm-size=16g',
     `-p ${apiPort}:8000`,
@@ -578,16 +594,22 @@ export class VllmDeploymentService {
     const args: string[] = [
       'docker run -d',
       `--name ${containerName}`,
+      '--restart unless-stopped',
       '--gpus all',
       '--shm-size=16g',
       `-p ${opts.apiPort}:8000`,
       `-e HF_TOKEN=${opts.huggingfaceToken ?? '${HF_TOKEN}'}`,
+    ];
+    if (opts.maxModelLen !== null && opts.maxModelLen > 32_768) {
+      args.push('-e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1');
+    }
+    args.push(
       opts.dockerImage,
       `--model ${model.id}`,
       `--tensor-parallel-size ${tensorParallelSize}`,
       `--gpu-memory-utilization ${opts.gpuMemoryUtilization}`,
       `--max-model-len ${opts.maxModelLen ?? 'auto'}`,
-    ];
+    );
 
     if (params.toolCallParser) {
       args.push(`--tool-call-parser ${params.toolCallParser}`);
@@ -753,14 +775,7 @@ export class VllmDeploymentService {
    * Docker container names only support [a-zA-Z0-9][a-zA-Z0-9_.-]
    */
   private generateContainerName(modelId: string): string {
-    const sanitized = modelId
-      .toLowerCase()
-      .replace(/\//g, '-')
-      .replace(/[^a-z0-9_.-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '');
-
-    return `${this.options.containerNamePrefix}-${sanitized}`;
+    return modelIdToContainerName(modelId, this.options.containerNamePrefix);
   }
 
   /**

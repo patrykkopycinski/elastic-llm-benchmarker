@@ -25,8 +25,12 @@ export interface LoadConfigOptions {
  * Returns an empty object if the file does not exist.
  */
 export function loadConfigFile(configPath: string): Record<string, unknown> {
-  const resolvedPath = resolve(configPath);
+  const resolvedPath = resolve(process.cwd(), configPath);
   if (!existsSync(resolvedPath)) {
+    // eslint-disable-next-line no-console -- config bootstrap before logger exists
+    console.warn(
+      `Warning: config file not found at ${resolvedPath} (cwd=${process.cwd()}); using env/schema defaults only`,
+    );
     return {};
   }
 
@@ -171,6 +175,16 @@ function buildEnvConfig(): Record<string, unknown> {
     elasticsearch['url'] = process.env['ELASTICSEARCH_URL'];
   if (process.env['ELASTICSEARCH_API_KEY'] !== undefined)
     elasticsearch['apiKey'] = process.env['ELASTICSEARCH_API_KEY'];
+  if (process.env['ELASTICSEARCH_USERNAME'] !== undefined)
+    elasticsearch['username'] = process.env['ELASTICSEARCH_USERNAME'];
+  if (process.env['ELASTICSEARCH_PASSWORD'] !== undefined)
+    elasticsearch['password'] = process.env['ELASTICSEARCH_PASSWORD'];
+  if (
+    process.env['ELASTIC_PASSWORD'] !== undefined &&
+    process.env['ELASTICSEARCH_PASSWORD'] === undefined
+  ) {
+    elasticsearch['password'] = process.env['ELASTIC_PASSWORD'];
+  }
   if (process.env['ELASTICSEARCH_CLOUD_ID'] !== undefined)
     elasticsearch['cloudId'] = process.env['ELASTICSEARCH_CLOUD_ID'];
   if (Object.keys(elasticsearch).length > 0) env['elasticsearch'] = elasticsearch;
@@ -261,6 +275,18 @@ function buildEnvConfig(): Record<string, unknown> {
     buildkite['triggerFullEval'] = process.env['BUILDKITE_TRIGGER_FULL_EVAL'] === 'true';
   if (process.env['BUILDKITE_DETACH_POLL'] !== undefined)
     buildkite['detachPoll'] = process.env['BUILDKITE_DETACH_POLL'] === 'true';
+  if (process.env['BUILDKITE_ADOPT_RUNNING_BUILD'] !== undefined) {
+    buildkite['adoptRunningBuild'] = process.env['BUILDKITE_ADOPT_RUNNING_BUILD'] === 'true';
+  }
+  if (process.env['BUILDKITE_WAIT_FOR_PIPELINE_IDLE'] !== undefined) {
+    buildkite['waitForPipelineIdle'] = process.env['BUILDKITE_WAIT_FOR_PIPELINE_IDLE'] === 'true';
+  }
+  if (process.env['BUILDKITE_PIPELINE_IDLE_WAIT_MS'] !== undefined) {
+    buildkite['pipelineIdleWaitMs'] = Number(process.env['BUILDKITE_PIPELINE_IDLE_WAIT_MS']);
+  }
+  if (process.env['BUILDKITE_PIPELINE_IDLE_POLL_MS'] !== undefined) {
+    buildkite['pipelineIdlePollMs'] = Number(process.env['BUILDKITE_PIPELINE_IDLE_POLL_MS']);
+  }
   if (Object.keys(buildkite).length > 0) env['buildkite'] = buildkite;
 
   // LLM configuration from env vars
@@ -500,7 +526,7 @@ export function loadConfig(overrides?: Partial<AppConfig>, options?: LoadConfigO
   }
 
   // Layer 1: Load JSON config file
-  const configPath = options?.configPath ?? 'config/default.json';
+  const configPath = resolve(process.cwd(), options?.configPath ?? 'config/default.json');
   const fileConfig = loadConfigFile(configPath);
 
   // Layer 2: Build config from environment variables

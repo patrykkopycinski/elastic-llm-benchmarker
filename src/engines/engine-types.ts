@@ -145,6 +145,15 @@ export interface InferenceEngine {
   stop(sshConfig: SSHConfig, deploymentName: string): Promise<boolean>;
 
   /**
+   * When the model is already deployed (e.g. daemon restart mid-CI-eval), returns
+   * deployment metadata so Stage 1 can be skipped. Default: not supported.
+   */
+  findRunningDeployment?(
+    sshConfig: SSHConfig,
+    modelId: string,
+  ): Promise<{ deploymentName: string; endpointUrl: string } | null>;
+
+  /**
    * Runs benchmarks at multiple concurrency levels against a deployed model.
    *
    * @param sshConfig - SSH connection configuration for the target VM

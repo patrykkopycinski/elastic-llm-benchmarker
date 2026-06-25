@@ -55,13 +55,19 @@ function createConfig(overrides: Partial<AppConfig['kibanaRepo']> = {}): AppConf
 }
 
 function mockExecFileSuccess() {
-  execFileMock.mockImplementation((_file, _args, _options, _callback) => {
+  execFileMock.mockImplementation((_file, args, _options, _callback) => {
     let callback = _callback;
     if (typeof _options === 'function') {
       callback = _options;
     }
     if (callback) {
-      process.nextTick(() => callback(null, 'stdout', 'stderr'));
+      const stdout =
+        Array.isArray(args) && args[0] === 'rev-parse' && args[1] === 'HEAD'
+          ? 'localcommit\n'
+          : Array.isArray(args) && args[0] === 'rev-parse' && args[1] === 'origin/main'
+            ? 'remotecommit\n'
+            : 'stdout';
+      process.nextTick(() => callback(null, stdout, 'stderr'));
     }
     return undefined as ReturnType<typeof execFile>;
   });
@@ -131,28 +137,13 @@ describe('KibanaRepoService', () => {
       const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
       await service.cloneOrPull();
 
-      expect(execFileMock).toHaveBeenCalledTimes(3);
-      expect(execFileMock).toHaveBeenNthCalledWith(
-        1,
-        'git',
-        ['fetch', 'origin'],
-        { cwd: '/tmp/kibana-cache' },
-        expect.any(Function),
+      const gitCalls = execFileMock.mock.calls.filter(
+        (call) => call[0] === 'git' && call[1]?.[0] !== 'rev-parse',
       );
-      expect(execFileMock).toHaveBeenNthCalledWith(
-        2,
-        'git',
-        ['checkout', 'main'],
-        { cwd: '/tmp/kibana-cache' },
-        expect.any(Function),
-      );
-      expect(execFileMock).toHaveBeenNthCalledWith(
-        3,
-        'git',
-        ['pull', 'origin', 'main'],
-        { cwd: '/tmp/kibana-cache' },
-        expect.any(Function),
-      );
+      expect(gitCalls).toHaveLength(3);
+      expect(gitCalls[0]?.[1]).toEqual(['fetch', 'origin', 'main']);
+      expect(gitCalls[1]?.[1]).toEqual(['checkout', 'main']);
+      expect(gitCalls[2]?.[1]).toEqual(['pull', '--ff-only', 'origin', 'main']);
     });
 
     it('throws KibanaRepoError when clone fails', async () => {

@@ -87,10 +87,21 @@ function createMockQueueService(entries: QueueEntry[] = []): QueueService {
   const svc = {
     esClient: {} as unknown as QueueService['esClient'],
     enqueue: vi.fn(),
-    dequeue: vi.fn(),
+    dequeue: vi.fn().mockImplementation(async () => {
+      const pending = data
+        .filter((e) => e.status === 'pending')
+        .sort((a, b) => b.priority - a.priority || a.requestedAt.localeCompare(b.requestedAt));
+      const entry = pending[0];
+      if (!entry) return null;
+      entry.status = 'deploying';
+      entry.startedAt = new Date().toISOString();
+      return { ...entry };
+    }),
     getQueue: vi.fn(),
     getById: vi.fn().mockImplementation(async (id: string) => data.find((e) => e.id === id) ?? null),
-    getCurrent: vi.fn(),
+    getCurrent: vi.fn().mockImplementation(async () =>
+      data.find((e) => e.status === 'deploying' || e.status === 'benchmarking') ?? null,
+    ),
     updateStatus: vi.fn().mockImplementation(async (id: string, status: string, errorMessage?: string) => {
       const entry = data.find((e) => e.id === id);
       if (entry) {
@@ -276,10 +287,9 @@ describe('Pipeline Integration', () => {
         maxConcurrentRuns: 1,
       });
 
-      vi.useFakeTimers();
       await scheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(500);
+      await new Promise((r) => setTimeout(r, 500));
+      await scheduler.stop();
 
       const statusHistory = (queueService as any).getStatusHistory() as { id: string; status: string; errorMessage?: string }[];
       const finalStatuses = statusHistory.filter((s) => s.id === 'entry-1');
@@ -315,10 +325,9 @@ describe('Pipeline Integration', () => {
         maxConcurrentRuns: 1,
       });
 
-      vi.useFakeTimers();
       await scheduler.start();
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(500);
+      await new Promise((r) => setTimeout(r, 500));
+      await scheduler.stop();
 
       const statusHistory = (queueService as any).getStatusHistory() as { id: string; status: string; errorMessage?: string }[];
       const finalStatuses = statusHistory.filter((s) => s.id === 'entry-1');
@@ -374,20 +383,13 @@ describe('Pipeline Integration', () => {
 
       const worker = new Stage1WorkerImpl({ config, vllmEngine, resultsStore, queueService });
       scheduler = new Scheduler(queueService, worker, {
-        pollIntervalMs: 1000,
+        pollIntervalMs: 200,
         maxConcurrentRuns: 1,
       });
 
-      vi.useFakeTimers();
       await scheduler.start();
-
-      // First poll processes entry-1, parse fails
-      await vi.advanceTimersByTimeAsync(100);
-      await vi.advanceTimersByTimeAsync(500);
-
-      // Second poll processes entry-2, parse succeeds
-      await vi.advanceTimersByTimeAsync(2000);
-      await vi.advanceTimersByTimeAsync(500);
+      await new Promise((r) => setTimeout(r, 1500));
+      await scheduler.stop();
 
       const statusHistory = (queueService as any).getStatusHistory() as { id: string; status: string; errorMessage?: string }[];
 

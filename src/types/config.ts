@@ -448,22 +448,43 @@ export const buildkiteConfigSchema = z.object({
   /** Polling interval in milliseconds when waiting for build completion. */
   pollIntervalMs: z.number().int().positive().default(30_000),
   /** Maximum wait time for build completion in milliseconds. */
-  pollTimeoutMs: z.number().int().positive().default(3_600_000),
+  pollTimeoutMs: z.number().int().positive().default(10_800_000),
   /** Whether to retry on-demand eval once on failure. */
   retryOnFailure: z.boolean().default(true),
-  /** Eval suites to run (on-demand). */
-  defaultEvalSuites: z.array(z.string()).default(['security_ai_assistant']),
+  /**
+   * Security eval suites to run via on-demand Buildkite (one build per suite).
+   * Subset of weekly security matrix jobs needed for OSS model performance reporting.
+   */
+  defaultEvalSuites: z
+    .array(z.string())
+    .default([
+      'security-alert-triage',
+      'security-alerts-rag-regression',
+      'security-esql-generation-regression',
+    ]),
   /** Kibana branch to build against. */
-  kibanaBranch: z.string().default('main'),
-  /** Whether to also trigger weekly evals after on-demand passes. */
+  kibanaBranch: z.string().default('fix/weekly-evals-matrix'),
+  /** @deprecated Weekly pipeline disabled — OSS matrix uses on-demand suites only. */
   triggerFullEval: z.boolean().default(false),
   /**
    * When true, trigger Buildkite and poll in a background task while Stage 2/3 continue.
    * Tunnel + vLLM deployment stay up until the poll finishes (or times out).
    */
   detachPoll: z.boolean().default(true),
-  /** Max output tokens passed to the Kibana .gen-ai connector (optional). */
-  connectorMaxTokens: z.number().int().positive().optional(),
+  /**
+   * Reuse an in-flight Benchmarker build on the on-demand pipeline when env matches
+   * (model, connector, suite) instead of POSTing a duplicate.
+   */
+  adoptRunningBuild: z.boolean().default(true),
+  /**
+   * Before creating a new build, wait until no other builds are running on the pipeline.
+   * Prevents cross-session collisions (manual kbn-evals runs vs benchmarker daemon).
+   */
+  waitForPipelineIdle: z.boolean().default(true),
+  /** Max wait for pipeline idle before failing build creation. Defaults to pollTimeoutMs. */
+  pipelineIdleWaitMs: z.number().int().positive().optional(),
+  /** Poll interval while waiting for pipeline idle. */
+  pipelineIdlePollMs: z.number().int().positive().default(30_000),
 });
 
 /**

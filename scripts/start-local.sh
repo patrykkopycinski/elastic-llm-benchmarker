@@ -23,6 +23,20 @@ if [[ -f .env ]]; then
   set +a
 fi
 
+if [[ -z "${ELASTIC_PASSWORD:-}" && -f .env.docker ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source .env.docker
+  set +a
+fi
+
+if [[ -n "${ELASTIC_PASSWORD:-}" && -z "${ELASTICSEARCH_PASSWORD:-}" ]]; then
+  export ELASTICSEARCH_USERNAME="${ELASTICSEARCH_USERNAME:-elastic}"
+  export ELASTICSEARCH_PASSWORD="${ELASTIC_PASSWORD}"
+fi
+
+export BENCHMARKER_CONFIG="${ROOT}/config/local.json"
+
 if [[ -z "${BUILDKITE_API_TOKEN:-}" && -f "${HOME}/.buildkite/token" ]]; then
   export BUILDKITE_API_TOKEN
   BUILDKITE_API_TOKEN="$(cat "${HOME}/.buildkite/token")"
@@ -32,11 +46,10 @@ CLI="${BENCHMARKER_QUEUE_BIN:-/tmp/benchmarker-queue}"
 ln -sf "${ROOT}/dist/cli.js" "${CLI}"
 
 DEFAULT_FLAGS=(
-  --config config/local.json
+  --config "${ROOT}/config/local.json"
   --stage2
   --stage3
   --ci-evals
-  --full-eval
   --poll-interval 10000
 )
 

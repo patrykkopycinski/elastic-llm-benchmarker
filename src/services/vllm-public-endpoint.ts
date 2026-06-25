@@ -21,11 +21,59 @@ export interface PublicEndpointResult {
   directUrl: string;
   /** Whether a public ngrok URL was established */
   tunneled: boolean;
+  /** Local bind port for SSH forward (when established) */
+  localPort?: number;
+  /** Active SSH forward instance (for deferred-poll keepalive) */
+  sshForward?: SshPortForward;
+  /** Active ngrok tunnel service (for deferred-poll recovery) */
+  tunnelService?: TunnelService;
   /** Release SSH forward + ngrok; safe to call multiple times */
   cleanup: () => Promise<void>;
 }
 
 const DEFAULT_API_PORT = 8000;
+
+async function probeLocalVllmApi(localPort: number): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${localPort}/v1/models`, {
+      signal: AbortSignal.timeout(8_000),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function ensureSshForwardHealthy(
+  sshForward: SshPortForward,
+  localPort: number,
+  logger: Logger,
+  maxAttempts = 3,
+): Promise<boolean> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (!sshForward.isRunning) {
+      sshForward.start();
+    } else if (!(await probeLocalVllmApi(localPort))) {
+      logger.warn('SSH forward alive but local vLLM API unreachable — restarting forward', {
+        attempt,
+        localPort,
+      });
+      sshForward.stop();
+      sshForward.start();
+    }
+
+    const tcpReady = await sshForward.waitUntilReady();
+    const apiReady = tcpReady && (await probeLocalVllmApi(localPort));
+    if (apiReady) {
+      return true;
+    }
+
+    logger.warn('SSH forward not healthy — retrying', { attempt, localPort, tcpReady });
+    sshForward.stop();
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  return false;
+}
 
 /**
  * Exposes the GPU VM vLLM API via SSH local forward + optional ngrok.
@@ -62,6 +110,7 @@ export class VllmPublicEndpointResolver {
       ssh: this.ssh,
       localPort,
       remotePort: this.apiPort,
+      waitTimeoutMs: 30_000,
       logLevel: this.logLevel,
     });
 
@@ -79,8 +128,7 @@ export class VllmPublicEndpointResolver {
     };
 
     try {
-      sshForward.start();
-      const forwardReady = await sshForward.waitUntilReady();
+      const forwardReady = await ensureSshForwardHealthy(sshForward, localPort, this.logger);
       if (!forwardReady) {
         this.logger.warn('SSH port forward failed — using direct VM URL (may be unreachable locally)');
         sshForward.stop();
@@ -98,6 +146,8 @@ export class VllmPublicEndpointResolver {
           endpointUrl: localUrl,
           directUrl,
           tunneled: false,
+          localPort,
+          sshForward,
           cleanup,
         };
       }
@@ -110,6 +160,8 @@ export class VllmPublicEndpointResolver {
           endpointUrl: localUrl,
           directUrl,
           tunneled: false,
+          localPort,
+          sshForward,
           cleanup,
         };
       }
@@ -118,6 +170,18 @@ export class VllmPublicEndpointResolver {
         config: this.tunnel,
         logLevel: this.logLevel,
       });
+
+      if (!(await ensureSshForwardHealthy(sshForward, localPort, this.logger))) {
+        this.logger.warn('SSH forward unhealthy before ngrok — local smoke only');
+        return {
+          endpointUrl: localUrl,
+          directUrl,
+          tunneled: false,
+          localPort,
+          sshForward,
+          cleanup,
+        };
+      }
 
       const tunnelResult = await tunnelService.connect();
       if (!tunnelResult.success || !tunnelResult.tunnel) {
@@ -128,6 +192,8 @@ export class VllmPublicEndpointResolver {
           endpointUrl: localUrl,
           directUrl,
           tunneled: false,
+          localPort,
+          sshForward,
           cleanup,
         };
       }
@@ -145,6 +211,9 @@ export class VllmPublicEndpointResolver {
         publicEndpointUrl: publicUrl,
         directUrl,
         tunneled: true,
+        localPort,
+        sshForward,
+        tunnelService,
         cleanup,
       };
     } catch (err) {

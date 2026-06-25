@@ -12,8 +12,6 @@ export interface ConnectorBuilderOptions {
   connectorName?: string;
   connectorId?: string;
   apiKey?: string;
-  /** Optional max output tokens for the connector (helps avoid context blow-ups on small models). */
-  maxTokens?: number;
 }
 
 export interface ConnectorBuildResult {
@@ -28,7 +26,6 @@ interface GenAIConnector {
     apiUrl: string;
     apiProvider: string;
     defaultModel: string;
-    maxTokens?: number;
   };
   secrets: {
     apiKey: string;
@@ -46,26 +43,20 @@ export function buildConnectorPayload(options: ConnectorBuilderOptions): Connect
     connectorName,
     connectorId,
     apiKey = 'not-needed',
-    maxTokens,
   } = options;
 
   const id = connectorId ?? buildConnectorId(modelId);
   const apiUrl = `${endpointUrl.replace(/\/+$/, '')}/v1/chat/completions`;
   const name = connectorName ?? id;
 
-  const connectorConfig: GenAIConnector['config'] = {
-    apiUrl,
-    apiProvider: 'Other',
-    defaultModel: modelId,
-  };
-  if (maxTokens !== undefined) {
-    connectorConfig.maxTokens = maxTokens;
-  }
-
   const connector: GenAIConnector = {
     name,
     actionTypeId: '.gen-ai',
-    config: connectorConfig,
+    config: {
+      apiUrl,
+      apiProvider: 'Other',
+      defaultModel: modelId,
+    },
     secrets: {
       apiKey,
     },

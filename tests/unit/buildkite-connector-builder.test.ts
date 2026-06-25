@@ -35,18 +35,21 @@ describe('buildConnectorPayload', () => {
     expect(buildConnectorId('Org/My-Model')).toBe('vllm-org-my-model');
   });
 
-  it('includes maxTokens in connector config when provided', () => {
+  it('does not include unsupported connector config keys', () => {
     const { connectorJson } = buildConnectorPayload({
       endpointUrl: 'https://example.ngrok.dev/',
       modelId: 'Qwen/Qwen2.5-1.5B-Instruct',
-      maxTokens: 4096,
     });
 
     const decoded = JSON.parse(Buffer.from(connectorJson, 'base64').toString('utf8')) as Record<
       string,
-      { config: { maxTokens?: number } }
+      { config: Record<string, unknown> }
     >;
     const id = Object.keys(decoded)[0]!;
-    expect(decoded[id]?.config.maxTokens).toBe(4096);
+    expect(decoded[id]?.config).toEqual({
+      apiUrl: 'https://example.ngrok.dev/v1/chat/completions',
+      apiProvider: 'Other',
+      defaultModel: 'Qwen/Qwen2.5-1.5B-Instruct',
+    });
   });
 });

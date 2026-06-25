@@ -51,7 +51,7 @@
     "provider": "ngrok",
     "ngrokRegion": "us",
     "localPort": 18000,
-    "timeoutMs": 30000,
+    "timeoutMs": 60000,
     "retryAttempts": 3,
     "retryDelayMs": 5000
   },
@@ -82,10 +82,13 @@
     "pollIntervalMs": 30000,
     "pollTimeoutMs": 10800000,
     "retryOnFailure": true,
-    "defaultEvalSuites": ["security-alert-triage"],
+    "defaultEvalSuites": [
+      "security-alert-triage",
+      "security-alerts-rag-regression",
+      "security-esql-generation-regression"
+    ],
     "kibanaBranch": "fix/weekly-evals-matrix",
-    "connectorMaxTokens": 4096,
-    "triggerFullEval": true,
+    "triggerFullEval": false,
     "detachPoll": true
   },
   "discoveryScheduler": {
