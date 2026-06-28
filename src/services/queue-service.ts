@@ -102,6 +102,21 @@ export class QueueService {
     requestedBy?: string,
     metadata?: QueueEntry['metadata'],
   ): Promise<QueueEntry> {
+    const existing = await this.esClient.search<EsSource>({
+      index: INDEX,
+      query: {
+        bool: {
+          must: [{ term: { model_id: modelId } }],
+          filter: [{ terms: { status: ['pending', 'deploying', 'running'] } }],
+        },
+      },
+      size: 1,
+    });
+    const existingHit = existing.hits.hits[0];
+    if (existingHit) {
+      return toEntry(existingHit._id!, existingHit._source!);
+    }
+
     const p = priority ?? (source === 'user' ? 100 : 10);
     const now = new Date().toISOString();
     const doc: EsSource = {

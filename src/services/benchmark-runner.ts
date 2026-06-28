@@ -13,6 +13,11 @@ export interface BenchmarkRunnerOptions {
   apiPort?: number;
   /** Number of prompts to generate per benchmark run (default: 200) */
   numPrompts?: number;
+  /**
+   * Reduced prompt count for the first concurrency level (c=1) to get a fast
+   * pass/fail signal before running expensive full benchmarks. Default: 50.
+   */
+  gatingSampleSize?: number;
   /** Timeout in milliseconds per concurrency-level benchmark (default: 600000 = 10 min) */
   benchmarkTimeoutMs?: number;
   /** Dataset name for the benchmark (default: 'sonnet') */
@@ -65,6 +70,7 @@ export interface FullBenchmarkResult {
 
 const DEFAULT_API_PORT = 8000;
 const DEFAULT_NUM_PROMPTS = 200;
+const DEFAULT_GATING_SAMPLE_SIZE = 50;
 const DEFAULT_BENCHMARK_TIMEOUT_MS = 1_800_000; // 30 minutes (200 prompts at concurrency=1 on 70B takes ~20min)
 const DEFAULT_DATASET = 'sonnet';
 const DEFAULT_SONNET_INPUT_LEN = 256;
@@ -132,6 +138,7 @@ export class BenchmarkRunnerService {
     this.options = {
       apiPort: options.apiPort ?? DEFAULT_API_PORT,
       numPrompts: options.numPrompts ?? DEFAULT_NUM_PROMPTS,
+      gatingSampleSize: options.gatingSampleSize ?? DEFAULT_GATING_SAMPLE_SIZE,
       benchmarkTimeoutMs: options.benchmarkTimeoutMs ?? DEFAULT_BENCHMARK_TIMEOUT_MS,
       dataset: options.dataset ?? DEFAULT_DATASET,
       sonnetInputLen: options.sonnetInputLen ?? DEFAULT_SONNET_INPUT_LEN,
@@ -183,11 +190,17 @@ export class BenchmarkRunnerService {
     const rawOutputParts: string[] = [];
 
     for (const concurrency of concurrencyLevels) {
+      const effectiveNumPrompts =
+        concurrency === 1 && concurrencyLevels.length > 1
+          ? this.options.gatingSampleSize
+          : this.options.numPrompts;
+
       this.logger.info(`Running benchmark at concurrency level ${concurrency}`, {
         modelId,
+        numPrompts: effectiveNumPrompts,
       });
 
-      const runResult = await this.runSingleBenchmark(sshConfig, modelId, concurrency, containerName);
+      const runResult = await this.runSingleBenchmark(sshConfig, modelId, concurrency, containerName, effectiveNumPrompts);
       runs.push(runResult);
       rawOutputParts.push(
         `\n=== Concurrency Level: ${concurrency} ===\n${runResult.rawOutput}`,
@@ -253,8 +266,9 @@ export class BenchmarkRunnerService {
     modelId: string,
     concurrencyLevel: number,
     containerName?: string,
+    numPromptsOverride?: number,
   ): Promise<BenchmarkRunResult> {
-    const command = this.buildBenchmarkCommand(modelId, concurrencyLevel, containerName);
+    const command = this.buildBenchmarkCommand(modelId, concurrencyLevel, containerName, numPromptsOverride);
 
     this.logger.debug(`Executing benchmark command`, {
       command,
@@ -364,14 +378,15 @@ export class BenchmarkRunnerService {
    * @param containerName - Name of the running vLLM Docker container
    * @returns The complete shell command string
    */
-  buildBenchmarkCommand(modelId: string, concurrencyLevel: number, containerName?: string): string {
+  buildBenchmarkCommand(modelId: string, concurrencyLevel: number, containerName?: string, numPromptsOverride?: number): string {
+    const numPrompts = numPromptsOverride ?? this.options.numPrompts;
     const benchArgs = [
       'vllm bench serve',
       '--backend openai-chat',
       `--base-url http://localhost:${this.options.apiPort}`,
       `--endpoint /v1/chat/completions`,
       `--model ${modelId}`,
-      `--num-prompts ${this.options.numPrompts}`,
+      `--num-prompts ${numPrompts}`,
       `--max-concurrency ${concurrencyLevel}`,
       `--random-output-len ${this.options.randomOutputLen}`,
       `--random-input-len ${this.options.randomInputLen}`,

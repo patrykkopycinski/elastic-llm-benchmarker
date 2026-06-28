@@ -25,6 +25,8 @@ const DEGRADED_SUMMARY: TraceSummary = {
   operations: [],
 };
 
+const DEFAULT_TRACE_INDEX_PATTERN = 'traces-*';
+
 // ES|QL response shape from `_query` endpoint
 interface EsqlColumn {
   name: string;
@@ -36,21 +38,27 @@ interface EsqlResponse {
   values?: unknown[][];
 }
 
+/** Escape double quotes for safe embedding in ES|QL string literals. */
+function escapeEsqlString(value: string): string {
+  return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
 export class TraceQueryBuilderImpl implements TraceQueryBuilder {
   constructor(
     private readonly client: Client,
     private readonly logger?: Logger,
+    private readonly traceIndexPattern: string = DEFAULT_TRACE_INDEX_PATTERN,
   ) {}
 
   async buildSummary(
     modelId: string,
-    _runId: string,
+    runId: string,
     timeRange: { from: string; to: string },
   ): Promise<TraceSummary> {
     try {
       const [errorsResp, latencyResp] = await Promise.all([
-        this.runErrorQuery(modelId, timeRange),
-        this.runLatencyQuery(modelId, timeRange),
+        this.runErrorQuery(runId, timeRange),
+        this.runLatencyQuery(runId, timeRange),
       ]);
 
       const topErrors = this.parseTopErrors(errorsResp);
@@ -73,15 +81,35 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
     }
   }
 
+  private buildTimeFilter(timeRange: { from: string; to: string }): string {
+    const from = escapeEsqlString(timeRange.from);
+    const to = escapeEsqlString(timeRange.to);
+    return `@timestamp >= "${from}" AND @timestamp <= "${to}"`;
+  }
+
+  /**
+   * Narrow spans to the active benchmark run. OTel traces from EDOT use semconv
+   * field names (`trace.id`, `@timestamp`, `duration`) — not PascalCase.
+   */
+  private buildRunFilter(runId: string): string {
+    const escapedRunId = escapeEsqlString(runId);
+    return `(
+  trace.id == "${escapedRunId}"
+  OR attributes.kibana.evals.execution_id LIKE "*${escapedRunId}*"
+  OR resource.attributes.service.name == "vllm-inference"
+)`;
+  }
+
   private async runErrorQuery(
-    modelId: string,
+    runId: string,
     timeRange: { from: string; to: string },
   ): Promise<EsqlResponse> {
-    const query = `FROM .benchmark-traces-*
-| WHERE (attributes.model_id == "${modelId}" OR attributes.modelId == "${modelId}")
-| WHERE start_time >= "${timeRange.from}" AND start_time <= "${timeRange.to}"
-| WHERE span.status.code == "Error"
-| STATS count = COUNT(*), sample = SAMPLE(attributes.error.message, 1) BY span.name
+    const index = this.traceIndexPattern;
+    const query = `FROM ${index}
+| WHERE ${this.buildRunFilter(runId)}
+| WHERE ${this.buildTimeFilter(timeRange)}
+| WHERE status.code == "Error"
+| STATS count = COUNT(*), sample = SAMPLE(COALESCE(status.message, attributes.error.message), 1) BY span.name
 | SORT count DESC
 | LIMIT 10`;
 
@@ -93,13 +121,14 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
   }
 
   private async runLatencyQuery(
-    modelId: string,
+    runId: string,
     timeRange: { from: string; to: string },
   ): Promise<EsqlResponse> {
-    const query = `FROM .benchmark-traces-*
-| WHERE (attributes.model_id == "${modelId}" OR attributes.modelId == "${modelId}")
-| WHERE start_time >= "${timeRange.from}" AND start_time <= "${timeRange.to}"
-| STATS count = COUNT(*), p50 = PERCENTILE(span.duration.nanoseconds, 50), p95 = PERCENTILE(span.duration.nanoseconds, 95), p99 = PERCENTILE(span.duration.nanoseconds, 99), avgDur = AVG(span.duration.nanoseconds), errors = COUNT(*) WHERE span.status.code == "Error" BY span.name
+    const index = this.traceIndexPattern;
+    const query = `FROM ${index}
+| WHERE ${this.buildRunFilter(runId)}
+| WHERE ${this.buildTimeFilter(timeRange)}
+| STATS count = COUNT(*), p50 = PERCENTILE(duration, 50), p95 = PERCENTILE(duration, 95), p99 = PERCENTILE(duration, 99), avgDur = AVG(duration), errors = COUNT(*) WHERE status.code == "Error" BY span.name
 | SORT p95 DESC`;
 
     return this.client.transport.request<EsqlResponse>({

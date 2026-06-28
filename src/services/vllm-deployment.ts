@@ -9,6 +9,11 @@ import {
 } from './vllm-model-params.js';
 import { createLogger } from '../utils/logger.js';
 
+/** Redact secret-bearing `-e KEY=value` flags before logging shell commands. */
+export function redactShellCommand(command: string): string {
+  return command.replace(/(-e\s+(?:HF_TOKEN|HUGGINGFACE_TOKEN|AWS_SECRET_ACCESS_KEY)=)(\S+)/gi, '$1[REDACTED]');
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 /** Configuration options for the vLLM deployment service */
@@ -390,7 +395,7 @@ export class VllmDeploymentService {
     );
 
     this.logger.info(`Launching vLLM container: ${containerName}`, {
-      command: dockerCommand,
+      command: redactShellCommand(dockerCommand),
     });
 
     const runResult = await this.execSSH(
@@ -676,11 +681,49 @@ export class VllmDeploymentService {
    * Pulls the vLLM Docker image on the remote VM.
    */
   private async pullImage(sshConfig: SSHConfig, modelId: string): Promise<void> {
-    this.logger.info(`Pulling Docker image: ${this.options.dockerImage}`);
+    const image = this.options.dockerImage;
 
+    // Digest-based skip: avoid re-pulling if local image matches remote.
+    try {
+      const localDigestResult = await this.execSSH(
+        sshConfig,
+        `docker inspect --format='{{index .RepoDigests 0}}' ${image} 2>/dev/null || echo 'NOT_FOUND'`,
+        30_000,
+        modelId,
+      );
+      const localDigest = localDigestResult.success
+        ? localDigestResult.stdout.trim()
+        : '';
+
+      const remoteDigestResult = await this.execSSH(
+        sshConfig,
+        `docker manifest inspect ${image} 2>/dev/null | grep -m1 '"digest"' | cut -d'"' -f4 || echo 'UNKNOWN'`,
+        30_000,
+        modelId,
+      );
+      const remoteDigest = remoteDigestResult.success
+        ? remoteDigestResult.stdout.trim()
+        : '';
+
+      if (
+        localDigest.length > 10 &&
+        remoteDigest.length > 10 &&
+        localDigest.includes(remoteDigest)
+      ) {
+        this.logger.info(`Docker image up-to-date, skipping pull`, {
+          image,
+          digest: remoteDigest,
+        });
+        return;
+      }
+    } catch {
+      // Digest check is best-effort; fall through to pull.
+    }
+
+    this.logger.info(`Pulling Docker image: ${image}`);
     const result = await this.execSSH(
       sshConfig,
-      `docker pull ${this.options.dockerImage}`,
+      `docker pull ${image}`,
       this.options.pullTimeoutMs,
       modelId,
     );
@@ -689,12 +732,12 @@ export class VllmDeploymentService {
       throw new ContainerError(
         modelId,
         'pull',
-        this.options.dockerImage,
+        image,
         new Error(`docker pull failed: ${result.stderr || result.stdout}`),
       );
     }
 
-    this.logger.info(`Docker image pulled successfully: ${this.options.dockerImage}`, {
+    this.logger.info(`Docker image pulled successfully: ${image}`, {
       durationMs: result.durationMs,
     });
   }
@@ -776,6 +819,27 @@ export class VllmDeploymentService {
    */
   private generateContainerName(modelId: string): string {
     return modelIdToContainerName(modelId, this.options.containerNamePrefix);
+  }
+
+  /**
+   * Pre-fetch model weights on the GPU VM so vLLM cold-start is near-instant.
+   * Fires-and-forgets (does not block caller). Logs errors but never throws.
+   */
+  async prefetchWeights(sshConfig: SSHConfig, modelId: string): Promise<void> {
+    try {
+      this.logger.info('Pre-fetching model weights in background', { modelId });
+      await this.execSSH(
+        sshConfig,
+        `nohup bash -c 'huggingface-cli download ${modelId} --quiet' >/dev/null 2>&1 &`,
+        15_000,
+        modelId,
+      );
+    } catch (error) {
+      this.logger.warn('prefetchWeights: failed to start background download', {
+        modelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /**

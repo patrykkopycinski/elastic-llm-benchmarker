@@ -1366,6 +1366,7 @@ if (_binaryName === 'benchmarker-queue') {
             apiToken: config.buildkite.apiToken,
             orgSlug: config.buildkite.orgSlug,
             onDemandPipelineSlug: config.buildkite.onDemandPipelineSlug,
+            weeklyPipelineSlug: config.buildkite.weeklyPipelineSlug,
             pollIntervalMs: config.buildkite.pollIntervalMs,
             pollTimeoutMs: config.buildkite.pollTimeoutMs,
             retryOnFailure: config.buildkite.retryOnFailure,
@@ -1448,6 +1449,7 @@ if (_binaryName === 'benchmarker-queue') {
           maxModelLen: config.engine?.maxModelLen,
           huggingfaceToken: config.huggingfaceToken,
           useSudo: config.ssh.useSudo,
+          healthCheckTimeoutMs: config.benchmarkThresholds.healthCheckTimeoutSeconds * 1000,
         },
       });
 
@@ -1480,7 +1482,11 @@ if (_binaryName === 'benchmarker-queue') {
           stage3Worker = new Stage3WorkerImpl({
             config,
             traceQueryBuilder: new CompositeTraceQueryBuilder(
-              new TraceQueryBuilderImpl(esClient, logger),
+              new TraceQueryBuilderImpl(
+                esClient,
+                logger,
+                config.edotCollector.traceIndexPattern,
+              ),
               new LocalTraceQueryBuilder(),
             ),
             promptBuilder: new ReasoningPromptBuilderImpl(),
@@ -1555,6 +1561,7 @@ if (_binaryName === 'benchmarker-queue') {
           apiToken: config.buildkite.apiToken,
           orgSlug: config.buildkite.orgSlug,
           onDemandPipelineSlug: config.buildkite.onDemandPipelineSlug,
+          weeklyPipelineSlug: config.buildkite.weeklyPipelineSlug,
           pollIntervalMs: config.buildkite.pollIntervalMs,
           pollTimeoutMs: config.buildkite.pollTimeoutMs,
           retryOnFailure: config.buildkite.retryOnFailure,
@@ -1750,7 +1757,11 @@ if (_binaryName === 'benchmarker-queue') {
       const stage3Worker = new Stage3WorkerImpl({
         config,
         traceQueryBuilder: new CompositeTraceQueryBuilder(
-          new TraceQueryBuilderImpl(esClient, logger),
+          new TraceQueryBuilderImpl(
+            esClient,
+            logger,
+            config.edotCollector.traceIndexPattern,
+          ),
           new LocalTraceQueryBuilder(),
         ),
         promptBuilder: new ReasoningPromptBuilderImpl(),

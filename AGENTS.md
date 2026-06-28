@@ -29,7 +29,7 @@ npm run start -- --config config.yaml --stage2 --stage3 --api-port 3200
 3. **Never throw in services**: All service methods return structured results with `.success`, `.error`, `.data`. Internal errors are logged and returned, never thrown.
 4. **Queue API surface**: Services talk to each other via `QueueService` with exactly four methods: `enqueue()`, `claim()`, `complete()`, `fail()`. No `add()` or `initialize()`.
 5. **SSH as black box**: The GPU VM is reached only via `SSHClientPool` in `src/services/ssh-client.ts`. No direct SSH calls outside this service.
-6. **OTel field casing**: In ES trace indices, fields are PascalCase: `TraceId`, `SpanId`, `ParentSpanId`, `Attributes`, `Duration`, `Name`. ES|QL queries must match this exactly.
+6. **OTel field casing**: EDOT `traces-*` indices use semconv ES|QL names (`trace.id`, `@timestamp`, `duration`, `span.name`, `status.code`, `attributes.*`). Override via `edotCollector.traceIndexPattern` / `EDOT_COLLECTOR_TRACE_INDEX_PATTERN`.
 7. **Stage 2 runs only on Stage 1 pass**: `stage2_thresholds` gate must be met before Kibana eval suites execute. When `buildkite.enabled`, Stage 2 is **real Kibana CI evals** via Buildkite — local `eval-suite-runner.ts` is skipped.
 8. **Golden cluster scope**: Only kbn/evals OTel traces land on golden ES — not benchmark results or recommendation reports. `GoldenForwarder` is not on the happy path.
 9. **API keys are SHA-256 hashed**: Never store plaintext API keys in ES. Use `crypto.createHash('sha256').update(key).digest('hex')` for comparison.
@@ -235,19 +235,21 @@ context/
 - **No commit unless asked**: Do not commit, push, or put credentials in tracked files unless the user explicitly requests it.
 - **Sanitize before push**: If real VM IPs, SSH paths, or tokens land in tracked files or commits, rewrite to placeholders (including git history) before pushing — never leave operator values on the remote.
 - **One model at a time**: Never deploy or benchmark multiple models concurrently on the GPU VM — keep scheduler `maxConcurrentRuns` at 1.
+- **Customer-ready deploy commands**: Dashboard must expose one-click copy of the full vLLM/docker run command per model for customer handoff.
+- **Finish only when green**: Keep validating and fixing until smoke tests and Buildkite evals pass — do not declare the pipeline done mid-run.
+- **Real Kibana CI evals**: Stage 2 qualification must run against Buildkite on-demand security matrix suites, not local Kibana bootstrap.
 
 ## Learned Workspace Facts
 
-- **Local dev ES**: `config/default.json` points Elasticsearch to `http://localhost:9223` (dedicated port, not 9200/9220).
-- **GPU VM profile**: Default hardware is `2xa100-80gb` (2× A100-80GB); SSH host/user configured in `config/default.json`.
-- **Golden cluster forwarding**: Only kbn/evals OTel traces reach golden ES via the Buildkite on-demand pipeline — not via `GoldenForwarder`.
-- **Dashboard/API server**: Built-in UI is **not** started by `setup-local.sh` — run `npm run api` separately; `queue-server.ts` loads `.env`, honors `PORT` (defaults **3200**) and `ELASTICSEARCH_URL`.
+- **Local dev ES**: Port **9223**; `docker compose --env-file .env.docker` with `ELASTIC_PASSWORD` and security enabled; `setup-local.sh` pulls 9.x DRA snapshot for `/_inference/_ccm` (Stage 3 EIS).
+- **GPU VM profile**: Default hardware is `2xa100-80gb` (2× A100-80GB); operator SSH/VM values live in gitignored `config/local.json`.
+- **Golden cluster forwarding**: Only kbn/evals OTel traces reach golden ES via Buildkite — not via `GoldenForwarder`.
+- **Dashboard/API server**: Built-in UI not started by daemon alone — run `npm run api` or use start flags; defaults port **3200**; recommendations table has expandable deployment rows with copy-command.
 - **vLLM deploy defaults**: Docker image `vllm/vllm-openai:latest`; `tensor-parallel-size` = VM `gpuCount`; resolved pip version logged after deploy.
 - **Model discovery**: `DiscoveryScheduler` polls HuggingFace and auto-queues hardware-fit candidates — no manual seeding.
-- **CI eval platform**: `buildkite.enabled` + `tunnel.enabled` → SSH `-L` (local port → VM vLLM) → ngrok public URL → Buildkite on-demand with `EVAL_SUITE_ID`, `EVAL_PROJECT`, `KIBANA_TESTING_AI_CONNECTORS`. `buildkite.detachPoll: true` keeps tunnel/vLLM up during deferred poll; `pollTimeoutMs` default **3h**. Results map to `Stage2Result`; Stage 3 uses composite trace queries (ES + local JSONL fallback).
+- **CI eval platform**: On-demand Buildkite only (no weekly trigger; `triggerFullEval` deprecated). Three security suites run **sequentially** (one build each): `security-alert-triage`, `security-alerts-rag-regression`, `security-esql-generation-regression`. Flow: SSH tunnel → ngrok → pipeline `kibana-evals-on-demand-llm-evals` with `KIBANA_TESTING_AI_CONNECTORS` (`.gen-ai`, `apiProvider: Other`). Default gates: `adoptRunningBuild` + `waitForPipelineIdle`; `detachPoll: true`; `pollTimeoutMs` **3h**.
 - **Stage 2 ITL gate**: `stage2Thresholds.maxItlP50Ms` (default 20ms) — not `maxTtftMs`.
-- **Stage 3 EIS reasoning**: `EisLlmClient` is preferred when `EIS_CCM_API_KEY` is set (Hermes is not an LLM proxy); calls `/_inference/chat_completion/<id>/_stream`; maps `eis/<model>` → `.<model>-chat_completion`.
-- **Local EIS/ES for Stage 3**: `scripts/setup-local.sh` starts ES with trial license + QA `xpack.inference.elastic.url`; pull 9.x DRA snapshot via `scripts/pull-dra-es-image.sh` (`ES_DRA_CHANNEL=snapshot`) — ES 8.17 lacks `/_inference/_ccm`. Vault: `secret/kibana-issues/dev/inference/kibana-eis-ccm`.
-- **Graceful daemon stop**: Use `./scripts/stop-local.sh` or `benchmarker-queue stop` (SIGTERM) — never `pkill` during CI eval polling; the scheduler waits for deferred Buildkite polls before exit.
-- **Operator daemon start**: `./scripts/start-local.sh [--daemonize]` sources `.env` + Buildkite token and passes an **absolute** `--config` path to `config/local.json` (gitignored operator values). Missing config files log a warning — no silent `{}` fallback to wrong Buildkite defaults.
-- **Smoke tests & pipeline doc**: `npm run smoke:stage3` (EIS → Stage 3 → ES); `npm run smoke:full` (HF discovery → Stage 1 → CI evals + tunnel → Stage 3 → dashboard). Visual reference: `docs/pipeline-how-it-works.html`.
+- **Stage 3 EIS reasoning**: `EisLlmClient` when `EIS_CCM_API_KEY` set; calls `/_inference/chat_completion/<id>/_stream`; maps `eis/<model>` → `.<model>-chat_completion`. Hermes is not an LLM proxy.
+- **Graceful daemon stop**: `./scripts/stop-local.sh` or `benchmarker-queue stop` (SIGTERM) — never `pkill` during CI eval polling.
+- **Operator daemon start**: `./scripts/start-local.sh [--daemonize]` sources `.env` + `.env.docker` + Buildkite token; passes absolute `--config` to `config/local.json`; enables `--ci-evals` by default.
+- **Smoke tests & pipeline doc**: `npm run smoke:stage3` (EIS → Stage 3 → ES); `npm run smoke:full` (discovery → Stage 1 → CI evals + tunnel → Stage 3 → dashboard). Visual reference: `docs/pipeline-how-it-works.html`.

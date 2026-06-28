@@ -5,6 +5,7 @@ export interface BuildkiteConfig {
   apiToken: string;
   orgSlug: string;
   onDemandPipelineSlug: string;
+  weeklyPipelineSlug?: string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
   retryOnFailure?: boolean;
@@ -35,6 +36,13 @@ export interface TriggerOnDemandOptions {
   modelId: string;
 }
 
+export interface TriggerWeeklyMatrixOptions {
+  connectorJson: string;
+  connectorId: string;
+  evalSuiteIds: string[];
+  modelId: string;
+}
+
 export interface BuildkiteArtifact {
   filename: string;
   url: string;
@@ -47,6 +55,25 @@ export interface BuildkiteBuildResult {
   artifacts?: BuildkiteArtifact[];
 }
 
+/** Buildkite states that mean the build will not make further progress. */
+export const TERMINAL_BUILDKITE_STATES = new Set([
+  'passed',
+  'failed',
+  'canceled',
+  'skipped',
+  'not_run',
+]);
+
+export function isTerminalBuildkiteState(state: string | undefined): state is string {
+  return state !== undefined && TERMINAL_BUILDKITE_STATES.has(state);
+}
+
+export function buildResultStatusFromBuildkiteState(
+  state: string,
+): BuildkiteBuildResult['status'] {
+  return state === 'passed' ? 'passed' : 'failed';
+}
+
 export interface BuildkiteEvalTrigger {
   triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult>;
   /** Create a build without waiting for completion. */
@@ -55,6 +82,11 @@ export interface BuildkiteEvalTrigger {
    * Adopt a matching in-flight Benchmarker build, wait for pipeline idle, then create if needed.
    */
   createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
+  /**
+   * Trigger a single weekly pipeline build with all suites running as parallel matrix steps.
+   * Returns immediately with the build reference for polling.
+   */
+  createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<BuildkiteTriggeredBuild>;
   /** Poll an existing build until terminal state or timeout. */
   waitForBuild(
     pipelineSlug: string,
@@ -130,6 +162,47 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     }
 
     return this.createOnDemandBuild(options);
+  }
+
+  async createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<BuildkiteTriggeredBuild> {
+    const pipelineSlug = this.config.weeklyPipelineSlug ?? 'kibana-evals-weekly-llm-evals';
+
+    if (this.config.waitForPipelineIdle !== false) {
+      await this.waitForPipelineIdleOnSlug(pipelineSlug);
+    }
+
+    const env: Record<string, string> = {
+      KIBANA_TESTING_AI_CONNECTORS: options.connectorJson,
+      LLM_EVAL_SUITES: options.evalSuiteIds.join(','),
+      BENCHMARK_MODEL_ID: options.modelId,
+      EVAL_PROJECT: options.connectorId,
+      EVALUATION_CONNECTOR_ID: options.connectorId,
+      EVAL_MODEL_GROUPS: options.modelId,
+    };
+
+    if (this.config.kibanaBranch) {
+      env['KIBANA_BRANCH'] = this.config.kibanaBranch;
+    }
+
+    const build = await this.createBuild(
+      pipelineSlug,
+      `${BENCHMARKER_BUILD_MESSAGE_PREFIX} ${options.modelId} weekly matrix eval`,
+      env,
+    );
+
+    this.logger.info('Buildkite: weekly matrix build created', {
+      pipelineSlug,
+      buildNumber: build.number,
+      suites: options.evalSuiteIds,
+      modelId: options.modelId,
+    });
+
+    return {
+      pipelineSlug,
+      buildNumber: build.number,
+      buildUrl: build.web_url,
+      adopted: false,
+    };
   }
 
   async waitForBuild(
@@ -262,18 +335,22 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
   }
 
   private async waitForPipelineIdle(): Promise<void> {
+    return this.waitForPipelineIdleOnSlug(this.config.onDemandPipelineSlug);
+  }
+
+  private async waitForPipelineIdleOnSlug(pipelineSlug: string): Promise<void> {
     const idleWaitMs = this.config.pipelineIdleWaitMs ?? this.pollTimeoutMs;
     const idlePollMs = this.config.pipelineIdlePollMs ?? this.pollIntervalMs;
     const deadline = Date.now() + idleWaitMs;
 
     while (Date.now() < deadline) {
-      const running = await this.listPipelineBuilds(this.config.onDemandPipelineSlug, 'running');
+      const running = await this.listPipelineBuilds(pipelineSlug, 'running');
       if (running.length === 0) {
         return;
       }
 
-      this.logger.info('Buildkite: waiting for on-demand pipeline to become idle', {
-        pipeline: this.config.onDemandPipelineSlug,
+      this.logger.info('Buildkite: waiting for pipeline to become idle', {
+        pipeline: pipelineSlug,
         runningBuilds: running.map((b) => ({
           number: b.number,
           message: (b.message ?? '').slice(0, 80),
@@ -284,9 +361,9 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       await new Promise((r) => setTimeout(r, idlePollMs));
     }
 
-    const stillRunning = await this.listPipelineBuilds(this.config.onDemandPipelineSlug, 'running');
+    const stillRunning = await this.listPipelineBuilds(pipelineSlug, 'running');
     throw new Error(
-      `Buildkite pipeline ${this.config.onDemandPipelineSlug} still has ${stillRunning.length} running build(s) after ${idleWaitMs}ms`,
+      `Buildkite pipeline ${pipelineSlug} still has ${stillRunning.length} running build(s) after ${idleWaitMs}ms`,
     );
   }
 
@@ -390,14 +467,16 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
 
         const build = (await response.json()) as BuildkiteBuildResponse;
 
-        if (build.state === 'passed') {
+        if (isTerminalBuildkiteState(build.state)) {
           const artifacts = await this.fetchArtifacts(pipelineSlug, buildNumber);
-          return { buildUrl, buildNumber, status: 'passed', artifacts };
-        }
-
-        if (build.state === 'failed' || build.state === 'canceled') {
-          const artifacts = await this.fetchArtifacts(pipelineSlug, buildNumber);
-          return { buildUrl, buildNumber, status: 'failed', artifacts };
+          const status = buildResultStatusFromBuildkiteState(build.state);
+          if (status === 'failed' && build.state !== 'failed') {
+            this.logger.warn('Buildkite build ended in non-pass terminal state', {
+              buildNumber,
+              state: build.state,
+            });
+          }
+          return { buildUrl, buildNumber, status, artifacts };
         }
 
         this.logger.debug('Buildkite build still running', {

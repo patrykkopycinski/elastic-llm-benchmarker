@@ -15,12 +15,20 @@ cd "$ROOT_DIR"
 
 # shellcheck disable=SC1091
 [[ -f .env ]] && set -a && source .env && set +a
+[[ -f .env.docker ]] && set -a && source .env.docker && set +a
 
 PORT="${PORT:-3456}"
 ES_URL="${ELASTICSEARCH_URL:-http://localhost:9223}"
 KIBANA_BRANCH="${KIBANA_BRANCH:-fix/weekly-evals-matrix}"
 LOG_DIR="${ROOT_DIR}/.smoke-logs"
 mkdir -p "$LOG_DIR"
+
+ES_CURL_AUTH=()
+if [[ -n "${ELASTIC_PASSWORD:-}" ]]; then
+  ES_CURL_AUTH=(-u "elastic:${ELASTIC_PASSWORD}")
+elif [[ -n "${ELASTICSEARCH_API_KEY:-}" ]]; then
+  ES_CURL_AUTH=(-H "Authorization: ApiKey ${ELASTICSEARCH_API_KEY}")
+fi
 
 export BUILDKITE_API_TOKEN="${BUILDKITE_API_TOKEN:-$(cat "${HOME}/.buildkite/token" 2>/dev/null || true)}"
 export BUILDKITE_ENABLED="${BUILDKITE_ENABLED:-true}"
@@ -47,7 +55,7 @@ echo "  Dashboard:     http://localhost:${PORT}/dashboard"
 
 # ─── Pre-flight ───────────────────────────────────────────────────────────────
 log "Pre-flight checks"
-curl -sf "${ES_URL}/_cluster/health" >/dev/null || die "Elasticsearch not reachable at ${ES_URL}"
+curl -sf "${ES_CURL_AUTH[@]}" "${ES_URL}/_cluster/health" >/dev/null || die "Elasticsearch not reachable at ${ES_URL}"
 ok "Elasticsearch up"
 
 if [[ -z "${BUILDKITE_API_TOKEN:-}" ]]; then

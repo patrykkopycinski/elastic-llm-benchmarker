@@ -378,7 +378,7 @@ export const edotCollectorConfigSchema = z.object({
   enabled: z.boolean().default(true),
   otlpEndpoint: z.string().url().default('http://localhost:4318'),
   healthEndpoint: z.string().url().default('http://localhost:8080/healthz'),
-  traceIndexPattern: z.string().default('.benchmark-traces-*'),
+  traceIndexPattern: z.string().default('traces-*'),
   samplingRate: z.number().min(0).max(1).default(1.0),
 });
 
@@ -452,7 +452,7 @@ export const buildkiteConfigSchema = z.object({
   /** Whether to retry on-demand eval once on failure. */
   retryOnFailure: z.boolean().default(true),
   /**
-   * Security eval suites to run via on-demand Buildkite (one build per suite).
+   * Security eval suites to run via weekly Buildkite pipeline (all suites in one matrix build).
    * Subset of weekly security matrix jobs needed for OSS model performance reporting.
    */
   defaultEvalSuites: z
@@ -464,7 +464,7 @@ export const buildkiteConfigSchema = z.object({
     ]),
   /** Kibana branch to build against. */
   kibanaBranch: z.string().default('fix/weekly-evals-matrix'),
-  /** @deprecated Weekly pipeline disabled — OSS matrix uses on-demand suites only. */
+  /** @deprecated Use weekly matrix pipeline (default). Retained for config back-compat. */
   triggerFullEval: z.boolean().default(false),
   /**
    * When true, trigger Buildkite and poll in a background task while Stage 2/3 continue.

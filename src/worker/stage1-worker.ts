@@ -305,6 +305,8 @@ export class Stage1WorkerImpl implements Stage1Worker {
         contextWindow,
       });
 
+      result.stage2Eligible = stage2Eligible;
+
       // Populate result fields
       result.status = benchmarkResult.passed ? 'success' : 'failed';
       result.rawOutput = benchmarkResult.combinedRawOutput;

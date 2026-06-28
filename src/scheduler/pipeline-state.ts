@@ -60,6 +60,8 @@ export interface Stage1Result {
   endpointUrl?: string;
   /** Container/deployment name for teardown (populated on success) */
   deploymentName?: string;
+  /** Whether model meets stage2Thresholds (ITL, throughput, TTFT, context window). */
+  stage2Eligible?: boolean;
 }
 
 export interface Stage2Result {

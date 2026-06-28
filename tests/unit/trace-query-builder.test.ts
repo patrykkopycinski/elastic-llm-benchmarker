@@ -118,7 +118,7 @@ describe('TraceQueryBuilderImpl', () => {
         { columns: [], values: [] },
         { columns: [], values: [] },
       ]);
-      const builder = new TraceQueryBuilderImpl(client);
+      const builder = new TraceQueryBuilderImpl(client, undefined, 'traces-*');
       await builder.buildSummary(MODEL_ID, RUN_ID, TIME_RANGE);
 
       expect(client.transport.request).toHaveBeenCalledTimes(2);
@@ -128,18 +128,16 @@ describe('TraceQueryBuilderImpl', () => {
       const q1 = calls[0][0].body.query;
       const q2 = calls[1][0].body.query;
 
-      expect(q1).toContain('attributes.model_id');
-      expect(q1).toContain('start_time');
-      expect(q1).toContain('span.status.code');
-      expect(q1).toContain('COUNT(*)');
-      expect(q1).toContain('attributes.error.message');
+      expect(q1).toContain('FROM traces-*');
+      expect(q1).toContain('@timestamp');
+      expect(q1).toContain('status.code == "Error"');
+      expect(q1).toContain('trace.id');
       expect(q1).toContain('span.name');
 
-      expect(q2).toContain('attributes.model_id');
-      expect(q2).toContain('start_time');
-      expect(q2).toContain('span.duration.nanoseconds');
-      expect(q2).toContain('PERCENTILE(span.duration.nanoseconds, 50)');
-      expect(q2).toContain('span.status.code');
+      expect(q2).toContain('FROM traces-*');
+      expect(q2).toContain('@timestamp');
+      expect(q2).toContain('PERCENTILE(duration, 50)');
+      expect(q2).toContain('status.code == "Error"');
     });
 
     it('converts Duration from nanoseconds to milliseconds', async () => {

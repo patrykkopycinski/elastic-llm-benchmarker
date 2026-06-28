@@ -7,6 +7,7 @@ import {
   VllmDeploymentError,
   ContainerError,
   HealthCheckError,
+  redactShellCommand,
 } from '../../src/services/vllm-deployment.js';
 import { HealthCheckServiceError } from '../../src/services/health-check.js';
 
@@ -711,6 +712,16 @@ describe('VllmDeploymentService', () => {
       expect(error.timeoutMs).toBe(60000);
       expect(error.lastError).toBe('connection refused');
       expect(error.message).toContain('timed out after 60000ms');
+    });
+  });
+
+  describe('redactShellCommand', () => {
+    it('redacts HF_TOKEN from docker run commands', () => {
+      const cmd =
+        'docker run -d --name vllm-test -e HF_TOKEN=hf_secret123 vllm/vllm-openai:latest';
+      expect(redactShellCommand(cmd)).toBe(
+        'docker run -d --name vllm-test -e HF_TOKEN=[REDACTED] vllm/vllm-openai:latest',
+      );
     });
   });
 });

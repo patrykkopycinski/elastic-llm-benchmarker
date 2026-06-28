@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   getCompletedEvalSuites,
   recoverOrFailActiveEntries,
+  resolveCompletedEvalSuites,
 } from '../../src/services/ci-eval-resume.js';
 import type { QueueService } from '../../src/services/queue-service.js';
 import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
@@ -114,7 +115,55 @@ describe('recoverOrFailActiveEntries', () => {
     expect(queueService.updateStatus).not.toHaveBeenCalled();
   });
 
-  it('fails benchmarking entry when Buildkite build is terminal', async () => {
+  it('fails benchmarking entry when Buildkite build state is unknown', async () => {
+    vi.mocked(queueService.getActiveEntries).mockResolvedValue([
+      {
+        id: 'q1',
+        modelId: 'Qwen/Qwen2.5-7B-Instruct',
+        source: 'user',
+        priority: 100,
+        status: 'benchmarking',
+        requestedAt: '2026-01-01T00:00:00Z',
+        startedAt: '2026-01-01T00:01:00Z',
+        completedAt: null,
+        errorMessage: null,
+        requestedBy: null,
+      },
+    ]);
+    vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
+      {
+        runId: 'r1',
+        modelId: 'Qwen/Qwen2.5-7B-Instruct',
+        buildkiteBuildUrl: 'https://example.com/42',
+        buildkiteBuildNumber: 42,
+        pipelineSlug: 'kibana-evals-on-demand-llm-evals',
+        status: 'running',
+        evalSuites: ['security-alert-triage'],
+        startedAt: '2026-01-01T00:02:00Z',
+        completedAt: '2026-01-01T00:02:00Z',
+        retryCount: 0,
+        connectorJson: '{}',
+      },
+    ]);
+    vi.mocked(buildkiteTrigger.getBuildState).mockResolvedValue(undefined);
+
+    const result = await recoverOrFailActiveEntries(
+      queueService,
+      resultsStore,
+      buildkiteTrigger,
+      evalSuites,
+      logger,
+    );
+
+    expect(result).toEqual({ recovered: 0, failed: 1 });
+    expect(queueService.updateStatus).toHaveBeenCalledWith(
+      'q1',
+      'failed',
+      expect.stringContaining('Orphaned active entry'),
+    );
+  });
+
+  it('recovers benchmarking entry when Buildkite build already finished (passed)', async () => {
     vi.mocked(queueService.getActiveEntries).mockResolvedValue([
       {
         id: 'q1',
@@ -154,11 +203,37 @@ describe('recoverOrFailActiveEntries', () => {
       logger,
     );
 
-    expect(result).toEqual({ recovered: 0, failed: 1 });
-    expect(queueService.updateStatus).toHaveBeenCalledWith(
-      'q1',
-      'failed',
-      expect.stringContaining('Orphaned active entry'),
+    expect(result).toEqual({ recovered: 1, failed: 0 });
+    expect(queueService.updateStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolveCompletedEvalSuites', () => {
+  it('treats stale running ES rows as complete when Buildkite build passed', async () => {
+    const buildkiteTrigger = {
+      getBuildState: vi.fn().mockResolvedValue('passed'),
+    } as unknown as BuildkiteEvalTrigger;
+
+    const suites = await resolveCompletedEvalSuites(
+      [
+        {
+          runId: 'r1',
+          modelId: 'org/model',
+          buildkiteBuildUrl: 'https://example.com/42',
+          buildkiteBuildNumber: 42,
+          pipelineSlug: 'pipe',
+          status: 'running',
+          evalSuites: ['security-alert-triage'],
+          startedAt: '2026-01-01T00:00:00Z',
+          completedAt: '2026-01-01T00:00:00Z',
+          retryCount: 0,
+          connectorJson: '{}',
+        },
+      ],
+      ['security-alert-triage'],
+      buildkiteTrigger,
     );
+
+    expect(suites).toEqual(['security-alert-triage']);
   });
 });

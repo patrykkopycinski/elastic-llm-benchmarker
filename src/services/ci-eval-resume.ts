@@ -1,8 +1,12 @@
 import type { QueueService } from './queue-service.js';
 import type { ElasticsearchResultsStore } from './elasticsearch-results-store.js';
-import type { BuildkiteEvalTrigger } from './buildkite-eval-trigger.js';
 import type { CIEvalResult } from '../types/ci-eval.js';
 import type { Logger } from 'winston';
+
+import {
+  isTerminalBuildkiteState,
+  type BuildkiteEvalTrigger,
+} from './buildkite-eval-trigger.js';
 
 const RECOVERABLE_BUILD_STATES = new Set(['running', 'scheduled', 'blocked', 'canceling']);
 
@@ -28,6 +32,35 @@ export function getCompletedEvalSuites(
     }
   }
   return [...terminal];
+}
+
+/**
+ * Merge ES terminal results with Buildkite state for stale `running` rows (e.g. after
+ * daemon restart while poll was stuck on a skipped build).
+ */
+export async function resolveCompletedEvalSuites(
+  ciEvalResults: CIEvalResult[],
+  evalSuites: string[],
+  buildkiteTrigger: BuildkiteEvalTrigger,
+): Promise<string[]> {
+  const completed = new Set(getCompletedEvalSuites(ciEvalResults, evalSuites));
+
+  for (const result of ciEvalResults) {
+    if (result.status !== 'running') continue;
+    for (const suiteId of result.evalSuites ?? []) {
+      if (!evalSuites.includes(suiteId) || completed.has(suiteId)) continue;
+
+      const buildState = await buildkiteTrigger.getBuildState(
+        result.pipelineSlug,
+        result.buildkiteBuildNumber,
+      );
+      if (buildState === 'passed') {
+        completed.add(suiteId);
+      }
+    }
+  }
+
+  return [...completed];
 }
 
 /**
@@ -72,7 +105,10 @@ export async function recoverOrFailActiveEntries(
       runningEval.pipelineSlug,
       runningEval.buildkiteBuildNumber,
     );
-    if (!buildState || !RECOVERABLE_BUILD_STATES.has(buildState)) {
+    const recoverable =
+      buildState !== undefined &&
+      (RECOVERABLE_BUILD_STATES.has(buildState) || isTerminalBuildkiteState(buildState));
+    if (!recoverable) {
       await queueService.updateStatus(
         entry.id,
         'failed',

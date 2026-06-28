@@ -251,6 +251,8 @@ export class ModelDiscoveryService {
   private readonly hardwareEstimator: HardwareEstimator;
   private readonly targetVramGb: number;
   private readonly typeWhitelist: Set<string>;
+  private readonly configCache = new Map<string, HFModelConfig | null>();
+  private readonly infoCache = new Map<string, ModelInfo | null>();
 
   constructor(
     token: string,
@@ -666,29 +668,41 @@ export class ModelDiscoveryService {
   // ─── Data Fetching ───────────────────────────────────────────────────────
 
   async fetchModelConfig(modelId: string): Promise<HFModelConfig | null> {
+    if (this.configCache.has(modelId)) return this.configCache.get(modelId)!;
     try {
       const response = await this.fetchWithAuth(
         `${HF_API_BASE}/${modelId}/resolve/main/config.json`,
       );
       if (!response.ok) {
         this.logger.debug(`Failed to fetch config for ${modelId}: ${response.status}`);
+        this.configCache.set(modelId, null);
         return null;
       }
-      return (await response.json()) as HFModelConfig;
+      const config = (await response.json()) as HFModelConfig;
+      this.configCache.set(modelId, config);
+      return config;
     } catch (error) {
       this.logger.debug(`Error fetching config for ${modelId}: ${error}`);
+      this.configCache.set(modelId, null);
       return null;
     }
   }
 
   async fetchModelInfo(modelId: string): Promise<ModelInfo | null> {
+    if (this.infoCache.has(modelId)) return this.infoCache.get(modelId)!;
     try {
       const response = await this.fetchWithAuth(
         `${HF_API_BASE}/api/models/${modelId}`,
       );
-      if (!response.ok) return null;
-      return (await response.json()) as ModelInfo;
+      if (!response.ok) {
+        this.infoCache.set(modelId, null);
+        return null;
+      }
+      const info = (await response.json()) as ModelInfo;
+      this.infoCache.set(modelId, info);
+      return info;
     } catch {
+      this.infoCache.set(modelId, null);
       return null;
     }
   }

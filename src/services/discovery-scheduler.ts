@@ -32,6 +32,8 @@ export interface DiscoverySchedulerDependencies {
   config: DiscoverySchedulerConfig;
   /** Optional pre-deploy filter (e.g. Agent Builder baseline). */
   candidateFilter?: ModelCandidateFilter;
+  /** Fire-and-forget callback to pre-download model weights on the GPU VM. */
+  weightPrefetcher?: (modelId: string) => void;
   logger?: Logger;
 }
 
@@ -270,6 +272,7 @@ export class DiscoveryScheduler {
           trendingScore: model.trendingScore,
           hardwareFit: model.hardwareFit,
         });
+        this.deps.weightPrefetcher?.(model.id);
         queued++;
       } catch (err) {
         this.logger.warn(`Failed to enqueue ${model.id}: ${String(err)}`);

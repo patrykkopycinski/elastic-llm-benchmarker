@@ -6,6 +6,7 @@ describe('BuildkiteEvalTriggerImpl', () => {
     apiToken: 'bk_test_token',
     orgSlug: 'elastic',
     onDemandPipelineSlug: 'kibana-evals-on-demand-llm-evals',
+    weeklyPipelineSlug: 'kibana-evals-weekly-llm-evals',
     pollIntervalMs: 10,
     pollTimeoutMs: 100,
     kibanaBranch: 'fix/weekly-evals-matrix',
@@ -201,5 +202,111 @@ describe('BuildkiteEvalTriggerImpl', () => {
 
     expect(result.status).toBe('passed');
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('waitForBuild returns failed when build is skipped', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          number: 99,
+          web_url: 'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/99',
+          state: 'skipped',
+        }),
+      }),
+    );
+
+    const trigger = new BuildkiteEvalTriggerImpl(
+      { ...baseConfig, waitForPipelineIdle: false, pollIntervalMs: 5 },
+      'error',
+    );
+    const result = await trigger.waitForBuild(
+      'kibana-evals-on-demand-llm-evals',
+      99,
+      'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/99',
+    );
+
+    expect(result.status).toBe('failed');
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it('createWeeklyMatrixBuild posts to weekly pipeline with all suites as LLM_EVAL_SUITES', async () => {
+    const trigger = new BuildkiteEvalTriggerImpl(
+      { ...baseConfig, waitForPipelineIdle: false },
+      'error',
+    );
+    const build = await trigger.createWeeklyMatrixBuild({
+      connectorJson: Buffer.from(JSON.stringify({ 'vllm-qwen-qwen2.5-1.5b-instruct': {} })).toString('base64'),
+      connectorId: 'vllm-qwen-qwen2.5-1.5b-instruct',
+      evalSuiteIds: ['security-alert-triage', 'security-alerts-rag-regression', 'security-esql-generation-regression'],
+      modelId: 'Qwen/Qwen2.5-1.5B-Instruct',
+    });
+
+    expect(build.buildNumber).toBe(42);
+    expect(build.adopted).toBe(false);
+    expect(build.pipelineSlug).toBe('kibana-evals-weekly-llm-evals');
+
+    const postCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      (call) => call[1]?.method === 'POST',
+    );
+    expect(postCall).toBeDefined();
+    expect(String(postCall![0])).toContain('/pipelines/kibana-evals-weekly-llm-evals/builds');
+
+    const body = JSON.parse(String(postCall![1]?.body)) as { env: Record<string, string>; message: string };
+    expect(body.env.LLM_EVAL_SUITES).toBe(
+      'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',
+    );
+    expect(body.env.BENCHMARK_MODEL_ID).toBe('Qwen/Qwen2.5-1.5B-Instruct');
+    expect(body.env.EVAL_PROJECT).toBe('vllm-qwen-qwen2.5-1.5b-instruct');
+    expect(body.env.EVALUATION_CONNECTOR_ID).toBe('vllm-qwen-qwen2.5-1.5b-instruct');
+    expect(body.env.EVAL_MODEL_GROUPS).toBe('Qwen/Qwen2.5-1.5B-Instruct');
+    expect(body.env.KIBANA_BRANCH).toBe('fix/weekly-evals-matrix');
+    expect(body.message).toContain('Benchmarker:');
+    expect(body.message).toContain('weekly matrix eval');
+  });
+
+  it('createWeeklyMatrixBuild waits for weekly pipeline idle when configured', async () => {
+    let listCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('kibana-evals-weekly-llm-evals/builds?state=running')) {
+        listCalls++;
+        if (listCalls === 1) {
+          return {
+            ok: true,
+            json: async () => [
+              { number: 200, web_url: 'https://buildkite.com/elastic/weekly/200', state: 'running', message: 'weekly run' },
+            ],
+          } as Response;
+        }
+        return { ok: true, json: async () => [] } as Response;
+      }
+      if (init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            number: 55,
+            web_url: 'https://buildkite.com/elastic/kibana-evals-weekly-llm-evals/builds/55',
+            state: 'running',
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => [] } as Response;
+    });
+
+    const trigger = new BuildkiteEvalTriggerImpl(
+      { ...baseConfig, waitForPipelineIdle: true, pipelineIdlePollMs: 5, pipelineIdleWaitMs: 200 },
+      'error',
+    );
+    const build = await trigger.createWeeklyMatrixBuild({
+      connectorJson: 'Y29ubmVjdG9y',
+      connectorId: 'test-connector',
+      evalSuiteIds: ['security-alert-triage'],
+      modelId: 'test/model',
+    });
+
+    expect(build.buildNumber).toBe(55);
+    expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 });
