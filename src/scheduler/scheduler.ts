@@ -256,6 +256,21 @@ export class Scheduler {
           });
           resolved = await resolver.resolve(run.deployment.endpointUrl);
         }
+
+        // Pre-warmed tunnel may have fallen back to direct VM URL if vLLM was
+        // still loading when the SSH forward health check ran. Now that Stage 1
+        // has passed, vLLM is guaranteed to be serving — retry tunnel resolution.
+        if (!resolved.tunneled && tunnelPromise && this.config.tunnel?.enabled) {
+          this.logger.info('Scheduler: pre-warmed tunnel fell back to direct URL — retrying now that vLLM is serving');
+          await resolved.cleanup();
+          const freshResolver = new VllmPublicEndpointResolver({
+            ssh: this.config.ssh,
+            tunnel: this.config.tunnel,
+            logLevel: this.config.logLevel,
+          });
+          resolved = await freshResolver.resolve(run.deployment.endpointUrl);
+        }
+
         run.deployment.endpointUrl = resolved.endpointUrl;
         run.deployment.publicEndpointUrl = resolved.publicEndpointUrl;
         publicEndpointMeta = resolved;

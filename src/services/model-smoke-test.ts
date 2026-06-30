@@ -174,7 +174,7 @@ export class ModelSmokeTestImpl implements ModelSmokeTest {
           body: JSON.stringify({
             model: modelId,
             messages: [{ role: 'user', content: this.config.testPrompt }],
-            max_tokens: 50,
+            max_tokens: 256,
             temperature: 0,
           }),
           signal: controller.signal,
@@ -194,7 +194,10 @@ export class ModelSmokeTestImpl implements ModelSmokeTest {
         const data = (await response.json()) as {
           choices?: Array<{ message?: { content?: string } }>;
         };
-        const content = data.choices?.[0]?.message?.content ?? '';
+        let content = data.choices?.[0]?.message?.content ?? '';
+
+        // Strip thinking/reasoning blocks (e.g. Qwen3.5+ <think>...</think>)
+        content = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
 
         const hasKeyword = this.config.expectedKeywords.some((kw) =>
           content.toLowerCase().includes(kw.toLowerCase()),
@@ -252,7 +255,7 @@ export class ModelSmokeTestImpl implements ModelSmokeTest {
             messages: [{ role: 'user', content: this.config.toolPrompt }],
             tools,
             tool_choice: 'auto',
-            max_tokens: 200,
+            max_tokens: 1024,
             temperature: 0,
           }),
           signal: controller.signal,

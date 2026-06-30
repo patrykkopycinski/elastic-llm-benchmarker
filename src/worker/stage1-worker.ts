@@ -120,12 +120,21 @@ export class Stage1WorkerImpl implements Stage1Worker {
     );
     const hfConfig = await discovery.fetchModelConfig(modelId);
     if (!hfConfig) {
+      this.logger.warn('Stage 1: HF config.json fetch failed — using card contextWindow', {
+        modelId,
+        cardContextWindow: modelInfo.contextWindow,
+      });
       return modelInfo.contextWindow;
     }
     const enriched = enrichModelInfoFromHfConfig(
       { ...modelInfo, parameterCount: normalizeParameterCount(modelInfo.parameterCount) },
       hfConfig,
     );
+    this.logger.info('Stage 1: context window resolved', {
+      modelId,
+      cardContextWindow: modelInfo.contextWindow,
+      configContextWindow: enriched.contextWindow,
+    });
     return enriched.contextWindow;
   }
 

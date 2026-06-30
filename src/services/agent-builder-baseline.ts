@@ -5,6 +5,7 @@ import {
   ModelCandidateFilter,
   type FilterResult,
 } from './model-candidate-filter.js';
+import { getVllmParamsForModel } from './vllm-model-params.js';
 
 /** Minimal config.json shape used to enrich HF card metadata for baseline checks. */
 export interface HfConfigJson {
@@ -22,6 +23,21 @@ export interface HfConfigJson {
   vocab_size?: number;
   num_parameters?: number;
   intermediate_size?: number;
+  /** VLM/multimodal models nest text-model params here (e.g. Qwen3.5, Qwen3-VL). */
+  text_config?: {
+    max_position_embeddings?: number;
+    max_sequence_length?: number;
+    num_hidden_layers?: number;
+    hidden_size?: number;
+    vocab_size?: number;
+    intermediate_size?: number;
+    num_experts?: number;
+    num_experts_per_tok?: number;
+    rope_scaling?: {
+      factor?: number;
+      original_max_position_embeddings?: number;
+    };
+  };
 }
 
 /**
@@ -52,16 +68,21 @@ export function normalizeParameterCount(raw: number | null): number | null {
 }
 
 export function extractContextWindowFromHfConfig(config: HfConfigJson): number {
-  let window = config.max_position_embeddings ?? config.max_sequence_length ?? 0;
+  const tc = config.text_config;
+  let window =
+    config.max_position_embeddings ??
+    tc?.max_position_embeddings ??
+    config.max_sequence_length ??
+    tc?.max_sequence_length ??
+    0;
 
   if (config.sliding_window && config.sliding_window > window) {
     window = config.sliding_window;
   }
 
-  if (config.rope_scaling?.factor && config.rope_scaling.original_max_position_embeddings) {
-    window = Math.round(
-      config.rope_scaling.original_max_position_embeddings * config.rope_scaling.factor,
-    );
+  const rope = config.rope_scaling ?? tc?.rope_scaling;
+  if (rope?.factor && rope.original_max_position_embeddings) {
+    window = Math.round(rope.original_max_position_embeddings * rope.factor);
   }
 
   return window;
@@ -110,6 +131,11 @@ export function estimateParameterCountFromHfConfig(
 
 export function inferToolCallingSupport(model: ModelInfo): boolean {
   if (model.supportsToolCalling) return true;
+
+  // If vLLM has a known tool-call parser for this model, it supports tool calling
+  // regardless of naming convention (covers base models like Qwen3.6-35B-A3B).
+  const vllmParams = getVllmParamsForModel(model.id, model.architecture);
+  if (vllmParams.toolCallParser !== null) return true;
 
   const id = model.id.toLowerCase();
   const instructIndicators = ['instruct', 'chat', '-it', '_it'];

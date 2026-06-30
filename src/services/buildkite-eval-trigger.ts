@@ -431,7 +431,7 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       },
       body: JSON.stringify({
         commit: 'HEAD',
-        branch: this.config.kibanaBranch ?? 'main',
+        branch: 'main',
         message,
         env,
       }),

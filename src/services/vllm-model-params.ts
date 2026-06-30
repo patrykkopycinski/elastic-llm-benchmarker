@@ -96,11 +96,18 @@ export function getVllmParamsForModel(
 
   // ─── Qwen / Hermes ─────────────────────────────────────────────────────────
   if (id.includes('qwen') || arch.includes('qwen')) {
+    const isQwen35Plus = /qwen3[._-]?[56789]|qwen3\.[5-9]/.test(id) ||
+      arch.includes('qwen3_5') || arch.includes('qwen3_6');
     const unslothKey = id.includes('qwen-3') || id.includes('qwen3') ? 'qwen-3' : 'qwen-2.5';
+    const extraArgs: string[] = [];
+    // Qwen3.5+ are multimodal VLMs — skip vision encoder for text-only evals
+    if (isQwen35Plus) extraArgs.push('--language-model-only');
+    // ponytail: Qwen3+ thinking mode must stay enabled — disabling it breaks tool calling.
+    // The hermes parser handles <think> blocks transparently.
     return {
       toolCallParser: 'hermes',
       chatTemplate: null,
-      extraArgs: [],
+      extraArgs,
       family: 'Qwen',
       unslothTemplateKey: unslothKey,
     };
