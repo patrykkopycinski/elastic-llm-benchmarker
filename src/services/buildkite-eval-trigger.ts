@@ -422,27 +422,63 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     env: Record<string, string>,
   ): Promise<BuildkiteBuildResponse> {
     const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds`;
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${this.config.apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        commit: 'HEAD',
-        branch: 'main',
-        message,
-        env,
-      }),
+    const body = JSON.stringify({
+      commit: 'HEAD',
+      // The benchmarker-injected vLLM connector bypass (BENCHMARK_MODEL_ID) lives in
+      // .buildkite/scripts/steps/evals/setup_connectors.sh on fix/weekly-evals-matrix (PR #274606).
+      // Until that lands on main, builds must run on this branch or LiteLLM generation overwrites
+      // the injected KIBANA_TESTING_AI_CONNECTORS and the eval fails with "connector not found".
+      branch: this.config.kibanaBranch ?? 'fix/weekly-evals-matrix',
+      message,
+      env,
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`Buildkite build creation failed (${response.status}): ${text}`);
-    }
+    // Retry transient network errors (fetch failed, ECONNRESET, ETIMEDOUT). A single
+    // blip here otherwise propagates to pollWeeklyMatrix.catch(), which tears down the
+    // vLLM deployment and abandons the run mid-flight (observed: 2026-06-30 run).
+    const MAX_ATTEMPTS = 4;
+    const BASE_DELAY_MS = 2_000;
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${this.config.apiToken}`,
+            'Content-Type': 'application/json',
+          },
+          body,
+        });
 
-    return (await response.json()) as BuildkiteBuildResponse;
+        if (!response.ok) {
+          const text = await response.text();
+          // 4xx (except 408/429) are not transient — surface immediately.
+          if (response.status >= 400 && response.status < 500 &&
+              response.status !== 408 && response.status !== 429) {
+            throw new Error(`Buildkite build creation failed (${response.status}): ${text}`);
+          }
+          throw new Error(`Buildkite build creation failed (${response.status}): ${text}`);
+        }
+
+        return (await response.json()) as BuildkiteBuildResponse;
+      } catch (err) {
+        lastErr = err;
+        const msg = err instanceof Error ? err.message : String(err);
+        const transient = msg.includes('fetch failed') ||
+          msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') ||
+          msg.includes('ENOTFOUND') || msg.includes('network') ||
+          /failed \(4[08]0\)/.test(msg) || /failed \(5\d\d\)/.test(msg);
+        if (!transient || attempt === MAX_ATTEMPTS) {
+          throw err;
+        }
+        const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        this.logger.warn('Buildkite createBuild: transient error, retrying', {
+          attempt, maxAttempts: MAX_ATTEMPTS, delayMs: delay, error: msg,
+        });
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr instanceof Error ? lastErr : new Error('createBuild exhausted retries');
   }
 
   private async pollBuild(

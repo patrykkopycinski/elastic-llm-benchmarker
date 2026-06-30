@@ -615,70 +615,114 @@ export class Scheduler {
         };
       }
 
-      this.logger.info('CI Evals: triggering weekly matrix build (all suites in parallel)', {
+      // On-demand pipeline supports vLLM connectors via KIBANA_TESTING_AI_CONNECTORS;
+      // the weekly matrix only accepts pre-registered EIS connectors. Run each suite
+      // as a separate on-demand build (sequential, per AGENTS.md on-demand contract).
+      this.logger.info('CI Evals: triggering on-demand evals (one build per suite)', {
         modelId: run.modelId,
         suites: suitesToRun,
+        pipeline: buildkiteConfig?.onDemandPipelineSlug ?? 'kibana-evals-on-demand-llm-evals',
       });
 
-      const triggered = await buildkiteTrigger.createWeeklyMatrixBuild({
-        connectorJson,
-        connectorId,
-        evalSuiteIds: suitesToRun,
-        modelId: run.modelId,
-      });
+      const perSuiteResults: Array<{ suite: string; status: string; buildUrl: string; buildNumber: number }> = [];
+      let overallStatus = 'passed';
 
-      await persistOnDemandResult(
-        { buildUrl: triggered.buildUrl, buildNumber: triggered.buildNumber, status: 'running' },
-        0,
-        suitesToRun,
-      );
-
-      let buildResult = await buildkiteTrigger.waitForBuild(
-        triggered.pipelineSlug,
-        triggered.buildNumber,
-        triggered.buildUrl,
-      );
-
-      if (buildResult.status === 'failed' && buildkiteConfig?.retryOnFailure !== false) {
-        this.logger.info('CI Evals: retrying weekly matrix build (attempt 2)', {
+      for (const suite of suitesToRun) {
+        this.logger.info('CI Evals: triggering on-demand build', {
           modelId: run.modelId,
-          suites: suitesToRun,
+          suite,
         });
-        const retryTriggered = await buildkiteTrigger.createWeeklyMatrixBuild({
+
+        const triggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
           connectorJson,
           connectorId,
-          evalSuiteIds: suitesToRun,
+          evalSuiteIds: [suite],
           modelId: run.modelId,
         });
-        buildResult = await buildkiteTrigger.waitForBuild(
-          retryTriggered.pipelineSlug,
-          retryTriggered.buildNumber,
-          retryTriggered.buildUrl,
+
+        await persistOnDemandResult(
+          { buildUrl: triggered.buildUrl, buildNumber: triggered.buildNumber, status: 'running' },
+          perSuiteResults.length,
+          [suite],
         );
-        await persistOnDemandResult(buildResult, 1, suitesToRun);
-      } else {
-        await persistOnDemandResult(buildResult, 0, suitesToRun);
+
+        let buildResult = await buildkiteTrigger.waitForBuild(
+          triggered.pipelineSlug,
+          triggered.buildNumber,
+          triggered.buildUrl,
+        );
+
+        if (buildResult.status === 'failed' && buildkiteConfig?.retryOnFailure !== false) {
+          this.logger.info('CI Evals: retrying on-demand build (attempt 2)', {
+            modelId: run.modelId,
+            suite,
+          });
+          const retryTriggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
+            connectorJson,
+            connectorId,
+            evalSuiteIds: [suite],
+            modelId: run.modelId,
+          });
+          buildResult = await buildkiteTrigger.waitForBuild(
+            retryTriggered.pipelineSlug,
+            retryTriggered.buildNumber,
+            retryTriggered.buildUrl,
+          );
+          await persistOnDemandResult(buildResult, perSuiteResults.length + 1, [suite]);
+        } else {
+          await persistOnDemandResult(buildResult, perSuiteResults.length, [suite]);
+        }
+
+        this.logger.info('CI Evals: on-demand build completed', {
+          modelId: run.modelId,
+          suite,
+          status: buildResult.status,
+          buildUrl: buildResult.buildUrl,
+        });
+
+        perSuiteResults.push({
+          suite,
+          status: buildResult.status,
+          buildUrl: buildResult.buildUrl,
+          buildNumber: buildResult.buildNumber,
+        });
+        if (buildResult.status !== 'passed') overallStatus = 'failed';
       }
 
-      this.logger.info('CI Evals: weekly matrix build completed', {
-        modelId: run.modelId,
-        suites: suitesToRun,
-        status: buildResult.status,
-        buildUrl: buildResult.buildUrl,
-      });
-
+      // Aggregate per-suite results into a single Stage2Result. Use the last build
+      // for artifact resolution; suite-level outcomes are in suiteResults.
+      const lastResult = perSuiteResults[perSuiteResults.length - 1];
+      if (!lastResult) {
+        return {
+          status: 'failed',
+          modelId: run.modelId,
+          runId: run.runId,
+          suiteResults: [],
+          reason: 'No suites ran',
+          startedAt,
+          completedAt: new Date().toISOString(),
+        };
+      }
+      const aggregatedBuildResult: BuildkiteBuildResult = {
+        status: overallStatus as BuildkiteBuildResult['status'],
+        buildNumber: lastResult.buildNumber,
+        buildUrl: lastResult.buildUrl,
+      };
       const artifactSummary = await this.resolveEvalArtifactSummary(
         buildkiteTrigger,
-        buildResult,
+        aggregatedBuildResult,
       );
-      return mapBuildkiteResultToStage2(
+      const stage2 = mapBuildkiteResultToStage2(
         run.runId,
         run.modelId,
         suitesToRun,
-        buildResult,
+        aggregatedBuildResult,
         artifactSummary,
         startedAt,
       );
+      // Override suiteResults with per-suite outcomes from the loop above
+      stage2.suiteResults = perSuiteResults.map((r) => ({ suite: r.suite, status: r.status }));
+      return stage2;
     };
 
     if (detachPoll) {
@@ -716,14 +760,29 @@ export class Scheduler {
           await this.finalizePipeline(run, queueEntryId);
         })
         .catch(async (err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          const transient = msg.includes('fetch failed') ||
+            msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') ||
+            msg.includes('ENOTFOUND') || msg.toLowerCase().includes('network');
+          if (transient) {
+            // Transient network errors (fetch failed, ECONN*) should NOT tear down
+            // the vLLM deployment or mark the queue entry as permanently failed —
+            // the Buildkite build may still be running and the operator can resume.
+            // Observed regression: 2026-06-30 run abandoned mid-suite due to one blip.
+            this.logger.error(
+              'CI Evals: detached Buildkite poll hit transient network error — NOT tearing down deployment; queue entry remains active for manual resume',
+              { modelId: run.modelId, error: msg },
+            );
+            return;
+          }
           this.logger.error('CI Evals: detached Buildkite poll failed', {
             modelId: run.modelId,
-            error: err instanceof Error ? err.message : String(err),
+            error: msg,
           });
           await this.queueService.updateStatus(
             queueEntryId,
             'failed',
-            err instanceof Error ? err.message : String(err),
+            msg,
           );
         })
         .then(() =>

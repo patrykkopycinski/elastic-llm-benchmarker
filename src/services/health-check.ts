@@ -699,20 +699,45 @@ export class HealthCheckService {
 
   /**
    * Checks if a Docker container is currently running.
+   *
+   * `docker inspect` is executed over SSH, which can flake during vLLM's CPU-bound
+   * loading phase (SSH keepalive timeouts are common when the VM is saturated).
+   * An SSH failure MUST NOT be interpreted as a container crash — that produces
+   * false container_crash signals that abort Stage 1 while vLLM is still loading.
+   * Distinguish "SSH failed" from "container actually stopped" by retrying and
+   * only returning false when docker explicitly reports Running=false.
    */
   private async isContainerRunning(
     sshConfig: SSHConfig,
     containerName: string,
   ): Promise<boolean> {
-    try {
-      const result = await this.execSSH(
-        sshConfig,
-        `docker inspect --format='{{.State.Running}}' ${containerName}`,
-      );
-      return result.stdout.trim() === 'true';
-    } catch {
-      return false;
+    const MAX_SSH_ATTEMPTS = 3;
+    const RETRY_DELAY_MS = 5_000;
+    for (let attempt = 1; attempt <= MAX_SSH_ATTEMPTS; attempt++) {
+      try {
+        const result = await this.execSSH(
+          sshConfig,
+          `docker inspect --format='{{.State.Running}}' ${containerName}`,
+        );
+        return result.stdout.trim() === 'true';
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (attempt < MAX_SSH_ATTEMPTS) {
+          this.logger.warn(
+            `isContainerRunning: SSH attempt ${attempt}/${MAX_SSH_ATTEMPTS} failed; retrying (container status unknown, NOT declaring crash)`,
+            { containerName, error: msg },
+          );
+          await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+          continue;
+        }
+        this.logger.warn(
+          `isContainerRunning: SSH failed after ${MAX_SSH_ATTEMPTS} attempts; assuming container still running to avoid false container_crash`,
+          { containerName, error: msg },
+        );
+        return true;
+      }
     }
+    return true;
   }
 
   /**
