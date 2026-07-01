@@ -380,6 +380,13 @@ export const edotCollectorConfigSchema = z.object({
   healthEndpoint: z.string().url().default('http://localhost:8080/healthz'),
   traceIndexPattern: z.string().default('traces-*'),
   samplingRate: z.number().min(0).max(1).default(1.0),
+  /**
+   * OTLP endpoint that vLLM (running in a container on the remote GPU VM) pushes
+   * traces to via `--otlp-traces-endpoint`. Resolved from the container's
+   * perspective — typically `http://host.docker.internal:4317` with a reverse
+   * SSH tunnel back to the local collector. Unset = no OTLP traces emitted.
+   */
+  vllmOtlpTracesEndpoint: z.string().url().optional(),
 });
 
 /**

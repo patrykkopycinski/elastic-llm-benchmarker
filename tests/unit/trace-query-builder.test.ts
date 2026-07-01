@@ -140,6 +140,38 @@ describe('TraceQueryBuilderImpl', () => {
       expect(q2).toContain('status.code == "Error"');
     });
 
+    // Regression: ES|QL validates every referenced column against the index
+    // mapping before executing. The benchmarker's `traces-*` holds only vLLM
+    // inference spans (kbn/evals traces live on the golden cluster), so any
+    // kbn/evals-only column — or a semconv field absent from vLLM spans like
+    // `attributes.error.message` — hard-fails the whole query with
+    // verification_exception and silently degrades Stage 3 reasoning.
+    it('references only columns present in vLLM traces-* (no kbn/evals-only fields)', async () => {
+      const client = createMockClient([
+        { columns: [], values: [] },
+        { columns: [], values: [] },
+      ]);
+      const builder = new TraceQueryBuilderImpl(client, undefined, 'traces-*');
+      await builder.buildSummary(MODEL_ID, RUN_ID, TIME_RANGE);
+
+      const calls = (client.transport.request as ReturnType<typeof vi.fn>).mock.calls as Array<[
+        { body: { query: string } },
+      ]>;
+      const queries = calls.map((c) => c[0].body.query);
+
+      for (const q of queries) {
+        expect(q).not.toContain('attributes.kibana.evals');
+        expect(q).not.toContain('attributes.error.message');
+      }
+
+      // vLLM inference spans are correlated by service name (+ the time window).
+      const runFilterQuery = queries.find((q) =>
+        q.includes('resource.attributes.service.name'),
+      );
+      expect(runFilterQuery).toBeDefined();
+      expect(runFilterQuery).toContain('resource.attributes.service.name == "vllm-inference"');
+    });
+
     it('converts Duration from nanoseconds to milliseconds', async () => {
       const latencyResp = {
         columns: [

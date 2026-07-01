@@ -1466,6 +1466,11 @@ if (_binaryName === 'benchmarker-queue') {
           huggingfaceToken: config.huggingfaceToken,
           useSudo: config.ssh.useSudo,
           healthCheckTimeoutMs: config.benchmarkThresholds.healthCheckTimeoutSeconds * 1000,
+          // Emit vLLM OTLP traces to the EDOT collector when configured. vLLM runs
+          // in a bridge-network container on the remote VM, so the endpoint is
+          // resolved from the container's perspective (host.docker.internal) and
+          // reaches the local collector via a reverse SSH tunnel.
+          otlpTracesEndpoint: config.edotCollector.vllmOtlpTracesEndpoint,
         },
       });
 
@@ -1786,12 +1791,27 @@ if (_binaryName === 'benchmarker-queue') {
         logger,
       });
 
+      // Derive the trace time window from the model's last benchmark run so the
+      // standalone command reasons over the actual vLLM spans. Without this the
+      // window defaults to "now", which never overlaps a past run's traces.
+      const summary = await resultsStore.getModelSummary(modelId);
+      const lastRun = summary?.lastRunTimestamp
+        ? new Date(summary.lastRunTimestamp)
+        : null;
+      const startedAt = lastRun
+        ? new Date(lastRun.getTime() - 30 * 60_000).toISOString()
+        : new Date(Date.now() - 60 * 60_000).toISOString();
+      const completedAt = lastRun
+        ? new Date(lastRun.getTime() + 5 * 60_000).toISOString()
+        : new Date().toISOString();
+
       const run: PipelineRun = {
         runId,
         modelId,
         queueEntryId: runId,
         stage: 'idle',
-        startedAt: new Date().toISOString(),
+        startedAt,
+        completedAt,
       };
 
       try {

@@ -93,9 +93,15 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
    */
   private buildRunFilter(runId: string): string {
     const escapedRunId = escapeEsqlString(runId);
+    // The benchmarker's `traces-*` holds only vLLM inference spans (kbn/evals
+    // traces live on the golden cluster, forward-only). ES|QL validates every
+    // referenced column against the index mapping before executing, so a
+    // kbn/evals-only field like `attributes.kibana.evals.execution_id` — absent
+    // from this index — hard-fails the whole query with a verification_exception.
+    // Correlate by trace id (when the caller has one) and the vLLM service name;
+    // the time-window filter narrows to the active run.
     return `(
   trace.id == "${escapedRunId}"
-  OR attributes.kibana.evals.execution_id LIKE "*${escapedRunId}*"
   OR resource.attributes.service.name == "vllm-inference"
 )`;
   }
@@ -109,7 +115,7 @@ export class TraceQueryBuilderImpl implements TraceQueryBuilder {
 | WHERE ${this.buildRunFilter(runId)}
 | WHERE ${this.buildTimeFilter(timeRange)}
 | WHERE status.code == "Error"
-| STATS count = COUNT(*), sample = SAMPLE(COALESCE(status.message, attributes.error.message), 1) BY span.name
+| STATS count = COUNT(*), sample = SAMPLE(status.message, 1) BY span.name
 | SORT count DESC
 | LIMIT 10`;
 

@@ -596,15 +596,20 @@ export class VllmDeploymentService {
   ): string {
     const opts = { ...this.options, ...overrides };
     const params = getVllmParamsForModel(model.id, model.architecture);
+    // When OTLP tracing is enabled, use host networking so a containerized vLLM
+    // can push traces to a loopback reverse-SSH tunnel (the local EDOT collector)
+    // without requiring GatewayPorts on the VM's sshd. /metrics still binds on
+    // host:apiPort, so Prometheus scraping is unaffected.
+    const useHostNetwork = Boolean(opts.otlpTracesEndpoint);
     const args: string[] = [
       'docker run -d',
       `--name ${containerName}`,
       '--restart unless-stopped',
       '--gpus all',
       '--shm-size=16g',
-      `-p ${opts.apiPort}:8000`,
-      `-e HF_TOKEN=${opts.huggingfaceToken ?? '${HF_TOKEN}'}`,
     ];
+    args.push(useHostNetwork ? '--network host' : `-p ${opts.apiPort}:8000`);
+    args.push(`-e HF_TOKEN=${opts.huggingfaceToken ?? '${HF_TOKEN}'}`);
     if (opts.maxModelLen !== null && opts.maxModelLen > 32_768) {
       args.push('-e VLLM_ALLOW_LONG_MAX_MODEL_LEN=1');
     }
@@ -615,6 +620,11 @@ export class VllmDeploymentService {
       `--gpu-memory-utilization ${opts.gpuMemoryUtilization}`,
       `--max-model-len ${opts.maxModelLen ?? 'auto'}`,
     );
+    // In host-network mode vLLM ignores Docker port mapping, so bind it to the
+    // expected apiPort explicitly (default 8000 matches, but be exact).
+    if (useHostNetwork) {
+      args.push(`--port ${opts.apiPort}`);
+    }
 
     if (params.toolCallParser) {
       args.push(`--tool-call-parser ${params.toolCallParser}`);
