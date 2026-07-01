@@ -85,6 +85,7 @@ describe('EisLlmClient', () => {
       'test-eis-key',
       'eis/anthropic-claude-4.6-opus',
       'http://localhost:9223',
+      'ApiKey test-es-key',
       logger,
     );
 
@@ -96,8 +97,17 @@ describe('EisLlmClient', () => {
     vi.unstubAllGlobals();
   });
 
+  // Self-managed path: no endpoints initially → PUT _ccm → endpoints appear.
   function mockCcmActivation(): void {
+    requestMock.mockResolvedValueOnce({ endpoints: [] });
     requestMock.mockResolvedValueOnce({});
+    requestMock.mockResolvedValueOnce({
+      endpoints: [{ task_type: 'chat_completion', service: 'elastic' }],
+    });
+  }
+
+  // Serverless/native path: chat_completion endpoints already present.
+  function mockEndpointsAlreadyPresent(): void {
     requestMock.mockResolvedValueOnce({
       endpoints: [{ task_type: 'chat_completion', service: 'elastic' }],
     });
@@ -132,8 +142,9 @@ describe('EisLlmClient', () => {
         totalTokens: 15,
       });
 
-      expect(requestMock).toHaveBeenCalledTimes(2);
-      const ccmCall = requestMock.mock.calls[0]![0];
+      // GET _all (empty) → PUT _ccm → GET _all (present)
+      expect(requestMock).toHaveBeenCalledTimes(3);
+      const ccmCall = requestMock.mock.calls[1]![0];
       expect(ccmCall.method).toBe('PUT');
       expect(ccmCall.path).toBe('/_inference/_ccm');
       expect(ccmCall.body).toEqual({ api_key: 'test-eis-key' });
@@ -142,6 +153,7 @@ describe('EisLlmClient', () => {
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
       expect(url).toContain('/_inference/chat_completion/.anthropic-claude-4.6-opus-chat_completion/_stream');
       expect(init.method).toBe('POST');
+      expect((init.headers as Record<string, string>).Authorization).toBe('ApiKey test-es-key');
       const body = JSON.parse(String(init.body)) as { messages: Array<{ role: string; content: string }> };
       expect(body.messages).toEqual([{ role: 'user', content: 'Say hello' }]);
     });
@@ -171,7 +183,8 @@ describe('EisLlmClient', () => {
       await client.complete({ userPrompt: 'First' });
       await client.complete({ userPrompt: 'Second' });
 
-      expect(requestMock).toHaveBeenCalledTimes(2);
+      // Activation happens on the first call (3 requests); the second is cached.
+      expect(requestMock).toHaveBeenCalledTimes(3);
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
@@ -216,6 +229,8 @@ describe('EisLlmClient', () => {
 
   describe('CCM activation', () => {
     it('should throw when CCM activation fails', async () => {
+      // GET _all (no endpoints) → PUT _ccm rejects
+      requestMock.mockResolvedValueOnce({ endpoints: [] });
       requestMock.mockRejectedValueOnce(new Error('Forbidden'));
 
       await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
@@ -224,6 +239,8 @@ describe('EisLlmClient', () => {
     });
 
     it('should throw when chat_completion endpoints never appear', async () => {
+      // initial check (empty) → PUT → 10× polls that never show chat_completion
+      requestMock.mockResolvedValueOnce({ endpoints: [] });
       requestMock.mockResolvedValueOnce({});
 
       for (let i = 0; i < 10; i++) {
@@ -236,5 +253,53 @@ describe('EisLlmClient', () => {
         'Timed out waiting for EIS chat_completion endpoints',
       );
     }, 60_000);
+  });
+
+  describe('serverless / native EIS', () => {
+    it('skips CCM activation when chat_completion endpoints already exist (no key needed)', async () => {
+      const mock = createMockEsClient();
+      const serverlessClient = new EisLlmClient(
+        mock.client,
+        undefined, // no EIS_CCM_API_KEY on serverless
+        'eis/anthropic-claude-4.6-opus',
+        'https://my-project.es.cloud',
+        'ApiKey serverless-key',
+        logger,
+      );
+
+      mock.requestMock.mockResolvedValueOnce({
+        endpoints: [{ task_type: 'chat_completion', service: 'elastic' }],
+      });
+      mockStreamResponse(SAMPLE_SSE);
+
+      const result = await serverlessClient.complete({ userPrompt: 'Say hello' });
+
+      expect(result.content).toBe('Hello');
+      // Only the endpoint check — no PUT _ccm.
+      expect(mock.requestMock).toHaveBeenCalledTimes(1);
+      expect(mock.requestMock.mock.calls[0]![0].method).toBe('GET');
+      expect(mock.requestMock.mock.calls[0]![0].path).toBe('/_inference/_all');
+
+      const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect((init.headers as Record<string, string>).Authorization).toBe('ApiKey serverless-key');
+    });
+
+    it('throws a clear error when no endpoints exist and no key is provided', async () => {
+      const mock = createMockEsClient();
+      const noKeyClient = new EisLlmClient(
+        mock.client,
+        undefined,
+        'eis/anthropic-claude-4.6-opus',
+        'https://my-project.es.cloud',
+        'ApiKey serverless-key',
+        logger,
+      );
+
+      mock.requestMock.mockResolvedValueOnce({ endpoints: [] });
+
+      await expect(noKeyClient.complete({ userPrompt: 'Hello' })).rejects.toThrow(
+        'EIS not available',
+      );
+    });
   });
 });

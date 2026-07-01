@@ -116,9 +116,15 @@ export class EisLlmClient implements LlmClient {
 
   constructor(
     private readonly esClient: Client,
-    private readonly eisApiKey: string,
+    // Optional: only needed to activate CCM on self-managed/local ES. On
+    // serverless (and cloud with EIS provisioned) the chat_completion
+    // endpoints already exist, so no CCM key is required.
+    private readonly eisApiKey: string | undefined,
     private readonly eisModel: string,
     private readonly esBaseUrl: string,
+    // Authorization header value (e.g. `ApiKey <key>` / `Basic <b64>`) for the
+    // raw streaming fetch, which does not go through the ES client transport.
+    private readonly authHeader?: string,
     private readonly logger?: Logger,
   ) {}
 
@@ -186,13 +192,18 @@ export class EisLlmClient implements LlmClient {
     const timeoutId = setTimeout(() => controller.abort(), 180_000);
 
     try {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        'X-Elastic-Product-Use-Case': 'elastic-llm-benchmarker',
+      };
+      if (this.authHeader) {
+        headers.Authorization = this.authHeader;
+      }
+
       const response = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'text/event-stream',
-          'X-Elastic-Product-Use-Case': 'elastic-llm-benchmarker',
-        },
+        headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -267,9 +278,43 @@ export class EisLlmClient implements LlmClient {
     }
   }
 
+  private async hasChatCompletionEndpoints(): Promise<boolean> {
+    try {
+      const endpoints = await this.esClient.transport.request<{
+        endpoints?: Array<{ task_type?: string; service?: string }>;
+      }>({
+        method: 'GET',
+        path: '/_inference/_all',
+      });
+      return (
+        endpoints.endpoints?.some(
+          (ep) => ep.task_type === 'chat_completion' && ep.service === 'elastic',
+        ) ?? false
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private async ensureCcmActivated(): Promise<void> {
     if (this.ccmActivated) {
       return;
+    }
+
+    // Serverless (and EIS-provisioned cloud) already expose chat_completion
+    // endpoints — no CCM activation and no EIS_CCM_API_KEY required.
+    if (await this.hasChatCompletionEndpoints()) {
+      this.logger?.info('EIS chat_completion endpoints already available — skipping CCM activation');
+      this.ccmActivated = true;
+      return;
+    }
+
+    // Self-managed/local ES: activate CCM with the operator-supplied key.
+    if (!this.eisApiKey) {
+      throw new Error(
+        'EIS not available: cluster exposes no chat_completion endpoints and no ' +
+          'EIS_CCM_API_KEY was provided to activate Cloud Connected Mode.',
+      );
     }
 
     this.logger?.info('Activating EIS Cloud Connected Mode (CCM) on ES cluster');
@@ -282,18 +327,7 @@ export class EisLlmClient implements LlmClient {
       });
 
       for (let attempt = 1; attempt <= 10; attempt++) {
-        const endpoints = await this.esClient.transport.request<{
-          endpoints?: Array<{ task_type?: string; service?: string }>;
-        }>({
-          method: 'GET',
-          path: '/_inference/_all',
-        });
-
-        const hasChatCompletion = endpoints.endpoints?.some(
-          (ep) => ep.task_type === 'chat_completion' && ep.service === 'elastic',
-        );
-
-        if (hasChatCompletion) {
+        if (await this.hasChatCompletionEndpoints()) {
           this.logger?.info('EIS CCM activated — chat_completion endpoints available');
           this.ccmActivated = true;
           return;

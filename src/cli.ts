@@ -942,13 +942,29 @@ program
   });
 
 function createLlmClient(config: AppConfig, esClient: Client, logger: ReturnType<typeof createLogger>): LlmClient | undefined {
-  if (config.eisApiKey) {
-    logger.info('Stage 3 reasoning: using EIS (Elastic Inference Service)', { model: config.eisModel });
+  const es = config.elasticsearch;
+  const esAuthHeader = es.apiKey
+    ? `ApiKey ${es.apiKey}`
+    : es.username && es.password
+      ? `Basic ${Buffer.from(`${es.username}:${es.password}`).toString('base64')}`
+      : undefined;
+
+  // Use EIS when a CCM key is explicitly set (self-managed activation), or when
+  // the ES cluster is API-key authed (serverless/cloud provisions EIS natively,
+  // so no CCM key is needed). An explicit llmApiKey still wins over the
+  // serverless-native fallback.
+  const useEis = Boolean(config.eisApiKey) || (Boolean(es.apiKey) && !config.llmApiKey);
+  if (useEis) {
+    logger.info('Stage 3 reasoning: using EIS (Elastic Inference Service)', {
+      model: config.eisModel,
+      ccm: config.eisApiKey ? 'key-provided' : 'native',
+    });
     return new EisLlmClient(
       esClient,
       config.eisApiKey,
       config.eisModel,
-      config.elasticsearch.url ?? 'http://localhost:9223',
+      es.url ?? 'http://localhost:9223',
+      esAuthHeader,
       logger,
     );
   }
