@@ -998,7 +998,7 @@ export class ElasticsearchResultsStore {
       passingEvals: evals,
       blockingIssues: issues,
       vllmConfigUsed: {
-        contextLength: vllmRaw.context_length != null ? Number(vllmRaw.context_length) : undefined,
+        contextLength: vllmRaw.context_length !== null && vllmRaw.context_length !== undefined ? Number(vllmRaw.context_length) : undefined,
         quantization: vllmRaw.quantization ? String(vllmRaw.quantization) : undefined,
         toolCallParser: vllmRaw.tool_call_parser ? String(vllmRaw.tool_call_parser) : undefined,
         flags: Array.isArray(vllmRaw.flags) ? (vllmRaw.flags as string[]) : [],

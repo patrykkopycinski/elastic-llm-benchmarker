@@ -106,13 +106,6 @@ describe('EisLlmClient', () => {
     });
   }
 
-  // Serverless/native path: chat_completion endpoints already present.
-  function mockEndpointsAlreadyPresent(): void {
-    requestMock.mockResolvedValueOnce({
-      endpoints: [{ task_type: 'chat_completion', service: 'elastic' }],
-    });
-  }
-
   function mockStreamResponse(sseBody: string): void {
     const encoder = new TextEncoder();
     fetchMock.mockResolvedValueOnce({

@@ -1,7 +1,7 @@
 import type { SSHConfig } from '../types/config.js';
 import type { SSHClientPool } from './ssh-client.js';
 import type { TunnelService } from './tunnel-service.js';
-import { SshPortForward } from '../utils/ssh-port-forward.js';
+import type { SshPortForward } from '../utils/ssh-port-forward.js';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
 
