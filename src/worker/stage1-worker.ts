@@ -4,6 +4,7 @@ import type {
   VMHardwareProfile,
   BenchmarkThresholds,
 } from '../types/config.js';
+import { resolveMaxItlP50Ms } from '../types/config.js';
 import type { BenchmarkResult, ModelInfo } from '../types/benchmark.js';
 import { HFCardParser } from '../services/hf-card-parser.js';
 import {
@@ -178,7 +179,12 @@ export class Stage1WorkerImpl implements Stage1Worker {
         architecture: parsedCard.card.architecture,
         contextWindow: parsedCard.card.contextWindow,
         license: parsedCard.card.license,
-        parameterCount: parsedCard.card.parameterCount,
+        // HFCardParser reports billions (e.g. 34.67 for a 34.67B model); ModelInfo's
+        // contract is a RAW parameter count. Without normalizing here, the tiered ITL
+        // resolver downstream (paramBillions = parameterCount / 1e9) collapses to ~0
+        // and every model is gated at the smallest tier (20ms) — silently rejecting
+        // any 14B+ model that a larger tier would have passed.
+        parameterCount: normalizeParameterCount(parsedCard.card.parameterCount),
         quantizations: parsedCard.card.quantizations,
         supportsToolCalling: parsedCard.card.supportsToolCalling,
       };
@@ -299,8 +305,9 @@ export class Stage1WorkerImpl implements Stage1Worker {
       const contextWindow = await this.resolveContextWindow(run.modelId, modelInfo);
 
       const stage2Thresholds = this.config.stage2Thresholds;
+      const maxItlP50Ms = resolveMaxItlP50Ms(stage2Thresholds, paramBillions);
       const stage2Eligible =
-        avgItlP50 < stage2Thresholds.maxItlP50Ms &&
+        avgItlP50 < maxItlP50Ms &&
         throughput > stage2Thresholds.minThroughputTps &&
         avgTtft < stage2Thresholds.maxTtftMs &&
         contextWindow >= stage2Thresholds.minContextWindow;
@@ -309,6 +316,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
         modelId: run.modelId,
         stage2Eligible,
         avgItlP50,
+        maxItlP50Ms,
         throughput,
         avgTtft,
         contextWindow,

@@ -53,8 +53,20 @@ export const benchmarkThresholdsSchema = z.object({
  * Stage 2 thresholds for the gate between Stage 1 and Stage 2 benchmarks.
  */
 export const stage2ThresholdsSchema = z.object({
-  /** Maximum inter-token latency p50 (ms). Lower is better. */
+  /** Maximum inter-token latency p50 (ms), used when model param count is unknown. Lower is better. */
   maxItlP50Ms: z.number().positive().default(20),
+  /**
+   * Tiered ITL p50 caps by model size (param count in billions). Larger models are
+   * inherently slower per token, so a flat 20ms cap excludes every 14B+ model from
+   * CI-eval eligibility. Mirrors benchmarkThresholds.maxITLMsTiers so a model that
+   * passes Stage 1 at its tier is also eligible for Stage 2 at the same tier.
+   */
+  maxItlP50MsTiers: z.array(itlTierSchema).default([
+    { maxParamsBillions: 14, maxITLMs: 20 },
+    { maxParamsBillions: 40, maxITLMs: 40 },
+    { maxParamsBillions: 80, maxITLMs: 60 },
+    { maxParamsBillions: Infinity, maxITLMs: 100 },
+  ]),
   minThroughputTps: z.number().positive().default(10),
   maxTtftMs: z.number().positive().default(5000),
   minContextWindow: z.number().int().positive().default(128_000),
@@ -601,26 +613,58 @@ export type BenchmarkThresholds = z.infer<typeof benchmarkThresholdsSchema>;
 export type ItlTier = z.infer<typeof itlTierSchema>;
 
 /**
- * Resolves the max ITL (ms) threshold for a model based on its parameter count.
+ * Resolves a parameter-count-aware ITL (ms) cap from a tier list.
  * Uses the first tier where parameterCountBillions <= maxParamsBillions.
- * Falls back to the flat maxITLMs when parameter count is null.
+ * Falls back to `flatFallback` when the param count is unknown or non-positive.
  */
-export function resolveMaxITLMs(
-  thresholds: BenchmarkThresholds,
+function resolveTieredItlCap(
+  tiers: ItlTier[],
+  flatFallback: number,
   parameterCountBillions: number | null,
 ): number {
   if (parameterCountBillions === null || parameterCountBillions <= 0) {
-    return thresholds.maxITLMs;
+    return flatFallback;
   }
-  const sorted = [...thresholds.maxITLMsTiers].sort(
-    (a, b) => a.maxParamsBillions - b.maxParamsBillions,
-  );
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    return flatFallback;
+  }
+  const sorted = [...tiers].sort((a, b) => a.maxParamsBillions - b.maxParamsBillions);
   for (const tier of sorted) {
     if (parameterCountBillions <= tier.maxParamsBillions) {
       return tier.maxITLMs;
     }
   }
-  return sorted[sorted.length - 1]?.maxITLMs ?? thresholds.maxITLMs;
+  return sorted[sorted.length - 1]?.maxITLMs ?? flatFallback;
+}
+
+/**
+ * Resolves the Stage 1 max ITL (ms) pass threshold for a model based on its
+ * parameter count. Falls back to the flat maxITLMs when param count is null.
+ */
+export function resolveMaxITLMs(
+  thresholds: BenchmarkThresholds,
+  parameterCountBillions: number | null,
+): number {
+  return resolveTieredItlCap(
+    thresholds.maxITLMsTiers,
+    thresholds.maxITLMs,
+    parameterCountBillions,
+  );
+}
+
+/**
+ * Resolves the Stage 2 (CI-eval eligibility) max ITL p50 (ms) cap for a model
+ * based on its parameter count. Falls back to the flat maxItlP50Ms when null.
+ */
+export function resolveMaxItlP50Ms(
+  thresholds: Stage2Thresholds,
+  parameterCountBillions: number | null,
+): number {
+  return resolveTieredItlCap(
+    thresholds.maxItlP50MsTiers,
+    thresholds.maxItlP50Ms,
+    parameterCountBillions,
+  );
 }
 
 export type VMHardwareProfile = z.infer<typeof vmHardwareProfileSchema>;
