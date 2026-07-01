@@ -165,8 +165,7 @@ fi
 if [[ "$JSON_MODE" == "true" ]]; then
   # Build JSON object manually to avoid dependencies
   printf '{"passed":%d,"failed":%d,"checks":[' "$PASS" "$FAIL"
-  local first=true
-  local item
+  first=true
   for item in "${RESULTS[@]}"; do
     if [[ "$first" == "true" ]]; then
       first=false
