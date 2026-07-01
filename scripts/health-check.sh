@@ -39,7 +39,9 @@ if [[ -f "$PROJECT_ROOT/.env" ]]; then
   set +a
 fi
 
-if [[ -z "${ELASTIC_PASSWORD:-}" && -f "$PROJECT_ROOT/.env.docker" ]]; then
+# Only pull the local dev-ES basic-auth password when no API key is configured.
+# On serverless (API key set) basic auth would 401 and must not be introduced.
+if [[ -z "${ELASTICSEARCH_API_KEY:-}" && -z "${ELASTIC_PASSWORD:-}" && -f "$PROJECT_ROOT/.env.docker" ]]; then
   set -a
   # shellcheck source=/dev/null
   source "$PROJECT_ROOT/.env.docker"
@@ -102,14 +104,31 @@ if [[ "$JSON_MODE" == "false" ]]; then
 fi
 
 # 1. Elasticsearch
+# Prefer API key (serverless / cloud) over basic auth. Basic auth against
+# serverless returns 401, so it must never take precedence when a key is set.
 ES_CURL_AUTH=()
-if [[ -n "${ELASTIC_PASSWORD:-}" ]]; then
-  ES_CURL_AUTH=(-u "elastic:${ELASTIC_PASSWORD}")
-elif [[ -n "${ELASTICSEARCH_API_KEY:-}" ]]; then
+if [[ -n "${ELASTICSEARCH_API_KEY:-}" ]]; then
   ES_CURL_AUTH=(-H "Authorization: ApiKey ${ELASTICSEARCH_API_KEY}")
+elif [[ -n "${ELASTIC_PASSWORD:-}" ]]; then
+  ES_CURL_AUTH=(-u "elastic:${ELASTIC_PASSWORD}")
 fi
-run_check "Elasticsearch is reachable and healthy (yellow/green)" \
-  sh -c "curl -sf ${ES_CURL_AUTH[*]+"${ES_CURL_AUTH[@]}"} '${ES_URL}/_cluster/health' | grep -qE '\"status\":\"(green|yellow)\"'"
+
+# Serverless ES does not expose /_cluster/health (returns 410); it is a managed
+# service, so reachability of the root endpoint is the correct readiness check.
+# Stateful clusters keep the green/yellow cluster-health gate.
+#
+# Bodies are fetched here with direct array expansion (so an "Authorization:
+# ApiKey <key>" header with spaces stays a single argument) and the captured
+# text is grepped by the check functions — avoids re-splitting inside sh -c.
+ES_ROOT_BODY="$(curl -sf ${ES_CURL_AUTH[*]+"${ES_CURL_AUTH[@]}"} "${ES_URL}/" 2>/dev/null || true)"
+if echo "$ES_ROOT_BODY" | grep -q '"build_flavor"[[:space:]]*:[[:space:]]*"serverless"'; then
+  check_serverless_es() { echo "$ES_ROOT_BODY" | grep -q '"cluster_name"'; }
+  run_check "Elasticsearch (serverless) is reachable" check_serverless_es
+else
+  ES_HEALTH_BODY="$(curl -sf ${ES_CURL_AUTH[*]+"${ES_CURL_AUTH[@]}"} "${ES_URL}/_cluster/health" 2>/dev/null || true)"
+  check_stateful_es() { echo "$ES_HEALTH_BODY" | grep -qE '"status":"(green|yellow)"'; }
+  run_check "Elasticsearch is reachable and healthy (yellow/green)" check_stateful_es
+fi
 
 # 2. EDOT collector (optional by default — set EDOT_CHECK=required to enforce)
 if [[ "$EDOT_CHECK" == "required" ]]; then

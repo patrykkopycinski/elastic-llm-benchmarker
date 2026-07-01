@@ -27,6 +27,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "setup": "bash scripts/setup-local.sh && bash scripts/setup-ilm.sh",
+    "migrate:serverless": "tsx src/scripts/migrate-es-to-serverless.ts",
     "validate:eis": "bash scripts/validate-eis.sh",
     "smoke:stage3": "bash scripts/smoke-stage3-e2e.sh",
     "smoke:full": "bash scripts/smoke-full-e2e.sh",

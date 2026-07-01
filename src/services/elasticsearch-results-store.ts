@@ -277,9 +277,18 @@ function esHitToReport(hit: Record<string, unknown>): ModelEvaluationReport {
   };
 }
 
+/**
+ * Index settings that Elasticsearch Serverless rejects at index-creation time.
+ * Serverless manages sharding, replication, and refresh automatically, so
+ * sending these keys makes `indices.create` fail with illegal_argument_exception.
+ */
+const SERVERLESS_FORBIDDEN_SETTINGS = ['number_of_shards', 'number_of_replicas', 'refresh_interval'];
+
 export class ElasticsearchResultsStore {
   private readonly esClient: Client;
   private readonly logger: ReturnType<typeof createLogger>;
+  /** Cached serverless detection (null = not yet probed). */
+  private serverless: boolean | null = null;
 
   constructor(client: Client, logLevel: string = 'info') {
     this.esClient = client;
@@ -290,16 +299,45 @@ export class ElasticsearchResultsStore {
     return this.esClient;
   }
 
+  /** Detects (once, cached) whether the target cluster is Elasticsearch Serverless. */
+  private async isServerless(): Promise<boolean> {
+    if (this.serverless !== null) return this.serverless;
+    try {
+      const info = await this.esClient.info();
+      this.serverless = info.version?.build_flavor === 'serverless';
+    } catch (err) {
+      this.logger.warn('Could not determine cluster flavor; assuming stateful', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      this.serverless = false;
+    }
+    return this.serverless;
+  }
+
+  /** Drops serverless-forbidden keys from index settings when targeting serverless. */
+  private sanitizeSettings(
+    settings: Record<string, unknown> | undefined,
+    serverless: boolean,
+  ): Record<string, unknown> | undefined {
+    if (!settings || !serverless) return settings;
+    const filtered = Object.fromEntries(
+      Object.entries(settings).filter(([key]) => !SERVERLESS_FORBIDDEN_SETTINGS.includes(key)),
+    );
+    return Object.keys(filtered).length > 0 ? filtered : undefined;
+  }
+
   async initialize(): Promise<void> {
+    const serverless = await this.isServerless();
     for (const [indexName, config] of Object.entries(INDEX_MAPPINGS)) {
       const exists = await this.esClient.indices.exists({ index: indexName });
       if (!exists) {
+        const settings = this.sanitizeSettings(config.settings, serverless);
         await this.esClient.indices.create({
           index: indexName,
           mappings: config.mappings as any,
-          settings: config.settings,
+          ...(settings ? { settings } : {}),
         });
-        this.logger.info(`Created index: ${indexName}`);
+        this.logger.info(`Created index: ${indexName}`, { serverless });
       }
     }
   }

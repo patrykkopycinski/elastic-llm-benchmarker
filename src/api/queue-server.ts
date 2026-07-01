@@ -196,12 +196,26 @@ export function createQueueServer(config: QueueServerConfig & {
   // ─── Health ───────────────────────────────────────────────────────
   app.get('/healthz', async (_req, res) => {
     try {
+      // cluster.health is unavailable on serverless (returns 410); use it when
+      // present, otherwise fall back to info() for a reachability check.
       const esHealth = await esClient.cluster.health({ timeout: '5s' }).catch(() => null);
-      if (!esHealth || esHealth.status === 'red') {
-        res.status(503).json({ status: 'unhealthy', elasticsearch: esHealth?.status ?? 'unknown' });
+      if (esHealth) {
+        if (esHealth.status === 'red') {
+          res.status(503).json({ status: 'unhealthy', elasticsearch: esHealth.status });
+          return;
+        }
+        res.json({ status: 'healthy', elasticsearch: esHealth.status });
         return;
       }
-      res.json({ status: 'healthy', elasticsearch: esHealth.status });
+      const info = await esClient.info().catch(() => null);
+      if (!info) {
+        res.status(503).json({ status: 'unhealthy', elasticsearch: 'unreachable' });
+        return;
+      }
+      res.json({
+        status: 'healthy',
+        elasticsearch: info.version?.build_flavor === 'serverless' ? 'serverless' : 'reachable',
+      });
     } catch {
       res.status(503).json({ status: 'unhealthy' });
     }

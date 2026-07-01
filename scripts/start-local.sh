@@ -23,16 +23,21 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-if [[ -z "${ELASTIC_PASSWORD:-}" && -f .env.docker ]]; then
-  set -a
-  # shellcheck source=/dev/null
-  source .env.docker
-  set +a
-fi
+# Basic auth is only for the local dev ES. When an API key is set (serverless),
+# skip it entirely — the ES client applies basic auth last and would otherwise
+# clobber the API key (see src/cli.ts createEsClient).
+if [[ -z "${ELASTICSEARCH_API_KEY:-}" ]]; then
+  if [[ -z "${ELASTIC_PASSWORD:-}" && -f .env.docker ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source .env.docker
+    set +a
+  fi
 
-if [[ -n "${ELASTIC_PASSWORD:-}" && -z "${ELASTICSEARCH_PASSWORD:-}" ]]; then
-  export ELASTICSEARCH_USERNAME="${ELASTICSEARCH_USERNAME:-elastic}"
-  export ELASTICSEARCH_PASSWORD="${ELASTIC_PASSWORD}"
+  if [[ -n "${ELASTIC_PASSWORD:-}" && -z "${ELASTICSEARCH_PASSWORD:-}" ]]; then
+    export ELASTICSEARCH_USERNAME="${ELASTICSEARCH_USERNAME:-elastic}"
+    export ELASTICSEARCH_PASSWORD="${ELASTIC_PASSWORD}"
+  fi
 fi
 
 export BENCHMARKER_CONFIG="${ROOT}/config/local.json"
