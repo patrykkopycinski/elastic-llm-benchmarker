@@ -54,9 +54,11 @@ processors:
 
 exporters:
   elasticsearch/otel:
-    endpoints: ['http://elasticsearch:9200']
-    user: elastic
-    password: '${env:ELASTIC_PASSWORD}'
+    # Serverless (and cloud) ES: authenticate with an API key. For self-managed
+    # local ES, set ELASTICSEARCH_URL=http://elasticsearch:9200 and provide an
+    # API key (basic auth user/password is no longer used here).
+    endpoints: ['${env:ELASTICSEARCH_URL}']
+    api_key: '${env:ELASTICSEARCH_API_KEY}'
     mapping:
       mode: otel
     sending_queue:

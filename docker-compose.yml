@@ -159,6 +159,9 @@ services:
 
   # EDOT Collector — scrapes vLLM Prometheus metrics and accepts OTLP traces,
   # then exports directly to Elasticsearch (no APM Server needed).
+  # Exports to serverless/cloud ES via API key; no dependency on a local ES
+  # container. ELASTICSEARCH_URL + ELASTICSEARCH_API_KEY must be available to
+  # compose (add them to .env.docker or export them in the shell).
   edot-collector:
     image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION:-9.5.0-SNAPSHOT}
     container_name: benchmarker-edot-collector
@@ -166,14 +169,12 @@ services:
       - vllm
     command: ["otel", "--config", "/etc/otel/config.yml"]
     environment:
-      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ELASTICSEARCH_URL=${ELASTICSEARCH_URL}
+      - ELASTICSEARCH_API_KEY=${ELASTICSEARCH_API_KEY}
       - VLLM_METRICS_TARGET=${VLLM_METRICS_TARGET:-host.docker.internal:8000}
     ports:
       - "${OTEL_GRPC_PORT:-4317}:4317"
       - "${OTEL_HTTP_PORT:-4318}:4318"
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
     volumes:
       - ./config/otel-collector.yml:/etc/otel/config.yml:ro
     healthcheck:
