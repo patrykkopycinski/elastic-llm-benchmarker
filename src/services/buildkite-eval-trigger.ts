@@ -77,11 +77,13 @@ export function isTerminalBuildkiteState(state: string | undefined): state is st
 /**
  * Terminal states where the build was preempted by Buildkite rather than actually running
  * the eval. `skip_queued_branch_builds: true` on the pipeline silently skips a queued build
- * when a newer/other build is active on the same branch, and manual cancels land as
- * `canceled`. These are transient infra outcomes and should be re-triggered, not counted as
- * a model/eval `failed`.
+ * (state `skipped`) when a newer/other build is active on the same branch; `not_run` is the
+ * analogous "never executed" outcome. These are transient infra outcomes and should be
+ * re-triggered, not counted as a model/eval `failed`. `canceled` is deliberately excluded:
+ * an operator cancelling a build on Buildkite is a terminal decision, not an infra hiccup,
+ * so it must not be auto-re-triggered up to maxSkipRetries times.
  */
-const RETRIABLE_INFRA_BUILDKITE_STATES = new Set(['skipped', 'canceled', 'not_run']);
+const RETRIABLE_INFRA_BUILDKITE_STATES = new Set(['skipped', 'not_run']);
 
 export function isRetriableInfraState(state: string | undefined): boolean {
   return state !== undefined && RETRIABLE_INFRA_BUILDKITE_STATES.has(state);
@@ -412,7 +414,12 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     pipelineSlug: string,
     state: 'running' | 'scheduled',
   ): Promise<BuildkiteBuildResponse[]> {
-    const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds?state=${state}&per_page=10`;
+    // `skip_queued_branch_builds` is branch-scoped, so the idle guard must only consider
+    // builds on OUR branch. Without the branch filter, foreign-branch running/scheduled builds
+    // (other teams, PR CI) would block idle-wait for up to pipelineIdleWaitMs (default 3h) and
+    // then throw, failing the whole CI eval even though our branch was clear the whole time.
+    const branch = this.config.kibanaBranch ?? 'fix/weekly-evals-matrix';
+    const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds?state=${state}&branch=${encodeURIComponent(branch)}&per_page=10`;
 
     try {
       const response = await fetch(url, {

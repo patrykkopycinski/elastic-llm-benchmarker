@@ -587,6 +587,7 @@ export class Scheduler {
         buildkiteBuildNumber: result.buildNumber,
         pipelineSlug: buildkiteConfig?.weeklyPipelineSlug ?? 'kibana-evals-weekly-llm-evals',
         status: result.status === 'running' ? 'running' : result.status,
+        buildkiteState: result.terminalState,
         evalSuites: suiteIds,
         artifacts: result.artifacts
           ? Object.fromEntries(result.artifacts.map((a) => [a.filename, a.url]))

@@ -4,6 +4,7 @@ import type { CIEvalResult } from '../types/ci-eval.js';
 import type { Logger } from 'winston';
 
 import {
+  isRetriableInfraState,
   isTerminalBuildkiteState,
   type BuildkiteEvalTrigger,
 } from './buildkite-eval-trigger.js';
@@ -25,6 +26,11 @@ export function getCompletedEvalSuites(
   const terminal = new Set<string>();
   for (const result of ciEvalResults) {
     if (result.status === 'running') continue;
+    // A build that Buildkite skipped/canceled/not_run never actually ran the eval — the suite
+    // is NOT complete and must be re-run on resume. Persisting these as status `failed` (the
+    // mapped CIEvalResult.status) would otherwise make resume treat the suite as done, silently
+    // dropping it — the same suite-loss bug the skip_queued_branch_builds fix set out to solve.
+    if (isRetriableInfraState(result.buildkiteState)) continue;
     for (const suiteId of result.evalSuites ?? []) {
       if (evalSuites.includes(suiteId)) {
         terminal.add(suiteId);

@@ -48,6 +48,50 @@ describe('getCompletedEvalSuites', () => {
       ]),
     ).toEqual(['security-alert-triage']);
   });
+
+  it('does NOT count a skipped/canceled infra build as a completed suite', () => {
+    // A build Buildkite skipped (skip_queued_branch_builds) is persisted with the mapped
+    // status `failed` but carries buildkiteState `skipped`. The eval never ran, so on resume
+    // the suite must be re-triggered — it must not be reported as complete.
+    const results: CIEvalResult[] = [
+      {
+        runId: 'r1',
+        modelId: 'org/model',
+        buildkiteBuildUrl: 'https://example.com/1',
+        buildkiteBuildNumber: 1,
+        pipelineSlug: 'pipe',
+        status: 'failed',
+        buildkiteState: 'skipped',
+        evalSuites: ['security-alert-triage'],
+        startedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T01:00:00Z',
+        retryCount: 0,
+        connectorJson: '{}',
+      },
+      {
+        runId: 'r2',
+        modelId: 'org/model',
+        buildkiteBuildUrl: 'https://example.com/2',
+        buildkiteBuildNumber: 2,
+        pipelineSlug: 'pipe',
+        status: 'failed',
+        buildkiteState: 'failed',
+        evalSuites: ['security-esql-generation-regression'],
+        startedAt: '2026-01-01T02:00:00Z',
+        completedAt: '2026-01-01T03:00:00Z',
+        retryCount: 0,
+        connectorJson: '{}',
+      },
+    ];
+
+    // The genuinely-failed suite (real verdict) counts as complete; the skipped one does not.
+    expect(
+      getCompletedEvalSuites(results, [
+        'security-alert-triage',
+        'security-esql-generation-regression',
+      ]),
+    ).toEqual(['security-esql-generation-regression']);
+  });
 });
 
 describe('recoverOrFailActiveEntries', () => {

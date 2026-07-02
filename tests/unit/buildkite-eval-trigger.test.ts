@@ -264,10 +264,11 @@ describe('BuildkiteEvalTriggerImpl', () => {
     expect(result.terminalState).toBe('skipped');
   });
 
-  it('isRetriableInfraState flags skipped/canceled/not_run but not passed/failed', () => {
+  it('isRetriableInfraState flags skipped/not_run but not canceled/passed/failed', () => {
     expect(isRetriableInfraState('skipped')).toBe(true);
-    expect(isRetriableInfraState('canceled')).toBe(true);
     expect(isRetriableInfraState('not_run')).toBe(true);
+    // `canceled` is an operator's terminal decision, not an infra preemption — never auto-retry it.
+    expect(isRetriableInfraState('canceled')).toBe(false);
     expect(isRetriableInfraState('failed')).toBe(false);
     expect(isRetriableInfraState('passed')).toBe(false);
     expect(isRetriableInfraState(undefined)).toBe(false);
