@@ -52,6 +52,12 @@ export interface BuildkiteBuildResult {
   buildUrl: string;
   buildNumber: number;
   status: 'passed' | 'failed' | 'running';
+  /**
+   * Raw Buildkite terminal state (passed|failed|canceled|skipped|not_run) when the build
+   * reached a terminal state. Lets callers distinguish an infra outcome (skipped/canceled —
+   * the eval never ran) from a genuine eval `failed`.
+   */
+  terminalState?: string;
   artifacts?: BuildkiteArtifact[];
 }
 
@@ -66,6 +72,19 @@ export const TERMINAL_BUILDKITE_STATES = new Set([
 
 export function isTerminalBuildkiteState(state: string | undefined): state is string {
   return state !== undefined && TERMINAL_BUILDKITE_STATES.has(state);
+}
+
+/**
+ * Terminal states where the build was preempted by Buildkite rather than actually running
+ * the eval. `skip_queued_branch_builds: true` on the pipeline silently skips a queued build
+ * when a newer/other build is active on the same branch, and manual cancels land as
+ * `canceled`. These are transient infra outcomes and should be re-triggered, not counted as
+ * a model/eval `failed`.
+ */
+const RETRIABLE_INFRA_BUILDKITE_STATES = new Set(['skipped', 'canceled', 'not_run']);
+
+export function isRetriableInfraState(state: string | undefined): boolean {
+  return state !== undefined && RETRIABLE_INFRA_BUILDKITE_STATES.has(state);
 }
 
 export function buildResultStatusFromBuildkiteState(
@@ -344,15 +363,16 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     const deadline = Date.now() + idleWaitMs;
 
     while (Date.now() < deadline) {
-      const running = await this.listPipelineBuilds(pipelineSlug, 'running');
-      if (running.length === 0) {
+      const active = await this.listActivePipelineBuilds(pipelineSlug);
+      if (active.length === 0) {
         return;
       }
 
       this.logger.info('Buildkite: waiting for pipeline to become idle', {
         pipeline: pipelineSlug,
-        runningBuilds: running.map((b) => ({
+        activeBuilds: active.map((b) => ({
           number: b.number,
+          state: b.state,
           message: (b.message ?? '').slice(0, 80),
         })),
         elapsedMs: idleWaitMs - (deadline - Date.now()),
@@ -361,10 +381,31 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       await new Promise((r) => setTimeout(r, idlePollMs));
     }
 
-    const stillRunning = await this.listPipelineBuilds(pipelineSlug, 'running');
+    const stillActive = await this.listActivePipelineBuilds(pipelineSlug);
     throw new Error(
-      `Buildkite pipeline ${pipelineSlug} still has ${stillRunning.length} running build(s) after ${idleWaitMs}ms`,
+      `Buildkite pipeline ${pipelineSlug} still has ${stillActive.length} active build(s) after ${idleWaitMs}ms`,
     );
+  }
+
+  /**
+   * Builds that are `running` OR `scheduled` (queued/creating) both occupy the branch. With
+   * `skip_queued_branch_builds: true`, POSTing a new build while another is still scheduled on
+   * the same branch causes Buildkite to silently skip the older queued build — so both states
+   * must clear before we create the next suite's build. The previous idle check only looked at
+   * `running`, leaving a race where a still-`scheduled` build got skipped.
+   */
+  private async listActivePipelineBuilds(
+    pipelineSlug: string,
+  ): Promise<BuildkiteBuildResponse[]> {
+    const [running, scheduled] = await Promise.all([
+      this.listPipelineBuilds(pipelineSlug, 'running'),
+      this.listPipelineBuilds(pipelineSlug, 'scheduled'),
+    ]);
+    const byNumber = new Map<number, BuildkiteBuildResponse>();
+    for (const build of [...running, ...scheduled]) {
+      byNumber.set(build.number, build);
+    }
+    return [...byNumber.values()];
   }
 
   private async listPipelineBuilds(
@@ -512,7 +553,7 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
               state: build.state,
             });
           }
-          return { buildUrl, buildNumber, status, artifacts };
+          return { buildUrl, buildNumber, status, terminalState: build.state, artifacts };
         }
 
         this.logger.debug('Buildkite build still running', {

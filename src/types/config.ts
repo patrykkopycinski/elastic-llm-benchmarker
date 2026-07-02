@@ -471,6 +471,15 @@ export const buildkiteConfigSchema = z.object({
   /** Whether to retry on-demand eval once on failure. */
   retryOnFailure: z.boolean().default(true),
   /**
+   * Max times to re-trigger a suite build that Buildkite skipped/canceled before it ran
+   * (skip_queued_branch_builds preempting a queued build on the shared branch). These are
+   * infra outcomes, not eval failures, so they get their own retry budget separate from
+   * retryOnFailure.
+   */
+  maxSkipRetries: z.number().int().nonnegative().default(5),
+  /** Backoff between skip/cancel re-triggers, giving the branch time to fully clear. */
+  skipRetryBackoffMs: z.number().int().nonnegative().default(30_000),
+  /**
    * Security eval suites to run via weekly Buildkite pipeline (all suites in one matrix build).
    * Subset of weekly security matrix jobs needed for OSS model performance reporting.
    */

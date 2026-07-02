@@ -9,6 +9,7 @@ import type { SlackNotifier } from '../services/slack-notifier.js';
 import type { InferenceEngine } from '../engines/engine-types.js';
 import type { ModelSmokeTest } from '../services/model-smoke-test.js';
 import type { BuildkiteEvalTrigger, BuildkiteBuildResult } from '../services/buildkite-eval-trigger.js';
+import { isRetriableInfraState } from '../services/buildkite-eval-trigger.js';
 import {
   mapBuildkiteResultToStage2,
   parseEvalArtifactJson,
@@ -627,56 +628,90 @@ export class Scheduler {
       const perSuiteResults: Array<{ suite: string; status: string; buildUrl: string; buildNumber: number }> = [];
       let overallStatus = 'passed';
 
+      const maxSkipRetries = buildkiteConfig?.maxSkipRetries ?? 5;
+      const skipRetryBackoffMs = buildkiteConfig?.skipRetryBackoffMs ?? 30_000;
+
+      // Trigger + poll one suite, re-triggering when Buildkite skips/cancels the queued build
+      // before it runs (skip_queued_branch_builds on the shared branch) and retrying once on a
+      // genuine eval failure. createOnDemandBuildOrAdopt waits for the pipeline to be idle
+      // (no running OR scheduled builds), so each re-trigger only fires once the branch clears.
+      const runSuiteBuild = async (suite: string): Promise<BuildkiteBuildResult> => {
+        let attemptCount = 0;
+        let infraRetries = 0;
+        let evalRetried = false;
+
+        for (;;) {
+          const triggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
+            connectorJson,
+            connectorId,
+            evalSuiteIds: [suite],
+            modelId: run.modelId,
+          });
+
+          await persistOnDemandResult(
+            { buildUrl: triggered.buildUrl, buildNumber: triggered.buildNumber, status: 'running' },
+            attemptCount,
+            [suite],
+          );
+
+          const buildResult = await buildkiteTrigger.waitForBuild(
+            triggered.pipelineSlug,
+            triggered.buildNumber,
+            triggered.buildUrl,
+          );
+          attemptCount += 1;
+          await persistOnDemandResult(buildResult, attemptCount, [suite]);
+
+          if (isRetriableInfraState(buildResult.terminalState) && infraRetries < maxSkipRetries) {
+            infraRetries += 1;
+            this.logger.warn(
+              'CI Evals: build was skipped/canceled by Buildkite before running — re-triggering after idle',
+              {
+                modelId: run.modelId,
+                suite,
+                terminalState: buildResult.terminalState,
+                buildUrl: buildResult.buildUrl,
+                infraRetry: infraRetries,
+                maxSkipRetries,
+              },
+            );
+            if (skipRetryBackoffMs > 0) {
+              await new Promise((r) => setTimeout(r, skipRetryBackoffMs));
+            }
+            continue;
+          }
+
+          if (
+            buildResult.status === 'failed' &&
+            !isRetriableInfraState(buildResult.terminalState) &&
+            buildkiteConfig?.retryOnFailure !== false &&
+            !evalRetried
+          ) {
+            evalRetried = true;
+            this.logger.info('CI Evals: retrying on-demand build (attempt 2)', {
+              modelId: run.modelId,
+              suite,
+            });
+            continue;
+          }
+
+          return buildResult;
+        }
+      };
+
       for (const suite of suitesToRun) {
         this.logger.info('CI Evals: triggering on-demand build', {
           modelId: run.modelId,
           suite,
         });
 
-        const triggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
-          connectorJson,
-          connectorId,
-          evalSuiteIds: [suite],
-          modelId: run.modelId,
-        });
-
-        await persistOnDemandResult(
-          { buildUrl: triggered.buildUrl, buildNumber: triggered.buildNumber, status: 'running' },
-          perSuiteResults.length,
-          [suite],
-        );
-
-        let buildResult = await buildkiteTrigger.waitForBuild(
-          triggered.pipelineSlug,
-          triggered.buildNumber,
-          triggered.buildUrl,
-        );
-
-        if (buildResult.status === 'failed' && buildkiteConfig?.retryOnFailure !== false) {
-          this.logger.info('CI Evals: retrying on-demand build (attempt 2)', {
-            modelId: run.modelId,
-            suite,
-          });
-          const retryTriggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
-            connectorJson,
-            connectorId,
-            evalSuiteIds: [suite],
-            modelId: run.modelId,
-          });
-          buildResult = await buildkiteTrigger.waitForBuild(
-            retryTriggered.pipelineSlug,
-            retryTriggered.buildNumber,
-            retryTriggered.buildUrl,
-          );
-          await persistOnDemandResult(buildResult, perSuiteResults.length + 1, [suite]);
-        } else {
-          await persistOnDemandResult(buildResult, perSuiteResults.length, [suite]);
-        }
+        const buildResult = await runSuiteBuild(suite);
 
         this.logger.info('CI Evals: on-demand build completed', {
           modelId: run.modelId,
           suite,
           status: buildResult.status,
+          terminalState: buildResult.terminalState,
           buildUrl: buildResult.buildUrl,
         });
 

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { BuildkiteEvalTriggerImpl } from '../../src/services/buildkite-eval-trigger.js';
+import {
+  BuildkiteEvalTriggerImpl,
+  isRetriableInfraState,
+} from '../../src/services/buildkite-eval-trigger.js';
 
 describe('BuildkiteEvalTriggerImpl', () => {
   const baseConfig = {
@@ -139,6 +142,9 @@ describe('BuildkiteEvalTriggerImpl', () => {
     let listCalls = 0;
     vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      if (url.includes('builds?state=scheduled')) {
+        return { ok: true, json: async () => [] } as Response;
+      }
       if (url.includes('builds?state=running')) {
         listCalls += 1;
         if (listCalls === 1) {
@@ -175,6 +181,96 @@ describe('BuildkiteEvalTriggerImpl', () => {
     expect(build.buildNumber).toBe(42);
     expect(build.adopted).toBe(false);
     expect(listCalls).toBeGreaterThanOrEqual(2);
+  });
+
+  it('createOnDemandBuildOrAdopt waits for a scheduled (queued) build to clear before POSTing', async () => {
+    // Reproduces the skip_queued_branch_builds hazard: a still-`scheduled` build occupies the
+    // branch. The old idle check only looked at `running` and would POST immediately, causing
+    // Buildkite to skip the older queued build. The fix must also wait on `scheduled`.
+    let scheduledCalls = 0;
+    let postCalls = 0;
+    vi.mocked(fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('builds?state=running')) {
+        return { ok: true, json: async () => [] } as Response;
+      }
+      if (url.includes('builds?state=scheduled')) {
+        scheduledCalls += 1;
+        if (scheduledCalls === 1) {
+          return {
+            ok: true,
+            json: async () => [
+              {
+                number: 173,
+                web_url: 'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/173',
+                state: 'scheduled',
+                message: 'Benchmarker: other-model on-demand eval',
+              },
+            ],
+          } as Response;
+        }
+        return { ok: true, json: async () => [] } as Response;
+      }
+      if (init?.method === 'POST') {
+        postCalls += 1;
+        return {
+          ok: true,
+          json: async () => ({
+            number: 42,
+            web_url: 'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/42',
+            state: 'scheduled',
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const trigger = new BuildkiteEvalTriggerImpl(
+      { ...baseConfig, adoptRunningBuild: false, pipelineIdlePollMs: 5, pipelineIdleWaitMs: 200 },
+      'error',
+    );
+    const build = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
+
+    expect(build.buildNumber).toBe(42);
+    // POST must only fire after the scheduled build cleared (2nd scheduled poll).
+    expect(scheduledCalls).toBeGreaterThanOrEqual(2);
+    expect(postCalls).toBe(1);
+  });
+
+  it('waitForBuild surfaces the raw terminalState on the result', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          number: 99,
+          web_url: 'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/99',
+          state: 'skipped',
+        }),
+      }),
+    );
+
+    const trigger = new BuildkiteEvalTriggerImpl(
+      { ...baseConfig, waitForPipelineIdle: false, pollIntervalMs: 5 },
+      'error',
+    );
+    const result = await trigger.waitForBuild(
+      'kibana-evals-on-demand-llm-evals',
+      99,
+      'https://buildkite.com/elastic/kibana-evals-on-demand-llm-evals/builds/99',
+    );
+
+    expect(result.status).toBe('failed');
+    expect(result.terminalState).toBe('skipped');
+  });
+
+  it('isRetriableInfraState flags skipped/canceled/not_run but not passed/failed', () => {
+    expect(isRetriableInfraState('skipped')).toBe(true);
+    expect(isRetriableInfraState('canceled')).toBe(true);
+    expect(isRetriableInfraState('not_run')).toBe(true);
+    expect(isRetriableInfraState('failed')).toBe(false);
+    expect(isRetriableInfraState('passed')).toBe(false);
+    expect(isRetriableInfraState(undefined)).toBe(false);
   });
 
   it('triggerOnDemandEval returns running immediately when detachPoll is enabled', async () => {
