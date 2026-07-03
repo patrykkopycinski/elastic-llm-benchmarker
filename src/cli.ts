@@ -35,6 +35,7 @@ import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate, Stage3WorkerImpl } from
 import { KibanaRepoService } from './services/kibana-repo-service.js';
 import { EvalSuiteRunner } from './services/eval-suite-runner.js';
 import { Lockfile } from './utils/lockfile.js';
+import { GpuVmLeaseService } from './services/gpu-vm-lease.js';
 import { SSHClientPool } from './services/ssh-client.js';
 import { VllmEngine } from './engines/vllm-engine.js';
 import { createLogger } from './utils/logger.js';
@@ -1774,6 +1775,40 @@ if (_binaryName === 'benchmarker-queue') {
         ciEvalsOptions,
       );
 
+      // Cross-host GPU VM lease. The local lockfile only guards this host; a
+      // daemon on another machine sharing this Elasticsearch cluster + GPU VM
+      // would otherwise deploy concurrently and thrash the VM (and the serial
+      // Buildkite pipeline). Refuse to start while another daemon holds a fresh
+      // lease on the same VM host.
+      const gpuVmLease = new GpuVmLeaseService({
+        esClient,
+        vmHost: config.ssh.host,
+        logLevel: config.logLevel,
+      });
+      const leaseResult = await gpuVmLease.acquire();
+      if (!leaseResult.success) {
+        const held = leaseResult.heldBy;
+        logger.error('GPU VM lease held by another benchmarker daemon — refusing to start', {
+          vmHost: config.ssh.host,
+          heldBy: held
+            ? `${held.ownerHostname} (pid ${held.ownerPid}, heartbeat ${held.heartbeatAt})`
+            : (leaseResult.error ?? 'unknown'),
+        });
+        discoveryScheduler?.stop();
+        lockfile.release();
+        await resultsStore.close();
+        await esClient.close();
+        process.exit(1);
+      }
+      logger.info('Acquired GPU VM lease', {
+        vmHost: config.ssh.host,
+      });
+      const leaseHeartbeat = setInterval(() => {
+        void gpuVmLease.heartbeat();
+      }, 30_000);
+      // Do not keep the event loop alive on heartbeat alone.
+      leaseHeartbeat.unref();
+
       logger.info(`Scheduler starting. Polling every ${pollInterval} ms...`);
       scheduler.start();
 
@@ -1785,8 +1820,10 @@ if (_binaryName === 'benchmarker-queue') {
       // Graceful shutdown
       const shutdown = async (signal: string) => {
         logger.info(`Received ${signal}. Stopping scheduler...`);
+        clearInterval(leaseHeartbeat);
         discoveryScheduler?.stop();
         await scheduler.stop();
+        await gpuVmLease.release();
         lockfile.release();
         await resultsStore.close();
         await esClient.close();

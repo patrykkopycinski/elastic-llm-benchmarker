@@ -1,7 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import type { Client } from '@elastic/elasticsearch';
 import {
   INDEX_NAMES,
   INDEX_MAPPINGS,
+  DATE_SUFFIXED_INDEX_BASES,
+  ensureDateSuffixedTemplates,
   benchmarkEvaluationsMapping,
   benchmarkStage2Mapping,
   benchmarkReasoningMapping,
@@ -10,7 +13,7 @@ import {
 describe('es-index-mappings', () => {
   it('exports all expected index names as lowercase hyphenated strings', () => {
     const values = Object.values(INDEX_NAMES);
-    expect(values).toHaveLength(11);
+    expect(values).toHaveLength(12);
     values.forEach((name) => {
       expect(name).toEqual(name.toLowerCase());
       expect(name).toMatch(/^[a-z0-9-]+$/);
@@ -24,10 +27,23 @@ describe('es-index-mappings', () => {
       const entry = INDEX_MAPPINGS[name]!;
       expect(entry).toHaveProperty('mappings');
       expect(entry.mappings).toHaveProperty('properties');
+      // The daemon-lease index intentionally omits settings so the
+      // non-serverless-safe `ensureIndices` can create it on Serverless.
+      if (name === INDEX_NAMES.BENCHMARKER_DAEMON_LEASE) continue;
       expect(entry).toHaveProperty('settings');
       expect(entry.settings!).toHaveProperty('number_of_shards');
       expect(entry.settings!).toHaveProperty('number_of_replicas');
     }
+  });
+
+  it('maps benchmarker-daemon-lease without settings (serverless-safe) and with lease fields', () => {
+    const entry = INDEX_MAPPINGS[INDEX_NAMES.BENCHMARKER_DAEMON_LEASE]!;
+    expect(entry.settings).toBeUndefined();
+    const m = entry.mappings.properties;
+    expect(m).toHaveProperty('vm_host');
+    expect(m).toHaveProperty('owner_hostname');
+    expect(m).toHaveProperty('owner_pid');
+    expect(m).toHaveProperty('heartbeat_at');
   });
 
   it('maps benchmarker-results with nested benchmark_metrics', () => {
@@ -77,5 +93,32 @@ describe('es-index-mappings', () => {
   it('exposes standalone benchmarkReasoningMapping matching index mapping', () => {
     const fromIndex = INDEX_MAPPINGS[INDEX_NAMES.BENCHMARKER_REASONING]!.mappings.properties;
     expect(benchmarkReasoningMapping).toEqual(fromIndex);
+  });
+
+  it('tracks the three date-suffixed index bases', () => {
+    expect([...DATE_SUFFIXED_INDEX_BASES]).toEqual([
+      INDEX_NAMES.BENCHMARKER_EVALUATIONS,
+      INDEX_NAMES.BENCHMARKER_STAGE2,
+      INDEX_NAMES.BENCHMARKER_REASONING,
+    ]);
+  });
+
+  it('installs a keyword-preserving template per date-suffixed base', async () => {
+    const putIndexTemplate = vi.fn().mockResolvedValue({});
+    const esClient = { indices: { putIndexTemplate } } as unknown as Client;
+
+    await ensureDateSuffixedTemplates(esClient);
+
+    expect(putIndexTemplate).toHaveBeenCalledTimes(DATE_SUFFIXED_INDEX_BASES.length);
+    for (const base of DATE_SUFFIXED_INDEX_BASES) {
+      const call = putIndexTemplate.mock.calls.find((c) => c[0].name === `${base}-template`);
+      expect(call, `template for ${base}`).toBeDefined();
+      const arg = call![0];
+      expect(arg.index_patterns).toEqual([`${base}-*`]);
+      const props = arg.template.mappings.properties as Record<string, { type: string }>;
+      // The whole point: model_id / status must stay keyword, not dynamic text.
+      expect(props.model_id.type).toBe('keyword');
+      expect(props.status.type).toBe('keyword');
+    }
   });
 });

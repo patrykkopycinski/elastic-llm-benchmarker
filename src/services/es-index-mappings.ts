@@ -12,6 +12,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_REASONING: 'benchmark-reasoning',
   RECOMMENDATION_REPORTS: 'recommendation-reports',
   BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
+  BENCHMARKER_DAEMON_LEASE: 'benchmarker-daemon-lease',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -413,6 +414,22 @@ export const INDEX_MAPPINGS: Record<
       number_of_replicas: 1,
     },
   },
+  // Cross-host mutual-exclusion lease for the shared GPU VM. Exactly one doc
+  // per VM host; a fresh heartbeat means another benchmarker daemon owns the
+  // VM. No `settings` block on purpose: the start path creates indices via the
+  // non-serverless-safe `ensureIndices`, so shard/replica keys would fail on
+  // Elasticsearch Serverless. Defaults are fine for a single-doc index.
+  [INDEX_NAMES.BENCHMARKER_DAEMON_LEASE]: {
+    mappings: {
+      properties: {
+        vm_host: { type: 'keyword' },
+        owner_hostname: { type: 'keyword' },
+        owner_pid: { type: 'integer' },
+        acquired_at: { type: 'date' },
+        heartbeat_at: { type: 'date' },
+      },
+    },
+  },
 };
 
 export const benchmarkEvaluationsMapping = {
@@ -491,6 +508,42 @@ export const benchmarkReasoningMapping = {
   '@timestamp': { type: 'date' },
 };
 
+/**
+ * Indices whose documents are written to a date-suffixed variant
+ * (`<base>-YYYY-MM-DD`) instead of the base index. Elasticsearch auto-creates
+ * those variants on first write with *dynamic* mappings — string fields become
+ * analyzed `text`, so `term` queries on `model_id` / `status` silently miss
+ * unless a composable index template forces the keyword mapping. Templates only
+ * apply to indices created after installation; already-created dynamically
+ * mapped indices are tolerated by the `.keyword`-aware read in
+ * `getLatestReasoningResult`.
+ */
+export const DATE_SUFFIXED_INDEX_BASES = [
+  INDEX_NAMES.BENCHMARKER_EVALUATIONS,
+  INDEX_NAMES.BENCHMARKER_STAGE2,
+  INDEX_NAMES.BENCHMARKER_REASONING,
+] as const;
+
+/**
+ * Installs composable index templates so every date-suffixed variant of the
+ * indices in {@link DATE_SUFFIXED_INDEX_BASES} inherits the correct keyword
+ * mappings. Mappings-only (no shard/replica settings) so it is safe on both
+ * stateful and serverless clusters. Idempotent: `putIndexTemplate` overwrites.
+ */
+export async function ensureDateSuffixedTemplates(esClient: Client): Promise<void> {
+  for (const base of DATE_SUFFIXED_INDEX_BASES) {
+    const config = INDEX_MAPPINGS[base];
+    if (!config) continue;
+    await esClient.indices.putIndexTemplate({
+      name: `${base}-template`,
+      index_patterns: [`${base}-*`],
+      template: {
+        mappings: config.mappings as Record<string, unknown>,
+      },
+    });
+  }
+}
+
 export async function ensureIndices(esClient: Client): Promise<void> {
   for (const [indexName, indexConfig] of Object.entries(INDEX_MAPPINGS)) {
     const exists = await esClient.indices.exists({ index: indexName });
@@ -502,4 +555,5 @@ export async function ensureIndices(esClient: Client): Promise<void> {
       });
     }
   }
+  await ensureDateSuffixedTemplates(esClient);
 }
