@@ -300,10 +300,22 @@ class NgrokProvider implements TunnelProvider_Impl {
       detached: false,
     });
 
+    // Without an 'error' listener, a spawn failure (e.g. ENOENT when the ngrok binary
+    // is missing or NGROK_BIN is misconfigured) is emitted as an uncaught exception that
+    // crashes the whole daemon. Capture it and surface a clean error from create().
+    let spawnError: Error | null = null;
+    this.cliProcess.on('error', (err: Error) => {
+      spawnError = err;
+      this.logger.error('Ngrok CLI process failed to spawn', { bin, error: err.message });
+    });
+
     const deadlineMs = 45_000;
     const started = Date.now();
     while (Date.now() - started < deadlineMs) {
       await new Promise((resolve) => setTimeout(resolve, 500));
+      if (spawnError) {
+        break;
+      }
       const tunnel = await this.findApiTunnel(localPort);
       if (tunnel) {
         this.logger.info('Ngrok tunnel established via CLI', {
@@ -318,6 +330,9 @@ class NgrokProvider implements TunnelProvider_Impl {
     }
 
     await this.disconnect();
+    if (spawnError) {
+      throw new Error(`ngrok CLI failed to start (${bin}): ${(spawnError as Error).message}`);
+    }
     throw new Error(`ngrok CLI failed to expose port ${localPort} within ${deadlineMs}ms`);
   }
 
