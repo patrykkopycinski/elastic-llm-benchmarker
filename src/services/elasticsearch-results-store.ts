@@ -799,11 +799,31 @@ export class ElasticsearchResultsStore {
       index: `${INDEX_NAMES.BENCHMARKER_REASONING}-*`,
       size: 1,
       sort: [{ started_at: { order: 'desc' } }],
+      // Reasoning docs can land in a date-suffixed, dynamically-mapped index where
+      // model_id/status are analyzed `text` (with a `.keyword` subfield) rather than
+      // the keyword mapping of the templated index. Match on both so the lookup works
+      // regardless of which mapping the resolved index actually has.
       query: {
         bool: {
           must: [
-            { term: { model_id: modelId } },
-            { term: { status: 'success' } },
+            {
+              bool: {
+                should: [
+                  { term: { model_id: modelId } },
+                  { term: { 'model_id.keyword': modelId } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
+            {
+              bool: {
+                should: [
+                  { term: { status: 'success' } },
+                  { term: { 'status.keyword': 'success' } },
+                ],
+                minimum_should_match: 1,
+              },
+            },
           ],
         },
       },
