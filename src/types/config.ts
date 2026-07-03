@@ -46,7 +46,7 @@ export const benchmarkThresholdsSchema = z.object({
   maxToolCallLatencyMs: z.number().positive().default(1000),
   minToolCallSuccessRate: z.number().min(0).max(1).default(1.0),
   concurrencyLevels: z.array(z.number().int().positive()).default([1, 4, 16]),
-  healthCheckTimeoutSeconds: z.number().int().positive().default(1200),
+  healthCheckTimeoutSeconds: z.number().int().positive().default(1800),
 });
 
 /**

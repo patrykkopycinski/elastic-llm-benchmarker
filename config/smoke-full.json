@@ -17,7 +17,7 @@
     "maxToolCallLatencyMs": 1000,
     "minToolCallSuccessRate": 1.0,
     "concurrencyLevels": [1, 4, 16],
-    "healthCheckTimeoutSeconds": 600
+    "healthCheckTimeoutSeconds": 1800
   },
   "hardwareProfileId": "2xa100-80gb",
   "vmHardwareProfile": {

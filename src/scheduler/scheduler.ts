@@ -12,6 +12,7 @@ import type { BuildkiteEvalTrigger, BuildkiteBuildResult } from '../services/bui
 import { isRetriableInfraState } from '../services/buildkite-eval-trigger.js';
 import {
   mapBuildkiteResultToStage2,
+  mergeStage2Results,
   parseEvalArtifactJson,
 } from '../services/ci-eval-stage2-mapper.js';
 import type { Stage2Result } from './pipeline-state.js';
@@ -626,8 +627,7 @@ export class Scheduler {
         pipeline: buildkiteConfig?.onDemandPipelineSlug ?? 'kibana-evals-on-demand-llm-evals',
       });
 
-      const perSuiteResults: Array<{ suite: string; status: string; buildUrl: string; buildNumber: number }> = [];
-      let overallStatus = 'passed';
+      const perSuiteStage2: Stage2Result[] = [];
 
       const maxSkipRetries = buildkiteConfig?.maxSkipRetries ?? 5;
       const skipRetryBackoffMs = buildkiteConfig?.skipRetryBackoffMs ?? 30_000;
@@ -716,19 +716,30 @@ export class Scheduler {
           buildUrl: buildResult.buildUrl,
         });
 
-        perSuiteResults.push({
-          suite,
-          status: buildResult.status,
-          buildUrl: buildResult.buildUrl,
-          buildNumber: buildResult.buildNumber,
-        });
-        if (buildResult.status !== 'passed') overallStatus = 'failed';
+        // Resolve THIS suite's artifacts — scores live in the suite's own build,
+        // not the last suite's — and map to a per-suite Stage2Result keyed by the
+        // suite name. Resolving only the last build (the old behavior) collapsed
+        // every suite's score onto one build, leaving the others null → 0 and
+        // dragging otherwise-passing models to an "investigate" verdict.
+        const suiteArtifactSummary = await this.resolveEvalArtifactSummary(
+          buildkiteTrigger,
+          buildResult,
+        );
+        perSuiteStage2.push(
+          mapBuildkiteResultToStage2(
+            run.runId,
+            run.modelId,
+            [suite],
+            buildResult,
+            suiteArtifactSummary,
+            startedAt,
+          ),
+        );
       }
 
-      // Aggregate per-suite results into a single Stage2Result. Use the last build
-      // for artifact resolution; suite-level outcomes are in suiteResults.
-      const lastResult = perSuiteResults[perSuiteResults.length - 1];
-      if (!lastResult) {
+      // Merge per-suite Stage2Results: mergeStage2Results unions each suite's
+      // scores map + suiteResults and derives overall status from all suites.
+      if (perSuiteStage2.length === 0) {
         return {
           status: 'failed',
           modelId: run.modelId,
@@ -739,26 +750,7 @@ export class Scheduler {
           completedAt: new Date().toISOString(),
         };
       }
-      const aggregatedBuildResult: BuildkiteBuildResult = {
-        status: overallStatus as BuildkiteBuildResult['status'],
-        buildNumber: lastResult.buildNumber,
-        buildUrl: lastResult.buildUrl,
-      };
-      const artifactSummary = await this.resolveEvalArtifactSummary(
-        buildkiteTrigger,
-        aggregatedBuildResult,
-      );
-      const stage2 = mapBuildkiteResultToStage2(
-        run.runId,
-        run.modelId,
-        suitesToRun,
-        aggregatedBuildResult,
-        artifactSummary,
-        startedAt,
-      );
-      // Override suiteResults with per-suite outcomes from the loop above
-      stage2.suiteResults = perSuiteResults.map((r) => ({ suite: r.suite, status: r.status }));
-      return stage2;
+      return mergeStage2Results(perSuiteStage2);
     };
 
     if (detachPoll) {

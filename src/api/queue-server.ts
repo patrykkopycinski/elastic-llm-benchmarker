@@ -670,7 +670,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   startQueueServer({
     port: Number(process.env.PORT) || 3200,
     esUrl: process.env.ES_URL ?? process.env.ELASTICSEARCH_URL,
-    esApiKey: process.env.ES_API_KEY,
+    esApiKey: process.env.ES_API_KEY ?? process.env.ELASTICSEARCH_API_KEY,
     esUsername: process.env.ES_USERNAME,
     esPassword: process.env.ES_PASSWORD,
     apiKeys: process.env.API_KEYS?.split(',').map((k) => k.trim()).filter(Boolean),

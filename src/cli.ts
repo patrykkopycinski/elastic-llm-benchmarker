@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import type { PipelineRun } from './scheduler/pipeline-state.js';
+import type { PipelineRun, Stage2Result } from './scheduler/pipeline-state.js';
 
 
 /**
@@ -53,6 +53,12 @@ import { ToolCallBenchmarkService } from './services/tool-call-benchmark.js';
 import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js';
 import { ConfigResearcherService } from './services/config-researcher.js';
 import { runEnqueue } from './cli/enqueue-handler.js';
+import { buildRecommendationReport } from './services/recommendation-report-builder.js';
+import {
+  mapBuildkiteResultToStage2,
+  mergeStage2Results,
+} from './services/ci-eval-stage2-mapper.js';
+import type { BuildkiteBuildResult } from './services/buildkite-eval-trigger.js';
 import { SystemHealthChecker } from './services/system-health-check.js';
 import { SlackNotifier } from './services/slack-notifier.js';
 import { LocalConnector } from './services/local-connector.js';
@@ -935,6 +941,143 @@ program
             printReportSummary(r);
           }
         }
+      }
+    } finally {
+      await store.close();
+    }
+  });
+
+// ─── regenerate-recommendation command ──────────────────────────────────
+// Rebuilds a model's recommendation report from persisted Stage 1/2/3 data
+// WITHOUT re-running any Buildkite builds. Use after a scoring-logic fix (e.g.
+// the per-suite score-extraction bug) to give an already-evaluated model its
+// corrected verdict. All inputs are read from ES — nothing is fabricated.
+program
+  .command('regenerate-recommendation')
+  .description("Rebuild a model's recommendation from persisted Stage 1/2/3 data (no build re-run)")
+  .requiredOption('--model <id>', 'Model ID to regenerate the recommendation for')
+  .action(async (opts) => {
+    const globalOpts = program.opts();
+    const jsonOutput = globalOpts['json'] as boolean;
+    const config = loadAppConfig({ config: globalOpts['config'] as string, json: jsonOutput });
+    if (!config) {
+      outputError('Cannot load configuration. Check --config.', jsonOutput);
+      process.exit(1);
+    }
+    const esClient = createEsClient(config);
+    if (!esClient) {
+      outputError('Cannot connect to Elasticsearch. Check config.', jsonOutput);
+      process.exit(1);
+    }
+
+    const store = new ElasticsearchResultsStore(esClient);
+    await store.initialize();
+
+    try {
+      const modelId = opts['model'] as string;
+
+      const prior = await store.getLatestRecommendation(modelId);
+      if (!prior) {
+        outputError(`No prior recommendation for ${modelId} — nothing to rebuild from`, jsonOutput);
+        process.exit(1);
+      }
+
+      // Corrected Stage 2: re-derive per-suite scores from the persisted per-suite
+      // CI eval builds via the (now-fixed) mapper — each suite keeps its own build.
+      const ciResults = await store.getCIEvalResults(modelId, { limit: 50 });
+      const runCi = ciResults.filter((r) => r.runId === prior.runId);
+      const latestBySuite = new Map<string, (typeof runCi)[number]>();
+      for (const r of runCi) {
+        const suite = r.evalSuites?.[0];
+        if (!suite || r.status === 'running') continue;
+        // ciResults are sorted @timestamp desc, so the first row per suite is the latest terminal one.
+        if (!latestBySuite.has(suite)) latestBySuite.set(suite, r);
+      }
+      if (latestBySuite.size === 0) {
+        outputError(`No terminal CI eval builds found for run ${prior.runId}`, jsonOutput);
+        process.exit(1);
+      }
+
+      const perSuiteStage2: Stage2Result[] = [];
+      for (const [suite, rec] of latestBySuite) {
+        const buildResult: BuildkiteBuildResult = {
+          status: rec.status === 'passed' ? 'passed' : 'failed',
+          buildNumber: rec.buildkiteBuildNumber,
+          buildUrl: rec.buildkiteBuildUrl,
+          artifacts: rec.artifacts
+            ? Object.entries(rec.artifacts).map(([filename, url]) => ({ filename, url }))
+            : undefined,
+        };
+        perSuiteStage2.push(
+          mapBuildkiteResultToStage2(prior.runId, modelId, [suite], buildResult, undefined, prior.evaluatedAt),
+        );
+      }
+      const stage2Result = mergeStage2Results(perSuiteStage2);
+
+      const stage3Result = (await store.getLatestReasoningResult(modelId)) ?? undefined;
+
+      // Reconstruct a minimal PipelineRun from the prior report's REAL Stage 1
+      // metrics + vLLM config (persisted from the actual benchmark run).
+      const m = prior.stage1Metrics;
+      const stage1Base = {
+        runId: prior.runId,
+        modelId,
+        queueEntryId: '',
+        rawOutput: '',
+        startedAt: prior.evaluatedAt,
+        completedAt: prior.evaluatedAt,
+      };
+      const run: PipelineRun = {
+        runId: prior.runId,
+        modelId,
+        queueEntryId: '',
+        stage: 'done',
+        startedAt: prior.evaluatedAt,
+        completedAt: prior.evaluatedAt,
+        benchmarkResult:
+          prior.stage1Passed && m
+            ? {
+                ...stage1Base,
+                status: 'success',
+                metrics: {
+                  itl_p50_ms: m.itl.p50,
+                  itl_p99_ms: m.itl.p99,
+                  ttft_ms: m.ttft.p50,
+                  throughput_tps: m.throughputTps,
+                  duration_sec: 0,
+                },
+              }
+            : { ...stage1Base, status: 'failed', metrics: null },
+        stage2Result,
+        stage3Result,
+        hfCard: {
+          modelId,
+          architecture: '',
+          contextLength: prior.vllmConfigUsed.contextLength ?? 0,
+          quantization: prior.vllmConfigUsed.quantization ? [prior.vllmConfigUsed.quantization] : [],
+          tensorParallelSize: 0,
+          vllmFlags: prior.vllmConfigUsed.flags ?? [],
+          toolCallParser: prior.vllmConfigUsed.toolCallParser,
+          parsedFrom: { readme: false, configJson: false, generationConfigJson: false },
+          warnings: [],
+        },
+      };
+
+      const report = buildRecommendationReport(run, { config, source: prior.source });
+      const id = await store.saveRecommendationReport(report);
+
+      if (jsonOutput) {
+        output({ id, before: { verdict: prior.verdict, confidence: prior.confidence }, after: report }, true);
+      } else {
+        console.error(`\nRegenerated recommendation for ${modelId}`);
+        console.error(`  verdict:    ${prior.verdict} → ${report.verdict}`);
+        console.error(`  confidence: ${prior.confidence} → ${report.confidence}`);
+        console.error(
+          `  suites:     ${report.passingEvals
+            .map((e) => `${e.suite}=${e.score}${e.passed ? ' pass' : ' FAIL'}`)
+            .join(', ')}`,
+        );
+        console.error(`  stored id:  ${id}`);
       }
     } finally {
       await store.close();
