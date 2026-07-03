@@ -508,6 +508,42 @@ export const benchmarkReasoningMapping = {
   '@timestamp': { type: 'date' },
 };
 
+/**
+ * Indices whose documents are written to a date-suffixed variant
+ * (`<base>-YYYY-MM-DD`) instead of the base index. Elasticsearch auto-creates
+ * those variants on first write with *dynamic* mappings — string fields become
+ * analyzed `text`, so `term` queries on `model_id` / `status` silently miss
+ * unless a composable index template forces the keyword mapping. Templates only
+ * apply to indices created after installation; already-created dynamically
+ * mapped indices are tolerated by the `.keyword`-aware read in
+ * `getLatestReasoningResult`.
+ */
+export const DATE_SUFFIXED_INDEX_BASES = [
+  INDEX_NAMES.BENCHMARKER_EVALUATIONS,
+  INDEX_NAMES.BENCHMARKER_STAGE2,
+  INDEX_NAMES.BENCHMARKER_REASONING,
+] as const;
+
+/**
+ * Installs composable index templates so every date-suffixed variant of the
+ * indices in {@link DATE_SUFFIXED_INDEX_BASES} inherits the correct keyword
+ * mappings. Mappings-only (no shard/replica settings) so it is safe on both
+ * stateful and serverless clusters. Idempotent: `putIndexTemplate` overwrites.
+ */
+export async function ensureDateSuffixedTemplates(esClient: Client): Promise<void> {
+  for (const base of DATE_SUFFIXED_INDEX_BASES) {
+    const config = INDEX_MAPPINGS[base];
+    if (!config) continue;
+    await esClient.indices.putIndexTemplate({
+      name: `${base}-template`,
+      index_patterns: [`${base}-*`],
+      template: {
+        mappings: config.mappings as Record<string, unknown>,
+      },
+    });
+  }
+}
+
 export async function ensureIndices(esClient: Client): Promise<void> {
   for (const [indexName, indexConfig] of Object.entries(INDEX_MAPPINGS)) {
     const exists = await esClient.indices.exists({ index: indexName });
@@ -519,4 +555,5 @@ export async function ensureIndices(esClient: Client): Promise<void> {
       });
     }
   }
+  await ensureDateSuffixedTemplates(esClient);
 }
