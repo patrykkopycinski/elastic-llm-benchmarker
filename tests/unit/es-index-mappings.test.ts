@@ -10,7 +10,7 @@ import {
 describe('es-index-mappings', () => {
   it('exports all expected index names as lowercase hyphenated strings', () => {
     const values = Object.values(INDEX_NAMES);
-    expect(values).toHaveLength(11);
+    expect(values).toHaveLength(12);
     values.forEach((name) => {
       expect(name).toEqual(name.toLowerCase());
       expect(name).toMatch(/^[a-z0-9-]+$/);
@@ -24,10 +24,23 @@ describe('es-index-mappings', () => {
       const entry = INDEX_MAPPINGS[name]!;
       expect(entry).toHaveProperty('mappings');
       expect(entry.mappings).toHaveProperty('properties');
+      // The daemon-lease index intentionally omits settings so the
+      // non-serverless-safe `ensureIndices` can create it on Serverless.
+      if (name === INDEX_NAMES.BENCHMARKER_DAEMON_LEASE) continue;
       expect(entry).toHaveProperty('settings');
       expect(entry.settings!).toHaveProperty('number_of_shards');
       expect(entry.settings!).toHaveProperty('number_of_replicas');
     }
+  });
+
+  it('maps benchmarker-daemon-lease without settings (serverless-safe) and with lease fields', () => {
+    const entry = INDEX_MAPPINGS[INDEX_NAMES.BENCHMARKER_DAEMON_LEASE]!;
+    expect(entry.settings).toBeUndefined();
+    const m = entry.mappings.properties;
+    expect(m).toHaveProperty('vm_host');
+    expect(m).toHaveProperty('owner_hostname');
+    expect(m).toHaveProperty('owner_pid');
+    expect(m).toHaveProperty('heartbeat_at');
   });
 
   it('maps benchmarker-results with nested benchmark_metrics', () => {
