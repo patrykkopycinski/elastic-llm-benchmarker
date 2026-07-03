@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
+import dns from 'dns';
 import type { TunnelConfig } from '../../src/types/config.js';
 import {
   TunnelService,
@@ -174,6 +178,26 @@ describe('TunnelService', () => {
   });
 
   describe('cloudflared provider', () => {
+    // Isolate the persisted-tunnel state dir per test so we never read the live daemon's
+    // ~/.elastic-llm-benchmarker state file (which would make these tests flaky).
+    let stateDir: string;
+    let originalStateDir: string | undefined;
+
+    beforeEach(async () => {
+      originalStateDir = process.env['BENCHMARKER_TUNNEL_STATE_DIR'];
+      stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'bench-tunnel-'));
+      process.env['BENCHMARKER_TUNNEL_STATE_DIR'] = stateDir;
+    });
+
+    afterEach(async () => {
+      if (originalStateDir === undefined) {
+        delete process.env['BENCHMARKER_TUNNEL_STATE_DIR'];
+      } else {
+        process.env['BENCHMARKER_TUNNEL_STATE_DIR'] = originalStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    });
+
     it('reports the cloudflared provider in status', () => {
       const config = createDefaultTunnelConfig({ enabled: true, provider: 'cloudflared' });
       const service = new TunnelService({ config });
@@ -205,6 +229,93 @@ describe('TunnelService', () => {
         expect(result.success).toBe(false);
         expect(result.tunnel).toBeNull();
         expect(result.error).toBeDefined();
+      } finally {
+        if (originalBin === undefined) {
+          delete process.env['CLOUDFLARED_BIN'];
+        } else {
+          process.env['CLOUDFLARED_BIN'] = originalBin;
+        }
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it('reuses a surviving tunnel (alive pid + resolving host) instead of spawning a fresh one', async () => {
+      const localPort = 19100;
+      const persistedUrl = 'https://reuse-me.trycloudflare.com';
+      // Persist a tunnel owned by a live pid (this test process) so isPidAlive() is true.
+      await fs.writeFile(
+        path.join(stateDir, `cloudflared-${localPort}.json`),
+        JSON.stringify({
+          pid: process.pid,
+          url: persistedUrl,
+          localPort,
+          establishedAt: '2026-01-01T00:00:00.000Z',
+        }),
+        'utf8',
+      );
+      // Host still resolves ⇒ safe to reuse. (Same object ref as the module's dnsPromises.)
+      const resolveSpy = vi
+        .spyOn(dns.promises, 'resolve4')
+        .mockResolvedValue(['1.2.3.4'] as unknown as string[]);
+
+      const config = createDefaultTunnelConfig({
+        enabled: true,
+        provider: 'cloudflared',
+        localPort,
+        retryAttempts: 0,
+        timeoutMs: 2_000,
+      });
+      const service = new TunnelService({ config, logLevel: 'error' });
+
+      try {
+        const result = await service.connect();
+        expect(result.success).toBe(true);
+        expect(result.reused).toBe(true);
+        expect(result.tunnel?.publicUrl).toBe(persistedUrl);
+        expect(result.tunnel?.provider).toBe('cloudflared');
+      } finally {
+        resolveSpy.mockRestore();
+      }
+    });
+
+    it('drops a stale state file (dead pid) and does not reuse it', async () => {
+      const localPort = 19200;
+      const stateFile = path.join(stateDir, `cloudflared-${localPort}.json`);
+      // pid extremely unlikely to be alive ⇒ isPidAlive() false ⇒ checkExisting clears it.
+      await fs.writeFile(
+        stateFile,
+        JSON.stringify({
+          pid: 2_147_483_646,
+          url: 'https://dead.trycloudflare.com',
+          localPort,
+          establishedAt: '2026-01-01T00:00:00.000Z',
+        }),
+        'utf8',
+      );
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) } as Response),
+      );
+      const originalBin = process.env['CLOUDFLARED_BIN'];
+      process.env['CLOUDFLARED_BIN'] = '/nonexistent/cloudflared-binary';
+
+      const config = createDefaultTunnelConfig({
+        enabled: true,
+        provider: 'cloudflared',
+        localPort,
+        retryAttempts: 0,
+        timeoutMs: 2_000,
+      });
+      const service = new TunnelService({ config, logLevel: 'error' });
+
+      try {
+        const result = await service.connect();
+        // Reuse rejected (dead pid); falls through to create() which fails on missing binary.
+        expect(result.reused).toBe(false);
+        expect(result.success).toBe(false);
+        // Stale state file must have been removed.
+        await expect(fs.access(stateFile)).rejects.toBeDefined();
       } finally {
         if (originalBin === undefined) {
           delete process.env['CLOUDFLARED_BIN'];

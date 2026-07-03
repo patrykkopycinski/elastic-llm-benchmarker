@@ -1,11 +1,85 @@
 import { spawn, execFile, type ChildProcess } from 'child_process';
 import { promises as dnsPromises } from 'dns';
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import { promisify } from 'util';
 import { createLogger } from '../utils/logger.js';
 import type { TunnelConfig, TunnelProvider } from '../types/config.js';
 
 const NGROK_LOCAL_API = 'http://127.0.0.1:4040';
 const execFileAsync = promisify(execFile);
+
+// ─── cloudflared tunnel state persistence ───────────────────────────────────
+//
+// A cloudflared quick tunnel mints a NEW random *.trycloudflare.com hostname on
+// every process start, and the old hostname stops resolving the instant the
+// owning process exits. If a daemon restart (crash, SIGKILL, redeploy) spawns a
+// fresh tunnel, every in-flight Buildkite eval build still holds the OLD injected
+// URL and fails with `ENOTFOUND` from the remote CI agent (observed: Ornith
+// builds #188–191). To avoid that, we persist the surviving tunnel's pid + URL to
+// a stable file and REUSE it across daemon restarts instead of rotating it.
+
+interface CloudflaredState {
+  pid: number;
+  url: string;
+  localPort: number;
+  establishedAt: string;
+}
+
+function cloudflaredStateFile(localPort: number): string {
+  const dir =
+    process.env['BENCHMARKER_TUNNEL_STATE_DIR'] ??
+    path.join(os.homedir(), '.elastic-llm-benchmarker');
+  return path.join(dir, `cloudflared-${localPort}.json`);
+}
+
+async function readCloudflaredState(localPort: number): Promise<CloudflaredState | null> {
+  try {
+    const raw = await fs.readFile(cloudflaredStateFile(localPort), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<CloudflaredState>;
+    if (
+      parsed &&
+      typeof parsed.pid === 'number' &&
+      typeof parsed.url === 'string' &&
+      parsed.localPort === localPort &&
+      typeof parsed.establishedAt === 'string'
+    ) {
+      return parsed as CloudflaredState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeCloudflaredState(state: CloudflaredState): Promise<void> {
+  const file = cloudflaredStateFile(state.localPort);
+  try {
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify(state), 'utf8');
+  } catch {
+    // best-effort — a failed write only means the next restart can't reuse the tunnel
+  }
+}
+
+async function clearCloudflaredState(localPort: number): Promise<void> {
+  try {
+    await fs.rm(cloudflaredStateFile(localPort), { force: true });
+  } catch {
+    // ignore
+  }
+}
+
+/** True when `pid` is a live process. ESRCH ⇒ dead; EPERM ⇒ alive but owned by another user. */
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
 
 /** Kill zombie `ngrok http <port>` processes left by a prior daemon (API on :4040 may be dead). */
 async function killOrphanNgrokForPort(localPort: number): Promise<void> {
@@ -484,18 +558,56 @@ const TRYCLOUDFLARE_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
 class CloudflaredProvider implements TunnelProvider_Impl {
   private readonly logger;
   private cliProcess: ChildProcess | null = null;
+  /** Remembered so disconnect() can clear/kill the persisted tunnel without an arg. */
+  private lastLocalPort: number | null = null;
 
   constructor(logLevel: string) {
     this.logger = createLogger(logLevel);
   }
 
-  async checkExisting(_localPort: number): Promise<TunnelInfo | null> {
-    // Quick tunnels expose no discovery API and mint a new random hostname each
-    // run, so there is nothing reusable across process boundaries. Always fresh.
-    return null;
+  async checkExisting(localPort: number): Promise<TunnelInfo | null> {
+    this.lastLocalPort = localPort;
+    // A quick tunnel started by a PRIOR daemon survives a daemon restart (it's spawned
+    // detached). Reuse it — same pid, same hostname — so any in-flight CI build's
+    // injected URL keeps resolving instead of being orphaned by a fresh spawn.
+    const state = await readCloudflaredState(localPort);
+    if (!state) {
+      return null;
+    }
+    if (!isPidAlive(state.pid)) {
+      await clearCloudflaredState(localPort);
+      return null;
+    }
+    let host: string;
+    try {
+      host = new URL(state.url).hostname;
+    } catch {
+      await clearCloudflaredState(localPort);
+      return null;
+    }
+    // A rotated/dead tunnel stops resolving instantly; only a still-resolving hostname
+    // is safe to hand back for reuse (authoritative DNS, never getaddrinfo).
+    const resolvable = await waitForDnsPropagation(host, 6_000);
+    if (!resolvable) {
+      return null;
+    }
+    this.logger.info('Reusing surviving cloudflared quick tunnel', {
+      url: state.url,
+      localPort,
+      pid: state.pid,
+    });
+    return {
+      publicUrl: state.url,
+      provider: 'cloudflared',
+      localPort,
+      establishedAt: state.establishedAt,
+      tunnelId: String(state.pid),
+      region: null,
+    };
   }
 
   async create(localPort: number): Promise<TunnelInfo> {
+    this.lastLocalPort = localPort;
     await this.disconnect();
     await killOrphanCloudflaredForPort(localPort);
     await waitForLocalBackend(localPort);
@@ -508,10 +620,12 @@ class CloudflaredProvider implements TunnelProvider_Impl {
 
     this.logger.info('Starting cloudflared quick tunnel', { localPort, bin });
 
+    // detached so the tunnel OUTLIVES a daemon crash/restart — the reuse path in
+    // checkExisting() then reattaches to it instead of rotating the URL.
     this.cliProcess = spawn(bin, args, {
       env: { ...process.env },
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
+      detached: true,
     });
 
     let output = '';
@@ -560,17 +674,26 @@ class CloudflaredProvider implements TunnelProvider_Impl {
             { host, localPort },
           );
         }
+        const establishedAt = new Date().toISOString();
+        const pid = this.cliProcess.pid;
+        if (pid !== undefined) {
+          await writeCloudflaredState({ pid, url: resolvedUrl, localPort, establishedAt });
+          // Let the daemon exit without waiting on the detached tunnel; the persisted
+          // pid + URL let a restarted daemon reattach via checkExisting().
+          this.cliProcess.unref();
+        }
         this.logger.info('Cloudflared tunnel established', {
           url: resolvedUrl,
           localPort,
+          pid,
           dnsPropagated: propagated,
         });
         return {
           publicUrl: resolvedUrl,
           provider: 'cloudflared',
           localPort,
-          establishedAt: new Date().toISOString(),
-          tunnelId: null,
+          establishedAt,
+          tunnelId: pid !== undefined ? String(pid) : null,
           region: null,
         };
       }
@@ -600,6 +723,20 @@ class CloudflaredProvider implements TunnelProvider_Impl {
       this.cliProcess.kill('SIGTERM');
     }
     this.cliProcess = null;
+    // Across a daemon restart we no longer hold the child handle, so also terminate the
+    // detached survivor by its persisted pid and drop the state file — otherwise a stale
+    // entry would make the NEXT checkExisting() reuse a tunnel we intended to tear down.
+    if (this.lastLocalPort !== null) {
+      const state = await readCloudflaredState(this.lastLocalPort);
+      if (state && isPidAlive(state.pid)) {
+        try {
+          process.kill(state.pid, 'SIGTERM');
+        } catch {
+          // already gone
+        }
+      }
+      await clearCloudflaredState(this.lastLocalPort);
+    }
     this.logger.info('Cloudflared tunnel disconnected');
   }
 }
@@ -871,13 +1008,17 @@ export class TunnelService {
       provider: this.config.provider,
       localPort: this.config.localPort,
     });
-    await this.provider.disconnect();
     this.currentTunnel = null;
     if (this.config.provider === 'cloudflared') {
-      await killOrphanCloudflaredForPort(this.config.localPort);
-    } else {
-      await killOrphanNgrokForPort(this.config.localPort);
+      // Reuse-first: a cloudflared quick-tunnel URL is injected into in-flight CI builds,
+      // so it must NOT be rotated while the tunnel process is still alive (a transient
+      // public-endpoint blip must not orphan a running eval). connect()'s checkExisting()
+      // reattaches to the surviving detached tunnel; only when it's genuinely dead
+      // (pid gone or hostname no longer resolving) does it spawn a fresh one.
+      return this.connect();
     }
+    await this.provider.disconnect();
+    await killOrphanNgrokForPort(this.config.localPort);
     return this.connect();
   }
 

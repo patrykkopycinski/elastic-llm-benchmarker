@@ -152,9 +152,10 @@ export class VllmPublicEndpointResolver {
         };
       }
 
-      if (!this.tunnel.ngrokAuthToken) {
+      // cloudflared quick tunnels need no auth token; only ngrok requires one.
+      if (this.tunnel.provider === 'ngrok' && !this.tunnel.ngrokAuthToken) {
         this.logger.warn(
-          'Tunnel enabled but NGROK_AUTH_TOKEN missing — local smoke via SSH forward only',
+          'Ngrok tunnel enabled but NGROK_AUTH_TOKEN missing — local smoke via SSH forward only',
         );
         return {
           endpointUrl: localUrl,
