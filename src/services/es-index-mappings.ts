@@ -12,6 +12,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_REASONING: 'benchmark-reasoning',
   RECOMMENDATION_REPORTS: 'recommendation-reports',
   BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
+  BENCHMARKER_DAEMON_LEASE: 'benchmarker-daemon-lease',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -411,6 +412,22 @@ export const INDEX_MAPPINGS: Record<
     settings: {
       number_of_shards: 1,
       number_of_replicas: 1,
+    },
+  },
+  // Cross-host mutual-exclusion lease for the shared GPU VM. Exactly one doc
+  // per VM host; a fresh heartbeat means another benchmarker daemon owns the
+  // VM. No `settings` block on purpose: the start path creates indices via the
+  // non-serverless-safe `ensureIndices`, so shard/replica keys would fail on
+  // Elasticsearch Serverless. Defaults are fine for a single-doc index.
+  [INDEX_NAMES.BENCHMARKER_DAEMON_LEASE]: {
+    mappings: {
+      properties: {
+        vm_host: { type: 'keyword' },
+        owner_hostname: { type: 'keyword' },
+        owner_pid: { type: 'integer' },
+        acquired_at: { type: 'date' },
+        heartbeat_at: { type: 'date' },
+      },
     },
   },
 };
