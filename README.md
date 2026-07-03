@@ -136,7 +136,7 @@ The CLI has two binaries that share the same entry point (`src/cli.ts`):
     "maxToolCallLatencyMs": 1000,
     "minToolCallSuccessRate": 1.0,
     "concurrencyLevels": [1, 4, 16],
-    "healthCheckTimeoutSeconds": 600
+    "healthCheckTimeoutSeconds": 1800
   },
   "smokeTest": {
     "healthTimeoutMs": 10000,

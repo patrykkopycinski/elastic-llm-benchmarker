@@ -125,7 +125,7 @@ const DEFAULT_API_PORT = 8000;
 const DEFAULT_PULL_TIMEOUT_MS = 600_000; // 10 minutes
 const DEFAULT_RUN_TIMEOUT_MS = 30_000; // 30 seconds
 const DEFAULT_STOP_TIMEOUT_MS = 60_000; // 60 seconds (large models take longer to stop)
-const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 1_200_000; // 20 minutes (70B+ models need extended load time)
+const DEFAULT_HEALTH_CHECK_TIMEOUT_MS = 1_800_000; // 30 minutes. Ceiling for the poll-until-ready wait; large models (35B+) downloading weights on first run need extended load time. Fast models return on first healthy poll and fatal errors (OOM/arch) abort early, so a high ceiling is zero-cost for them.
 const DEFAULT_HEALTH_CHECK_INTERVAL_MS = 10_000; // 10 seconds
 const DEFAULT_GPU_MEMORY_UTILIZATION = 0.95;
 
