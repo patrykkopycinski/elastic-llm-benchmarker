@@ -16,6 +16,20 @@ export interface CiEvalInfrastructureGuardOptions {
   publicEndpointUrl?: string;
   /** Ngrok tunnel service for reconnect when the public URL dies mid-poll. */
   tunnelService?: TunnelService;
+  /**
+   * Model id this deployment is expected to serve. When set, the guard verifies the
+   * local endpoint still serves this model and flags a takeover if a foreign model
+   * is served on the shared VM (see `onTakeover`).
+   */
+  expectedModelId?: string;
+  /**
+   * Fired once when the guard detects the deployment was taken over externally on a
+   * shared VM — either the container was `docker rm`'d (a `docker start` can never
+   * recover it) or a foreign model now serves on the endpoint. After firing, the guard
+   * stops attempting restarts. The caller should abort Stage 2 cleanly (retriable),
+   * NOT redeploy over the foreign container.
+   */
+  onTakeover?: (reason: string) => void;
   useSudo?: boolean;
   checkIntervalMs?: number;
   logLevel?: string;
@@ -32,6 +46,8 @@ export class CiEvalInfrastructureGuard {
     CiEvalInfrastructureGuardOptions;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
+  /** Set once an unrecoverable external takeover is detected; halts all guard actions. */
+  private fatal = false;
 
   constructor(options: CiEvalInfrastructureGuardOptions) {
     this.options = {
@@ -65,7 +81,7 @@ export class CiEvalInfrastructureGuard {
   }
 
   private async checkOnce(): Promise<void> {
-    if (this.checking) return;
+    if (this.checking || this.fatal) return;
     this.checking = true;
     try {
       await this.ensureContainerRunning();
@@ -170,8 +186,36 @@ export class CiEvalInfrastructureGuard {
   }
 
   private async ensureContainerRunning(): Promise<void> {
+    if (this.fatal) return;
+
     const running = await this.isContainerRunning();
-    if (running) return;
+    if (running) {
+      // Our named container is up. On a shared VM, confirm it still serves the expected
+      // model — guards against a foreign redeploy that reused the port under our name.
+      if (this.options.expectedModelId) {
+        const served = await this.servedModelId();
+        if (served && served !== this.options.expectedModelId) {
+          this.markTakeover(
+            `endpoint serves foreign model "${served}" (expected "${this.options.expectedModelId}")`,
+          );
+        }
+      }
+      return;
+    }
+
+    // Not running. Distinguish a recoverable stop from an unrecoverable external teardown:
+    // if the container no longer exists it was `docker rm`'d (often because another
+    // benchmarker instance redeployed on the shared VM). `docker start` can never recover
+    // this, so abort instead of spinning every interval forever.
+    if (!(await this.containerExists())) {
+      const served = await this.servedModelId();
+      this.markTakeover(
+        served
+          ? `container removed externally; endpoint now serves "${served}"`
+          : 'container removed externally',
+      );
+      return;
+    }
 
     const exitInfo = await this.getContainerExitInfo();
     this.logger.warn('CI eval guard: vLLM container not running — starting', {
@@ -206,6 +250,44 @@ export class CiEvalInfrastructureGuard {
       return false;
     }
     return result.stdout.trim() === 'true';
+  }
+
+  /**
+   * True when the named container still exists (any state). `docker inspect` returns
+   * non-zero for a removed container, which is how we tell "stopped" (recoverable) from
+   * "removed" (external teardown, unrecoverable via `docker start`).
+   */
+  private async containerExists(): Promise<boolean> {
+    const result = await this.options.sshPool.exec(
+      this.options.ssh,
+      `docker inspect -f '{{.State.Status}}' ${this.options.deploymentName}`,
+      { timeout: 30_000, sudo: this.options.useSudo },
+    );
+    return result.success;
+  }
+
+  /** The first model id served by the local vLLM endpoint, or undefined if unreachable. */
+  private async servedModelId(): Promise<string | undefined> {
+    const url = `http://127.0.0.1:${this.options.localPort}/v1/models`;
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
+      if (!res.ok) return undefined;
+      const body = (await res.json()) as { data?: Array<{ id?: string }> };
+      return body.data?.[0]?.id;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Records an unrecoverable external takeover exactly once and halts the guard. */
+  private markTakeover(reason: string): void {
+    if (this.fatal) return;
+    this.fatal = true;
+    this.logger.error(
+      'CI eval guard: vLLM deployment taken over externally — halting guard (Stage 2 must abort, not redeploy over foreign container)',
+      { deploymentName: this.options.deploymentName, reason },
+    );
+    this.options.onTakeover?.(reason);
   }
 
   private async getContainerExitInfo(): Promise<{

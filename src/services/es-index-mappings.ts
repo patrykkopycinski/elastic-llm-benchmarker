@@ -398,6 +398,7 @@ export const INDEX_MAPPINGS: Record<
         buildkite_build_number: { type: 'integer' },
         pipeline_slug: { type: 'keyword' },
         status: { type: 'keyword' },
+        buildkite_state: { type: 'keyword' },
         eval_suites: { type: 'keyword' },
         scores: { type: 'object', enabled: false },
         artifacts: { type: 'object', enabled: false },

@@ -1,5 +1,7 @@
 import type { Stage1Result } from '../scheduler/pipeline-state.js';
 import type { AppConfig } from '../types/config.js';
+import { resolveMaxItlP50Ms } from '../types/config.js';
+import { getModelParamsBillions } from '../services/gpu-requirements.js';
 
 /**
  * Gate that decides whether a model is eligible for Stage 2 benchmarks
@@ -25,7 +27,11 @@ export class Stage2Gate {
     }
 
     const { metrics } = result;
-    const { maxItlP50Ms, maxTtftMs, minThroughputTps } = this.thresholds;
+    const { maxTtftMs, minThroughputTps } = this.thresholds;
+    const maxItlP50Ms = resolveMaxItlP50Ms(
+      this.thresholds,
+      getModelParamsBillions(result.modelId),
+    );
 
     if (metrics.itl_p50_ms > maxItlP50Ms) {
       return {

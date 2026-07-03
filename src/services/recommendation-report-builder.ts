@@ -1,5 +1,7 @@
 import type { PipelineRun } from '../scheduler/pipeline-state.js';
 import type { AppConfig } from '../types/config.js';
+import { resolveMaxItlP50Ms } from '../types/config.js';
+import { getModelParamsBillions } from './gpu-requirements.js';
 import type {
   RecommendationReport,
   Verdict,
@@ -57,11 +59,15 @@ export function buildRecommendationReport(
   if (!stage1Passed && stage1?.metrics) {
     const m = stage1.metrics;
     const thresholds = config.stage2Thresholds;
-    if (m.itl_p50_ms > thresholds.maxItlP50Ms) {
+    const maxItlP50Ms = resolveMaxItlP50Ms(
+      thresholds,
+      getModelParamsBillions(run.modelId),
+    );
+    if (m.itl_p50_ms > maxItlP50Ms) {
       blockingIssues.push({
         severity: 'critical',
         category: 'performance',
-        message: `ITL p50 (${m.itl_p50_ms}ms) exceeds threshold (${thresholds.maxItlP50Ms}ms)`,
+        message: `ITL p50 (${m.itl_p50_ms}ms) exceeds threshold (${maxItlP50Ms}ms)`,
       });
     }
     if (m.throughput_tps < thresholds.minThroughputTps) {

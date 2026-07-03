@@ -32,7 +32,10 @@ jobs:
         run: npm run test -- --run
 
       - name: Audit
-        run: npm audit --audit-level high
+        # Audit runtime (production) dependencies only. The daemon ships prod deps;
+        # dev-only test tooling (vitest/vite/esbuild dev-server advisories) is never in
+        # the deployed artifact and shouldn't gate merges on upstream test-framework churn.
+        run: npm audit --omit=dev --audit-level high
 
       - name: Build
         run: npm run build
