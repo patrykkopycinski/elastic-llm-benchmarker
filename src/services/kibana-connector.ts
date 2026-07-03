@@ -364,6 +364,10 @@ export class KibanaConnectorService {
         apiProvider: 'Other',
         apiUrl: `${normalizedApiUrl}/chat/completions`,
         defaultModel: modelId,
+        // Our vLLM containers emit native OpenAI `tool_calls` (--enable-auto-tool-choice), so force
+        // native function calling. Without this, `apiProvider: 'Other'` defaults to simulated FC and
+        // Kibana's inline parser throws 500 "Missing name for tool use" on tool-calling responses.
+        enableNativeFunctionCalling: true,
       },
       secrets: {
         // vLLM does not require an API key by default,

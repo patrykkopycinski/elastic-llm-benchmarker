@@ -178,7 +178,12 @@ describe('VllmDeploymentService', () => {
 
       expect(command).toContain('docker run -d');
       expect(command).toContain('--name vllm-model-test');
-      expect(command).toContain('--restart unless-stopped');
+      // Internal Stage-1 deploy must NOT auto-restart: a crash mid-benchmark would respawn the
+      // container and kill the exec'd benchmark (exit 137). Stage-2 keep-alive is applied later by
+      // CiEvalInfrastructureGuard via `docker update --restart unless-stopped`.
+      expect(command).not.toContain('--restart unless-stopped');
+      // HF weights are cached in a shared named volume, not the container's writable layer.
+      expect(command).toContain('-v vllm-hf-cache:/root/.cache/huggingface');
       expect(command).toContain('--gpus all');
       expect(command).toContain('--shm-size=16g');
       expect(command).toContain('-p 8000:8000');
@@ -538,6 +543,64 @@ describe('VllmDeploymentService', () => {
       const pullIdx = commands.findIndex((c) => c.includes('docker pull'));
       expect(rmIdx).toBeGreaterThan(-1);
       expect(pullIdx).toBeGreaterThan(rmIdx);
+    });
+
+    it('force-removes the exact target container name before docker run even when the ancestor sweep finds nothing', async () => {
+      // Regression: a stale container whose image digest drifted from the current
+      // `vllm/vllm-openai:latest` is invisible to the ancestor-filtered listContainers()
+      // sweep, so it survives and then collides on `docker run --name`. The deploy must
+      // issue a `docker rm -f <exact-name>` right before the run regardless.
+      const model = createTestModel();
+      const commands: string[] = [];
+      let runName = '';
+
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        commands.push(command);
+
+        // Ancestor-filtered sweep finds nothing (digest drift hid the stale container).
+        if (command.includes('docker ps')) {
+          return Promise.resolve(createCommandResult({ stdout: '', success: true }));
+        }
+        if (command.includes('docker pull')) {
+          return Promise.resolve(createCommandResult({ success: true, durationMs: 1000 }));
+        }
+        if (command.includes('docker run')) {
+          const m = command.match(/--name (\S+)/);
+          runName = m?.[1] ?? '';
+          return Promise.resolve(
+            createCommandResult({ stdout: 'newcontainer123\n', success: true }),
+          );
+        }
+        if (command.includes('docker inspect')) {
+          return Promise.resolve(createCommandResult({ stdout: 'true', success: true }));
+        }
+        if (command.includes('/health')) {
+          return Promise.resolve(createCommandResult({ stdout: 'OK', success: true }));
+        }
+        if (command.includes('/v1/models')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: JSON.stringify({ data: [{ max_model_len: 128000 }] }),
+              success: true,
+            }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ success: true }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new VllmDeploymentService(pool, 'error');
+
+      await service.deploy(testSSHConfig, model, testHardwareProfile);
+
+      // The exact name used by `docker run --name` must have been force-removed first.
+      expect(runName).toMatch(/^vllm-/);
+      const targetedRmIdx = commands.findIndex(
+        (c) => c.includes(`docker rm -f ${runName}`),
+      );
+      const runIdx = commands.findIndex((c) => c.includes('docker run'));
+      expect(targetedRmIdx).toBeGreaterThan(-1);
+      expect(runIdx).toBeGreaterThan(targetedRmIdx);
     });
 
     it('throws ContainerError when docker pull fails', async () => {
