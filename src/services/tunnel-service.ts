@@ -1,4 +1,5 @@
 import { spawn, execFile, type ChildProcess } from 'child_process';
+import { promises as dnsPromises } from 'dns';
 import { promisify } from 'util';
 import { createLogger } from '../utils/logger.js';
 import type { TunnelConfig, TunnelProvider } from '../types/config.js';
@@ -26,10 +27,90 @@ async function killOrphanNgrokForPort(localPort: number): Promise<void> {
       }),
     );
     if (pids.length > 0) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // A killed agent's ngrok cloud endpoint stays "online" for a few seconds after the
+      // local process dies (heartbeat lag). Wait for that dereg to propagate before the
+      // caller spawns a fresh agent on the same reserved domain, else it hits ERR_NGROK_334
+      // ("endpoint already online") against the orphan we just killed.
+      await new Promise((resolve) => setTimeout(resolve, 3_000));
     }
   } catch {
     // pgrep exit 1 = no matches
+  }
+}
+
+/** Kill zombie `cloudflared tunnel --url http://127.0.0.1:<port>` processes from a prior daemon. */
+async function killOrphanCloudflaredForPort(localPort: number): Promise<void> {
+  const pattern = `cloudflared tunnel --url http://127.0.0.1:${localPort}`;
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern]);
+    const pids = stdout
+      .trim()
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await Promise.all(
+      pids.map(async (pid) => {
+        try {
+          await execFileAsync('kill', ['-TERM', pid]);
+        } catch {
+          // already exited
+        }
+      }),
+    );
+  } catch {
+    // pgrep exit 1 = no matches
+  }
+}
+
+/**
+ * Wait for a freshly-minted public hostname to become resolvable via
+ * **authoritative** DNS (`dns.resolve4`), returning the boolean result.
+ *
+ * This exists to work around a macOS resolver trap: `getaddrinfo` (which
+ * `fetch`/undici use via `dns.lookup`) negatively caches the NXDOMAIN from the
+ * FIRST lookup of a not-yet-propagated hostname and keeps serving it for the
+ * record's TTL — so a too-early `fetch` poisons the cache and every later
+ * `fetch` from the same host fails with `ENOTFOUND` even after the tunnel is
+ * live. `dns.resolve4` queries the DNS servers directly and bypasses that
+ * cache, so we poll it (never `getaddrinfo`) until the record propagates before
+ * handing the URL to any `fetch`-based consumer (the CI-eval guard) or to
+ * Buildkite. Returns false if it never resolves within the window.
+ */
+async function waitForDnsPropagation(host: string, timeoutMs = 60_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const addrs = await dnsPromises.resolve4(host);
+      if (addrs.length > 0) {
+        return true;
+      }
+    } catch {
+      // record not propagated to authoritative DNS yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+  }
+  return false;
+}
+
+/**
+ * Wait (up to 15s) for the local backend — the SSH port-forward to the GPU VM's
+ * vLLM — to answer `/v1/models`, so early eval requests don't race an unready
+ * upstream. Shared by all tunnel providers.
+ */
+async function waitForLocalBackend(localPort: number): Promise<void> {
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${localPort}/v1/models`, {
+        signal: AbortSignal.timeout(3_000),
+      });
+      if (res.ok) {
+        return;
+      }
+    } catch {
+      // wait for SSH forward / vLLM to become reachable
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
   }
 }
 
@@ -187,7 +268,12 @@ export function isPublicTunnelUrl(url: string): boolean {
     if (host === 'localhost' || host === '127.0.0.1') {
       return false;
     }
-    return host.includes('ngrok') || host.endsWith('.dev') || host.endsWith('.app');
+    return (
+      host.includes('ngrok') ||
+      host.endsWith('.trycloudflare.com') ||
+      host.endsWith('.dev') ||
+      host.endsWith('.app')
+    );
   } catch {
     return false;
   }
@@ -261,20 +347,7 @@ class NgrokProvider implements TunnelProvider_Impl {
     await this.disconnect();
     await killOrphanNgrokForPort(localPort);
 
-    const apiDeadline = Date.now() + 15_000;
-    while (Date.now() < apiDeadline) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${localPort}/v1/models`, {
-          signal: AbortSignal.timeout(3_000),
-        });
-        if (res.ok) {
-          break;
-        }
-      } catch {
-        // wait for SSH forward / vLLM to become reachable
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+    await waitForLocalBackend(localPort);
 
     const bin = process.env['NGROK_BIN'] ?? 'ngrok';
     const args = ['http', String(localPort), '--log=stdout', '--log-level=warn'];
@@ -294,11 +367,26 @@ class NgrokProvider implements TunnelProvider_Impl {
       bin,
     });
 
+    // Capture stdout/stderr (not 'ignore') so an immediate ngrok exit — session-limit
+    // (ERR_NGROK_108), auth failure, domain-in-use, etc. — surfaces its real reason
+    // instead of being masked by a generic "failed to expose" timeout message. ngrok's
+    // structured `--log=stdout` lines land here.
     this.cliProcess = spawn(bin, args, {
       env,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       detached: false,
     });
+
+    let ngrokOutput = '';
+    const captureOutput = (chunk: Buffer): void => {
+      ngrokOutput += chunk.toString();
+      // Bound the buffer — we only need the tail (where errors appear) for diagnosis.
+      if (ngrokOutput.length > 8_000) {
+        ngrokOutput = ngrokOutput.slice(-8_000);
+      }
+    };
+    this.cliProcess.stdout?.on('data', captureOutput);
+    this.cliProcess.stderr?.on('data', captureOutput);
 
     // Without an 'error' listener, a spawn failure (e.g. ENOENT when the ngrok binary
     // is missing or NGROK_BIN is misconfigured) is emitted as an uncaught exception that
@@ -311,6 +399,7 @@ class NgrokProvider implements TunnelProvider_Impl {
 
     const deadlineMs = 45_000;
     const started = Date.now();
+    let exitedEarly = false;
     while (Date.now() - started < deadlineMs) {
       await new Promise((resolve) => setTimeout(resolve, 500));
       if (spawnError) {
@@ -325,15 +414,26 @@ class NgrokProvider implements TunnelProvider_Impl {
         return tunnel;
       }
       if (this.cliProcess.exitCode !== null) {
+        exitedEarly = true;
         break;
       }
     }
 
+    const exitCode = this.cliProcess?.exitCode ?? null;
     await this.disconnect();
     if (spawnError) {
       throw new Error(`ngrok CLI failed to start (${bin}): ${(spawnError as Error).message}`);
     }
-    throw new Error(`ngrok CLI failed to expose port ${localPort} within ${deadlineMs}ms`);
+    // Include the captured ngrok output so the real failure cause (e.g. ERR_NGROK_108
+    // "your account is limited to 1 simultaneous ngrok agent session") is visible in
+    // the daemon log and the Stage-2 abort reason, not swallowed.
+    const detail = ngrokOutput.trim() ? ` — ngrok output: ${ngrokOutput.trim().slice(-1_000)}` : '';
+    if (exitedEarly || exitCode !== null) {
+      throw new Error(
+        `ngrok CLI exited early (code ${exitCode ?? 'unknown'}) before exposing port ${localPort}${detail}`,
+      );
+    }
+    throw new Error(`ngrok CLI failed to expose port ${localPort} within ${deadlineMs}ms${detail}`);
   }
 
   async disconnect(): Promise<void> {
@@ -360,6 +460,147 @@ class NgrokProvider implements TunnelProvider_Impl {
     );
 
     this.logger.info('Ngrok tunnel disconnected');
+  }
+}
+
+// ─── Cloudflared Provider ─────────────────────────────────────────────────────
+
+/** Matches a Cloudflare quick-tunnel hostname in cloudflared's log output. */
+const TRYCLOUDFLARE_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com/i;
+
+/**
+ * Cloudflare quick-tunnel provider.
+ *
+ * Runs `cloudflared tunnel --url http://localhost:<port>` which allocates a
+ * fresh, random `*.trycloudflare.com` hostname on every invocation. Because the
+ * hostname is ephemeral and unreserved, it can never collide with a stale
+ * cloud-side endpoint the way ngrok's single free-tier reserved domain does
+ * (ERR_NGROK_334). No account, auth token, or domain reservation is required —
+ * this is the robust choice for unattended autonomous runs.
+ *
+ * The public URL is parsed from cloudflared's own log output (stdout/stderr);
+ * there is no local inspector API to poll.
+ */
+class CloudflaredProvider implements TunnelProvider_Impl {
+  private readonly logger;
+  private cliProcess: ChildProcess | null = null;
+
+  constructor(logLevel: string) {
+    this.logger = createLogger(logLevel);
+  }
+
+  async checkExisting(_localPort: number): Promise<TunnelInfo | null> {
+    // Quick tunnels expose no discovery API and mint a new random hostname each
+    // run, so there is nothing reusable across process boundaries. Always fresh.
+    return null;
+  }
+
+  async create(localPort: number): Promise<TunnelInfo> {
+    await this.disconnect();
+    await killOrphanCloudflaredForPort(localPort);
+    await waitForLocalBackend(localPort);
+
+    const bin = process.env['CLOUDFLARED_BIN'] ?? 'cloudflared';
+    // Use 127.0.0.1 (not `localhost`) so cloudflared reaches the IPv4 SSH port-forward
+    // directly — on macOS `localhost` can resolve to ::1 (IPv6) first, which the
+    // forward does not bind, silently 502-ing every proxied request.
+    const args = ['tunnel', '--url', `http://127.0.0.1:${localPort}`, '--no-autoupdate'];
+
+    this.logger.info('Starting cloudflared quick tunnel', { localPort, bin });
+
+    this.cliProcess = spawn(bin, args, {
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    let output = '';
+    let resolvedUrl: string | null = null;
+    const capture = (chunk: Buffer): void => {
+      output += chunk.toString();
+      if (!resolvedUrl) {
+        const match = output.match(TRYCLOUDFLARE_URL_RE);
+        if (match) {
+          resolvedUrl = match[0];
+        }
+      }
+      // Bound the buffer — we only need the tail (where errors appear) for diagnosis.
+      if (output.length > 16_000) {
+        output = output.slice(-16_000);
+      }
+    };
+    this.cliProcess.stdout?.on('data', capture);
+    this.cliProcess.stderr?.on('data', capture);
+
+    // Without an 'error' listener, a spawn failure (e.g. ENOENT when cloudflared
+    // is missing or CLOUDFLARED_BIN is misconfigured) crashes the whole daemon as
+    // an uncaught exception. Capture it and surface a clean error from create().
+    let spawnError: Error | null = null;
+    this.cliProcess.on('error', (err: Error) => {
+      spawnError = err;
+      this.logger.error('cloudflared process failed to spawn', { bin, error: err.message });
+    });
+
+    const deadlineMs = 45_000;
+    const started = Date.now();
+    while (Date.now() - started < deadlineMs) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (spawnError) {
+        break;
+      }
+      if (resolvedUrl) {
+        // Block until the fresh hostname propagates via authoritative DNS, so no
+        // early getaddrinfo poisons the OS negative cache and the URL is live for
+        // Buildkite + the guard's fetch probes by the time we return it.
+        const host = new URL(resolvedUrl).hostname;
+        const propagated = await waitForDnsPropagation(host);
+        if (!propagated) {
+          this.logger.warn(
+            'Cloudflared hostname did not resolve via authoritative DNS within window — returning anyway',
+            { host, localPort },
+          );
+        }
+        this.logger.info('Cloudflared tunnel established', {
+          url: resolvedUrl,
+          localPort,
+          dnsPropagated: propagated,
+        });
+        return {
+          publicUrl: resolvedUrl,
+          provider: 'cloudflared',
+          localPort,
+          establishedAt: new Date().toISOString(),
+          tunnelId: null,
+          region: null,
+        };
+      }
+      if (this.cliProcess.exitCode !== null) {
+        break;
+      }
+    }
+
+    const exitCode = this.cliProcess?.exitCode ?? null;
+    await this.disconnect();
+    if (spawnError) {
+      throw new Error(`cloudflared failed to start (${bin}): ${(spawnError as Error).message}`);
+    }
+    const detail = output.trim() ? ` — cloudflared output: ${output.trim().slice(-1_000)}` : '';
+    if (exitCode !== null) {
+      throw new Error(
+        `cloudflared exited early (code ${exitCode}) before exposing port ${localPort}${detail}`,
+      );
+    }
+    throw new Error(
+      `cloudflared failed to expose port ${localPort} within ${deadlineMs}ms${detail}`,
+    );
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.cliProcess && this.cliProcess.exitCode === null) {
+      this.cliProcess.kill('SIGTERM');
+    }
+    this.cliProcess = null;
+    this.logger.info('Cloudflared tunnel disconnected');
   }
 }
 
@@ -469,6 +710,8 @@ export class TunnelService {
     switch (this.config.provider) {
       case 'ngrok':
         return new NgrokProvider(this.config, logLevel);
+      case 'cloudflared':
+        return new CloudflaredProvider(logLevel);
       case 'cloudrun':
         return new CloudRunProvider();
       case 'load_balancer':
@@ -584,8 +827,18 @@ export class TunnelService {
 
         if (attempt < maxAttempts) {
           await this.provider.disconnect().catch(() => {});
-          this.logger.info(`Retrying in ${this.config.retryDelayMs}ms...`);
-          await this.delay(this.config.retryDelayMs);
+          // ERR_NGROK_334 ("endpoint already online") means a stale endpoint still holds our
+          // reserved domain. The local agent is gone but the cloud endpoint clears on a
+          // heartbeat timeout (tens of seconds). Fast 5s retries just re-collide, so back off
+          // hard and escalate — the domain frees within ~30-60s and a later attempt succeeds.
+          const domainBusy = /ERR_NGROK_334|already online/i.test(lastError.message);
+          const delayMs = domainBusy
+            ? Math.min(20_000 * attempt, 60_000)
+            : this.config.retryDelayMs;
+          this.logger.info(
+            `Retrying in ${delayMs}ms...${domainBusy ? ' (reserved domain busy — waiting for stale endpoint to clear)' : ''}`,
+          );
+          await this.delay(delayMs);
         }
       }
     }
@@ -620,7 +873,11 @@ export class TunnelService {
     });
     await this.provider.disconnect();
     this.currentTunnel = null;
-    await killOrphanNgrokForPort(this.config.localPort);
+    if (this.config.provider === 'cloudflared') {
+      await killOrphanCloudflaredForPort(this.config.localPort);
+    } else {
+      await killOrphanNgrokForPort(this.config.localPort);
+    }
     return this.connect();
   }
 

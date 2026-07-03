@@ -128,9 +128,20 @@ export const daemonConfigSchema = z.object({
 
 /**
  * Tunnel provider type for exposing the vLLM API publicly.
- * Currently supports ngrok, with future plans for GCP native options.
+ *
+ * - `ngrok`: reserved-domain agent (fragile on free tier — single reserved
+ *   domain, sticky cloud-side endpoints cause ERR_NGROK_334 collisions).
+ * - `cloudflared`: Cloudflare quick tunnels — ephemeral `*.trycloudflare.com`
+ *   URL per run, no account/domain/reservation, so it cannot collide with a
+ *   stale endpoint. Preferred for unattended autonomous runs.
+ * - `cloudrun` / `load_balancer`: future GCP-native options (not implemented).
  */
-export const tunnelProviderSchema = z.enum(['ngrok', 'cloudrun', 'load_balancer']);
+export const tunnelProviderSchema = z.enum([
+  'ngrok',
+  'cloudflared',
+  'cloudrun',
+  'load_balancer',
+]);
 
 /**
  * Tunnel configuration for exposing the vLLM API publicly.

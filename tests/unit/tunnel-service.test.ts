@@ -173,6 +173,49 @@ describe('TunnelService', () => {
     });
   });
 
+  describe('cloudflared provider', () => {
+    it('reports the cloudflared provider in status', () => {
+      const config = createDefaultTunnelConfig({ enabled: true, provider: 'cloudflared' });
+      const service = new TunnelService({ config });
+      expect(service.getStatus().provider).toBe('cloudflared');
+    });
+
+    it('returns a clean failure (no daemon crash) when the cloudflared binary is missing', async () => {
+      const config = createDefaultTunnelConfig({
+        enabled: true,
+        provider: 'cloudflared',
+        localPort: 18000,
+        retryAttempts: 0,
+        timeoutMs: 2_000,
+      });
+      const service = new TunnelService({ config, logLevel: 'error' });
+
+      // Local backend probe resolves OK so the shared backend-wait returns fast;
+      // the missing binary then surfaces as a clean failure (no daemon crash).
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) } as Response),
+      );
+
+      const originalBin = process.env['CLOUDFLARED_BIN'];
+      process.env['CLOUDFLARED_BIN'] = '/nonexistent/cloudflared-binary';
+
+      try {
+        const result = await service.connect();
+        expect(result.success).toBe(false);
+        expect(result.tunnel).toBeNull();
+        expect(result.error).toBeDefined();
+      } finally {
+        if (originalBin === undefined) {
+          delete process.env['CLOUDFLARED_BIN'];
+        } else {
+          process.env['CLOUDFLARED_BIN'] = originalBin;
+        }
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
   describe('cloudrun provider', () => {
     it('throws TunnelProviderNotAvailableError when trying to connect', async () => {
       const config = createDefaultTunnelConfig({
@@ -358,6 +401,10 @@ describe('isPublicTunnelUrl', () => {
   it('accepts ngrok public HTTPS URLs', () => {
     expect(isPublicTunnelUrl('https://uninked-burton-unransomable.ngrok-free.dev')).toBe(true);
     expect(isPublicTunnelUrl('https://abc123.ngrok-free.app')).toBe(true);
+  });
+
+  it('accepts Cloudflare quick-tunnel HTTPS URLs', () => {
+    expect(isPublicTunnelUrl('https://random-words-here.trycloudflare.com')).toBe(true);
   });
 
   it('rejects ngrok local inspector and non-HTTPS URLs', () => {
