@@ -51,6 +51,13 @@ export interface VllmDeploymentOptions {
   useSudo?: boolean;
   /** OTLP traces endpoint for vLLM observability (e.g. http://localhost:4317). When set, adds --otlp-traces-endpoint to the docker run command. */
   otlpTracesEndpoint?: string;
+  /**
+   * Docker volume (or host path) mounted at /root/.cache/huggingface so downloaded model
+   * weights persist across deploys and are shared between models, instead of landing in each
+   * container's copy-on-write layer (the root cause of the GPU VM filling to 100%). Default:
+   * `vllm-hf-cache` (a docker-managed named volume). Set to '' to disable the mount.
+   */
+  hfCacheVolume?: string;
 }
 
 /** Result of a successful vLLM deployment */
@@ -153,9 +160,12 @@ export function buildDeployCommandWithToolCalling(options: {
   const args: string[] = [
     'docker run -d',
     `--name ${containerName}`,
+    // Customer-facing deploy command: keep auto-restart so a crashed vLLM recovers unattended.
     '--restart unless-stopped',
     '--gpus all',
     '--shm-size=16g',
+    // Share/persist model weights across deploys instead of bloating the container layer.
+    '-v vllm-hf-cache:/root/.cache/huggingface',
     `-p ${apiPort}:8000`,
     `-e HF_TOKEN=${hfToken}`,
     dockerImage,
@@ -298,6 +308,7 @@ export class VllmDeploymentService {
       huggingfaceToken: options.huggingfaceToken ?? null,
       useSudo: options.useSudo ?? false,
       otlpTracesEndpoint: options.otlpTracesEndpoint ?? null,
+      hfCacheVolume: options.hfCacheVolume ?? 'vllm-hf-cache',
     };
 
     // Initialize the health check service with matching configuration
@@ -385,6 +396,21 @@ export class VllmDeploymentService {
 
     // Step 2: Pull the Docker image
     await this.pullImage(sshConfig, model.id);
+
+    // Step 2.5: Force-remove any container squatting on our exact name. The
+    // ancestor-filtered sweep in stopExistingContainers() misses containers whose
+    // image digest drifted from the current `vllm/vllm-openai:latest` — a stale
+    // container from a prior run of the SAME model survives the sweep and then
+    // collides on `docker run --name` ("name is already in use"). Removing by exact
+    // name is filter- and state-independent, so the run below can never conflict.
+    // A missing container makes `docker rm -f` exit non-zero; that is expected and
+    // ignored (nothing to remove is success for our purposes).
+    await this.execSSH(
+      sshConfig,
+      `docker rm -f ${containerName}`,
+      this.options.stopTimeoutMs,
+      model.id,
+    );
 
     // Step 3: Build and execute the docker run command (uses vllmParams)
     const dockerCommand = this.buildDockerRunCommand(
@@ -601,13 +627,24 @@ export class VllmDeploymentService {
     // without requiring GatewayPorts on the VM's sshd. /metrics still binds on
     // host:apiPort, so Prometheus scraping is unaffected.
     const useHostNetwork = Boolean(opts.otlpTracesEndpoint);
+    // NOTE: no `--restart unless-stopped` here (unlike the customer-facing command). During
+    // Stage 1 the benchmark runs as a `docker exec` against this container; if vLLM crashes
+    // under load an auto-restart would respawn it mid-benchmark and kill the exec'd process
+    // (observed as exit code 137). The Stage-2 keep-alive requirement is met separately by
+    // CiEvalInfrastructureGuard.ensureRestartPolicy(), which applies `docker update --restart
+    // unless-stopped` (and `docker start`s on exit) only for the CI-eval polling window.
     const args: string[] = [
       'docker run -d',
       `--name ${containerName}`,
-      '--restart unless-stopped',
       '--gpus all',
       '--shm-size=16g',
     ];
+    // Persist/share HF weights across deploys so they don't accumulate in each container's
+    // writable layer (the root cause of the GPU VM disk filling to 100%). Configurable/disable-able.
+    const hfCacheVolume = opts.hfCacheVolume ?? 'vllm-hf-cache';
+    if (hfCacheVolume) {
+      args.push(`-v ${hfCacheVolume}:/root/.cache/huggingface`);
+    }
     args.push(useHostNetwork ? '--network host' : `-p ${opts.apiPort}:8000`);
     args.push(`-e HF_TOKEN=${opts.huggingfaceToken ?? '${HF_TOKEN}'}`);
     if (opts.maxModelLen !== null && opts.maxModelLen > 32_768) {

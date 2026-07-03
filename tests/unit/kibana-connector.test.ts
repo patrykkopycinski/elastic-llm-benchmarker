@@ -339,6 +339,7 @@ describe('KibanaConnectorService', () => {
       expect(body.config.apiProvider).toBe('Other');
       expect(body.config.apiUrl).toBe('https://abc123.ngrok-free.app/v1/chat/completions');
       expect(body.config.defaultModel).toBe('test-org/test-model');
+      expect(body.config.enableNativeFunctionCalling).toBe(true);
       expect(body.secrets.apiKey).toBe('vllm-no-key-required');
     });
 

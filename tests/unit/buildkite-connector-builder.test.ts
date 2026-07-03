@@ -35,7 +35,7 @@ describe('buildConnectorPayload', () => {
     expect(buildConnectorId('Org/My-Model')).toBe('vllm-org-my-model');
   });
 
-  it('does not include unsupported connector config keys', () => {
+  it('emits only supported connector config keys (incl. native function calling)', () => {
     const { connectorJson } = buildConnectorPayload({
       endpointUrl: 'https://example.ngrok.dev/',
       modelId: 'Qwen/Qwen2.5-1.5B-Instruct',
@@ -46,10 +46,14 @@ describe('buildConnectorPayload', () => {
       { config: Record<string, unknown> }
     >;
     const id = Object.keys(decoded)[0]!;
+    // enableNativeFunctionCalling is a schema-accepted `.gen-ai` config key (kbn-connector-schemas
+    // openai/schemas/v1.ts). It forces native tool_calls parsing, matching kbn-evals' own LiteLLM
+    // connector generator — required because our vLLM deployments emit native tool_calls.
     expect(decoded[id]?.config).toEqual({
       apiUrl: 'https://example.ngrok.dev/v1/chat/completions',
       apiProvider: 'Other',
       defaultModel: 'Qwen/Qwen2.5-1.5B-Instruct',
+      enableNativeFunctionCalling: true,
     });
   });
 });

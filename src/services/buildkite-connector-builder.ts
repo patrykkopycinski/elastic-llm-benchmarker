@@ -26,6 +26,15 @@ interface GenAIConnector {
     apiUrl: string;
     apiProvider: string;
     defaultModel: string;
+    /**
+     * Force Kibana's inference plugin to use the model's NATIVE OpenAI `tool_calls` instead of
+     * simulated (inline `<|tool_use_start|>`) function calling. For `apiProvider: 'Other'` Kibana
+     * defaults to simulated FC, whose inline parser throws `500 "Missing name for tool use"` on the
+     * output our vLLM deployments produce. Our vLLM containers run with `--enable-auto-tool-choice
+     * --tool-call-parser <hermes|mistral|llama3_json>`, so they emit native `tool_calls` — native FC
+     * is the correct setting, not a workaround.
+     */
+    enableNativeFunctionCalling: boolean;
   };
   secrets: {
     apiKey: string;
@@ -56,6 +65,7 @@ export function buildConnectorPayload(options: ConnectorBuilderOptions): Connect
       apiUrl,
       apiProvider: 'Other',
       defaultModel: modelId,
+      enableNativeFunctionCalling: true,
     },
     secrets: {
       apiKey,
