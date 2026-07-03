@@ -777,6 +777,21 @@ export class Scheduler {
           sshForward: infrastructure.sshForward,
           tunnelService: infrastructure.tunnelService,
           publicEndpointUrl: infrastructure.publicEndpointUrl,
+          expectedModelId: run.modelId,
+          onTakeover: (reason) => {
+            // Shared-VM takeover: another benchmarker instance redeployed on this GPU and
+            // removed our container. Aborting keeps us from redeploying over their run and
+            // from wasting serial pipeline slots on doomed 404 evals. Retriable once free.
+            this.logger.error(
+              'CI Evals: vLLM deployment taken over externally during Buildkite poll — aborting Stage 2 for this model (retriable)',
+              { modelId: run.modelId, reason },
+            );
+            void this.queueService.updateStatus(
+              queueEntryId,
+              'failed',
+              `Stage 2 aborted: shared-VM takeover — ${reason}. Re-enqueue to retry once the GPU is free.`,
+            );
+          },
           logLevel: this.config.logLevel,
         });
         guard.start();

@@ -98,6 +98,72 @@ describe('CiEvalInfrastructureGuard', () => {
     guard.stop();
   });
 
+  it('aborts via onTakeover when the container was removed externally (no docker start)', async () => {
+    const onTakeover = vi.fn();
+    vi.mocked(sshPool.exec)
+      .mockResolvedValueOnce({ success: true, stdout: '', stderr: '', exitCode: 0 }) // restart policy
+      .mockResolvedValueOnce({ success: true, stdout: 'false', stderr: '', exitCode: 0 }) // isContainerRunning -> stopped
+      .mockResolvedValueOnce({ success: false, stdout: '', stderr: 'No such object', exitCode: 1 }); // containerExists -> removed
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: 'Qwen/Qwen3.6-35B-A3B' }] }),
+    } as unknown as Response);
+
+    const guard = new CiEvalInfrastructureGuard({
+      ssh: sshConfig,
+      sshPool,
+      localPort: 18000,
+      deploymentName: 'vllm-model-deepreinforce-ai-ornith-1.0-35b',
+      sshForward,
+      expectedModelId: 'deepreinforce-ai/Ornith-1.0-35B',
+      onTakeover,
+      checkIntervalMs: 60_000,
+    });
+
+    guard.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onTakeover).toHaveBeenCalledTimes(1);
+    expect(onTakeover.mock.calls[0][0]).toContain('Qwen/Qwen3.6-35B-A3B');
+    expect(sshPool.exec).not.toHaveBeenCalledWith(
+      sshConfig,
+      'docker start vllm-model-deepreinforce-ai-ornith-1.0-35b',
+      expect.anything(),
+    );
+    guard.stop();
+  });
+
+  it('aborts via onTakeover when a foreign model serves on our endpoint', async () => {
+    const onTakeover = vi.fn();
+    vi.mocked(sshPool.exec)
+      .mockResolvedValueOnce({ success: true, stdout: '', stderr: '', exitCode: 0 }) // restart policy
+      .mockResolvedValueOnce({ success: true, stdout: 'true', stderr: '', exitCode: 0 }); // isContainerRunning -> running
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [{ id: 'Qwen/Qwen3.6-35B-A3B' }] }),
+    } as unknown as Response);
+
+    const guard = new CiEvalInfrastructureGuard({
+      ssh: sshConfig,
+      sshPool,
+      localPort: 18000,
+      deploymentName: 'vllm-model-ornith',
+      sshForward,
+      expectedModelId: 'deepreinforce-ai/Ornith-1.0-35B',
+      onTakeover,
+      checkIntervalMs: 60_000,
+    });
+
+    guard.start();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onTakeover).toHaveBeenCalledTimes(1);
+    expect(onTakeover.mock.calls[0][0]).toContain('foreign model');
+    guard.stop();
+  });
+
   it('reconnects ngrok when public endpoint probe fails', async () => {
     const tunnelService = {
       reconnect: vi.fn().mockResolvedValue({
