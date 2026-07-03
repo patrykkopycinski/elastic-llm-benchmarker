@@ -7,7 +7,11 @@ import type {
   ModelEvaluationReport,
   CriterionEvaluation,
 } from '../types/benchmark.js';
-import { INDEX_NAMES, INDEX_MAPPINGS } from './es-index-mappings.js';
+import {
+  INDEX_NAMES,
+  INDEX_MAPPINGS,
+  ensureDateSuffixedTemplates,
+} from './es-index-mappings.js';
 import { createLogger } from '../utils/logger.js';
 import type { EvalSuiteResult } from './eval-suite-runner.js';
 import type { Stage2Result, Stage3Result, Stage3Suggestion } from '../scheduler/pipeline-state.js';
@@ -340,6 +344,7 @@ export class ElasticsearchResultsStore {
         this.logger.info(`Created index: ${indexName}`, { serverless });
       }
     }
+    await ensureDateSuffixedTemplates(this.esClient);
   }
 
   async save(result: BenchmarkResult): Promise<string> {

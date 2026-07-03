@@ -19,6 +19,7 @@ function createMockClient(buildFlavor: string): {
         createCalls.push({ index: args.index, settings: args.settings });
         return Promise.resolve({ acknowledged: true });
       }),
+      putIndexTemplate: vi.fn().mockResolvedValue({ acknowledged: true }),
     },
   } as unknown as Client;
   return { client, createCalls };
