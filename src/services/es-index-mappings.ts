@@ -569,15 +569,40 @@ export async function ensureDateSuffixedTemplates(esClient: Client): Promise<voi
   }
 }
 
+/**
+ * True when index creation failed because the cluster rejected the shard /
+ * replica settings — the signature of a serverless cluster, which manages
+ * shards itself. Matched on the error text so we don't need to probe the
+ * cluster flavour up-front.
+ */
+function isSettingsUnsupportedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /serverless mode|number_of_replicas|number_of_shards/i.test(msg);
+}
+
 export async function ensureIndices(esClient: Client): Promise<void> {
   for (const [indexName, indexConfig] of Object.entries(INDEX_MAPPINGS)) {
     const exists = await esClient.indices.exists({ index: indexName });
-    if (!exists) {
+    if (exists) continue;
+
+    const mappings = indexConfig.mappings as Record<string, unknown>;
+    const settings = indexConfig.settings as Record<string, unknown> | undefined;
+    try {
       await esClient.indices.create({
         index: indexName,
-        mappings: indexConfig.mappings as Record<string, unknown>,
-        settings: indexConfig.settings as Record<string, unknown>,
+        mappings,
+        ...(settings ? { settings } : {}),
       });
+    } catch (err) {
+      // Serverless clusters reject explicit shard/replica settings. Fall back
+      // to a mappings-only create so a fresh index still gets its typed mapping
+      // (rather than dynamic guessing) on serverless. Stateful clusters keep
+      // the shard/replica settings on the first-attempt create above.
+      if (settings && isSettingsUnsupportedError(err)) {
+        await esClient.indices.create({ index: indexName, mappings });
+      } else {
+        throw err;
+      }
     }
   }
   await ensureDateSuffixedTemplates(esClient);

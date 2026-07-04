@@ -5,6 +5,7 @@ import {
   INDEX_MAPPINGS,
   DATE_SUFFIXED_INDEX_BASES,
   ensureDateSuffixedTemplates,
+  ensureIndices,
   benchmarkEvaluationsMapping,
   benchmarkStage2Mapping,
   benchmarkReasoningMapping,
@@ -101,6 +102,51 @@ describe('es-index-mappings', () => {
       INDEX_NAMES.BENCHMARKER_STAGE2,
       INDEX_NAMES.BENCHMARKER_REASONING,
     ]);
+  });
+
+  it('retries index creation without settings when the cluster is serverless', async () => {
+    const exists = vi.fn().mockResolvedValue(false);
+    const create = vi
+      .fn()
+      // Every first attempt (with settings) fails as it would on serverless.
+      .mockImplementation((arg: { settings?: unknown }) => {
+        if (arg.settings) {
+          return Promise.reject(
+            new Error(
+              'illegal_argument_exception: Settings [index.number_of_replicas,index.number_of_shards] are not available when running in serverless mode',
+            ),
+          );
+        }
+        return Promise.resolve({});
+      });
+    const putIndexTemplate = vi.fn().mockResolvedValue({});
+    const esClient = {
+      indices: { exists, create, putIndexTemplate },
+    } as unknown as Client;
+
+    await ensureIndices(esClient);
+
+    // Any index that carries settings should have been retried mappings-only,
+    // and none of the final successful creates carry a settings block.
+    const settingsCreates = create.mock.calls.filter((c) => c[0].settings);
+    const mappingsOnlyCreates = create.mock.calls.filter((c) => !c[0].settings);
+    expect(settingsCreates.length).toBeGreaterThan(0);
+    expect(mappingsOnlyCreates.length).toBeGreaterThanOrEqual(settingsCreates.length);
+    for (const call of mappingsOnlyCreates) {
+      expect(call[0]).toHaveProperty('mappings');
+      expect(call[0].settings).toBeUndefined();
+    }
+  });
+
+  it('propagates non-settings index-creation errors', async () => {
+    const exists = vi.fn().mockResolvedValue(false);
+    const create = vi.fn().mockRejectedValue(new Error('resource_already_exists_exception'));
+    const putIndexTemplate = vi.fn().mockResolvedValue({});
+    const esClient = {
+      indices: { exists, create, putIndexTemplate },
+    } as unknown as Client;
+
+    await expect(ensureIndices(esClient)).rejects.toThrow('resource_already_exists_exception');
   });
 
   it('installs a keyword-preserving template per date-suffixed base', async () => {

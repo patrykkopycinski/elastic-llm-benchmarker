@@ -81,6 +81,11 @@ export class MaintenanceScheduler {
     this.logger.info('MaintenanceScheduler started', {
       intervalHours: this.deps.config.intervalHours,
     });
+    // Fire an immediate boot-time tick so a freshly-(re)started daemon emits a
+    // cost snapshot and health digest at once, instead of staying silent until
+    // the first interval elapses (up to intervalHours later). runOnce never
+    // throws, so this is safe to leave detached.
+    void this.runOnce();
   }
 
   stop(): void {

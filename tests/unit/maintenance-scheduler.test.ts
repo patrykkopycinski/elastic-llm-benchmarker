@@ -166,4 +166,12 @@ describe('MaintenanceScheduler', () => {
     expect(res.requeuedFromDlq).toBe(0);
     expect(res.utilizationRatio).toBe(0);
   });
+
+  it('fires an immediate boot-time tick on start()', async () => {
+    const scheduler = build();
+    scheduler.start();
+    // start() dispatches runOnce() detached; let the microtask/IO settle.
+    await vi.waitFor(() => expect(esIndex).toHaveBeenCalledTimes(1));
+    scheduler.stop();
+  });
 });
