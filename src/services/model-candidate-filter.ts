@@ -304,10 +304,14 @@ export class ModelCandidateFilter {
       }
     }
 
-    // Filter 6: Instruct/chat variant
+    // Filter 6: Instruct/chat variant (soft — capability signal, never hard-rejects)
     const instructResult = this.checkInstructVariant(model);
     if (instructResult) {
-      rejections.push(instructResult);
+      if (instructResult.isHardRequirement) {
+        rejections.push(instructResult);
+      } else {
+        warnings.push(instructResult);
+      }
     }
 
     // Filter 7: Tool calling capability (single-tool via vLLM parser)
@@ -583,19 +587,29 @@ export class ModelCandidateFilter {
       return null;
     }
 
-    const id = model.id.toLowerCase();
-    const instructIndicators = ['instruct', 'chat', '-it', '_it'];
-    const matched = instructIndicators.some((s) => id.includes(s));
-    if (!matched) {
-      return {
-        criterion: 'instruct_variant',
-        reason:
-          'Model id does not indicate an instruct/chat-tuned variant (expected instruct, chat, or -it in the name)',
-        isHardRequirement: true,
-      };
+    // Capability beats naming convention. A model vLLM can serve with a known
+    // chat/tool-call parser (hermes/mistral/llama3_json) is instruct/chat-capable
+    // regardless of whether "instruct"/"chat" appears in its id — e.g.
+    // deepreinforce-ai/Ornith-1.0-35B (best-evaluated model, support/high) and
+    // Qwen/Qwen3.6-35B-A3B both lack the name marker yet serve chat completions.
+    // A name-only hard gate rejected the single best model in the eval matrix, so
+    // the name is only a fallback signal and this criterion never hard-rejects.
+    if (this.getRecommendedToolCallParser(model) !== null) {
+      return null;
     }
 
-    return null;
+    const id = model.id.toLowerCase();
+    const instructIndicators = ['instruct', 'chat', '-it', '_it'];
+    if (instructIndicators.some((s) => id.includes(s))) {
+      return null;
+    }
+
+    return {
+      criterion: 'instruct_variant',
+      reason:
+        'No known vLLM chat/tool parser and no instruct/chat name marker — instruct tuning unverified (behavioral eval will confirm)',
+      isHardRequirement: false,
+    };
   }
 
   /**

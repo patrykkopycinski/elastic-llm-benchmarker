@@ -13,6 +13,7 @@ export const INDEX_NAMES = {
   RECOMMENDATION_REPORTS: 'recommendation-reports',
   BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
   BENCHMARKER_DAEMON_LEASE: 'benchmarker-daemon-lease',
+  BENCHMARKER_VM_COST: 'benchmarker-vm-cost',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -122,6 +123,8 @@ export const INDEX_MAPPINGS: Record<
         completed_at: { type: 'date' },
         error_message: { type: 'text' },
         requested_by: { type: 'keyword' },
+        lease_token: { type: 'keyword' },
+        heartbeat_at: { type: 'date' },
       },
     },
     settings: {
@@ -429,6 +432,28 @@ export const INDEX_MAPPINGS: Record<
         heartbeat_at: { type: 'date' },
       },
     },
+  },
+  // Daily VM cost-accrual + utilization snapshot (24/7-autonomy P0). The GPU VM
+  // is ephemeral and never stopped, so it burns 24/7 whether or not work is
+  // queued. This index records burn vs. throughput so the operator sees when to
+  // raise the daily cap / widen discovery — the lever is intake, not the VM.
+  [INDEX_NAMES.BENCHMARKER_VM_COST]: {
+    mappings: {
+      properties: {
+        '@timestamp': { type: 'date' },
+        vm_host: { type: 'keyword' },
+        hardware_profile_id: { type: 'keyword' },
+        window_hours: { type: 'float' },
+        wall_hours: { type: 'float' },
+        benchmark_hours: { type: 'float' },
+        utilization_ratio: { type: 'float' },
+        hourly_cost_usd: { type: 'float' },
+        estimated_cost_usd: { type: 'float' },
+        runs_in_window: { type: 'integer' },
+        low_utilization: { type: 'boolean' },
+      },
+    },
+    settings: { number_of_shards: 1, number_of_replicas: 0 },
   },
 };
 

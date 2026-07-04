@@ -48,6 +48,14 @@ export class CiEvalInfrastructureGuard {
   private checking = false;
   /** Set once an unrecoverable external takeover is detected; halts all guard actions. */
   private fatal = false;
+  /**
+   * The public URL currently probed. Seeded from `options.publicEndpointUrl` but MUTABLE:
+   * a cloudflared reconnect can hand back a *different* surviving-tunnel hostname, and we
+   * must adopt it — otherwise every probe keeps hitting the dead original URL, fails, and
+   * triggers an endless reconnect-every-interval loop (observed with the guard "recovering"
+   * to `healthy:false` forever).
+   */
+  private currentPublicUrl: string | undefined;
 
   constructor(options: CiEvalInfrastructureGuardOptions) {
     this.options = {
@@ -55,6 +63,7 @@ export class CiEvalInfrastructureGuard {
       useSudo: true,
       ...options,
     };
+    this.currentPublicUrl = options.publicEndpointUrl;
     this.logger = createLogger(options.logLevel ?? 'info');
   }
 
@@ -107,7 +116,7 @@ export class CiEvalInfrastructureGuard {
   }
 
   private async probePublicEndpoint(): Promise<boolean> {
-    const base = this.options.publicEndpointUrl?.replace(/\/+$/, '');
+    const base = this.currentPublicUrl?.replace(/\/+$/, '');
     if (!base) {
       return true;
     }
@@ -121,7 +130,7 @@ export class CiEvalInfrastructureGuard {
   }
 
   private async ensureNgrokHealthy(): Promise<void> {
-    if (!this.options.tunnelService || !this.options.publicEndpointUrl) {
+    if (!this.options.tunnelService || !this.currentPublicUrl) {
       return;
     }
 
@@ -130,7 +139,7 @@ export class CiEvalInfrastructureGuard {
     }
 
     this.logger.warn('CI eval guard: public ngrok endpoint unhealthy — reconnecting tunnel', {
-      publicEndpointUrl: this.options.publicEndpointUrl,
+      publicEndpointUrl: this.currentPublicUrl,
     });
 
     const reconnectResult = await this.options.tunnelService.reconnect();
@@ -141,10 +150,27 @@ export class CiEvalInfrastructureGuard {
       return;
     }
 
+    // Adopt whatever URL reconnect handed back. A cloudflared reconnect reattaches to a
+    // surviving tunnel that may carry a DIFFERENT hostname than the one we were probing;
+    // keeping the stale URL would make every subsequent probe fail and re-trigger this
+    // reconnect forever. When the hostname actually changed, warn loudly — the URL already
+    // injected into the in-flight Buildkite build is now stale and that eval can no longer
+    // reach the model (nothing the guard can do to re-inject a detached build, but the
+    // operator needs to see it).
+    const newUrl = reconnectResult.tunnel.publicUrl;
+    const changed = newUrl !== this.currentPublicUrl;
+    if (changed) {
+      this.logger.warn(
+        'CI eval guard: public tunnel URL changed on reconnect — Buildkite-injected URL is now stale',
+        { previousUrl: this.currentPublicUrl, newUrl },
+      );
+      this.currentPublicUrl = newUrl;
+    }
+
     const ok = await this.probePublicEndpoint();
     this.logger.info('CI eval guard: ngrok tunnel recovered', {
       healthy: ok,
-      publicUrl: reconnectResult.tunnel.publicUrl,
+      publicUrl: this.currentPublicUrl,
     });
   }
 

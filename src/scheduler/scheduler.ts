@@ -1,4 +1,5 @@
 import type { QueueService, QueueEntry } from '../services/queue-service.js';
+import { DEFAULT_ENTRY_STALE_AFTER_MS } from '../services/queue-service.js';
 import type { PipelineRun } from './pipeline-state.js';
 import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../worker/index.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
@@ -18,6 +19,7 @@ import {
 import type { Stage2Result } from './pipeline-state.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
+import { classifyFailure } from '../utils/failure-classifier.js';
 import { VllmPublicEndpointResolver } from '../services/vllm-public-endpoint.js';
 import { CiEvalInfrastructureGuard } from '../services/ci-eval-infrastructure-guard.js';
 import { resolveCompletedEvalSuites } from '../services/ci-eval-resume.js';
@@ -62,6 +64,12 @@ export class Scheduler {
   private readonly logger: Logger;
   private readonly deferredCleanups = new Map<string, DeferredInfrastructureCleanup>();
   private readonly entryInProcess = new Set<string>();
+  /** entryId → lease token held for the entry currently being processed. */
+  private readonly entryLeases = new Map<string, string>();
+  /** Tracks whether the daily cost cap is currently gating dequeues (log-once). */
+  private costCapEngaged = false;
+  /** Epoch ms of the last periodic stuck-entry reclaim (throttled to TTL). */
+  private lastReclaimAtMs = 0;
 
   constructor(
     private queueService: QueueService,
@@ -101,8 +109,136 @@ export class Scheduler {
     );
   }
 
+  /**
+   * Refresh the heartbeat on every entry this daemon is actively processing so
+   * a restart's stale-entry reclaim (and any second daemon) never reclaims a
+   * live run. Best-effort: a failed heartbeat is logged, not fatal.
+   */
+  private async heartbeatActiveEntries(): Promise<void> {
+    for (const [entryId, token] of this.entryLeases) {
+      try {
+        await this.queueService.heartbeat(entryId, token);
+      } catch (err) {
+        this.logger.warn('Scheduler: queue entry heartbeat failed', {
+          queueEntryId: entryId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
+
+  /** Every entry id this daemon is actively responsible for right now. */
+  private ownedEntryIds(): Set<string> {
+    return new Set<string>([
+      ...this.entryLeases.keys(),
+      ...this.entryInProcess,
+      ...this.deferredCleanups.keys(),
+    ]);
+  }
+
+  /**
+   * Periodic backstop: reset entries stuck in `deploying`/`benchmarking` past
+   * the heartbeat TTL back to `pending` so a crashed/abandoned run is retried
+   * automatically — no more manual `curl` resets. Never touches an entry this
+   * daemon owns (it heartbeats those every poll, keeping them fresh) and is
+   * throttled to at most once per TTL to keep ES load negligible. Runs
+   * alongside the one-shot startup reclaim in `cli.ts`.
+   */
+  private async reclaimStuckEntries(): Promise<void> {
+    const staleAfterMs = this.config?.scheduler?.entryStaleAfterMs ?? DEFAULT_ENTRY_STALE_AFTER_MS;
+    const nowMs = Date.now();
+    if (nowMs - this.lastReclaimAtMs < staleAfterMs) return;
+    this.lastReclaimAtMs = nowMs;
+    try {
+      const reclaimed = await this.queueService.reclaimStaleEntries(
+        staleAfterMs,
+        this.ownedEntryIds(),
+      );
+      if (reclaimed > 0) {
+        this.logger.warn('Scheduler: reclaimed stuck in-flight entries to pending (periodic backstop)', {
+          count: reclaimed,
+        });
+      }
+    } catch (err) {
+      this.logger.warn('Scheduler: periodic stuck-entry reclaim failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Write a terminal status (`completed`/`failed`) fenced by the held lease
+   * token, so a zombie daemon whose lease was reclaimed/adopted cannot clobber
+   * the live owner. Falls back to an unfenced write only for legacy/unclaimed
+   * entries with no token. Returns whether the write was applied.
+   */
+  private async writeTerminal(
+    id: string,
+    status: 'completed' | 'failed',
+    errorMessage: string | undefined,
+    leaseToken: string | undefined,
+  ): Promise<boolean> {
+    if (!leaseToken) {
+      return this.queueService.updateStatus(id, status, errorMessage);
+    }
+    const result =
+      status === 'completed'
+        ? await this.queueService.complete(id, leaseToken)
+        : await this.queueService.fail(id, errorMessage ?? 'failed', leaseToken);
+    if (!result.applied && result.reason === 'lease-mismatch') {
+      this.logger.warn('Scheduler: terminal write fenced out — lease no longer held, another owner controls this entry', {
+        queueEntryId: id,
+        status,
+      });
+    }
+    return result.applied;
+  }
+
+  /**
+   * True when the daily cost cap is enabled and the number of models that
+   * reached a terminal state since 00:00 UTC today meets/exceeds the ceiling.
+   * Logs once on each engage/release transition to avoid per-poll spam.
+   * Fails open (returns false) if the count query errors — a monitoring blip
+   * must never wedge the pipeline into a permanent pause.
+   */
+  private async isDailyCostCapReached(): Promise<boolean> {
+    const caps = this.config?.costCaps;
+    if (!caps?.enabled) return false;
+
+    const startOfUtcDay = new Date();
+    startOfUtcDay.setUTCHours(0, 0, 0, 0);
+
+    let terminalToday: number;
+    try {
+      terminalToday = await this.queueService.countTerminalSince(startOfUtcDay.toISOString());
+    } catch (err) {
+      this.logger.warn('Scheduler: cost-cap count query failed — failing open (no pause)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+
+    const reached = terminalToday >= caps.maxModelsPerDay;
+    if (reached && !this.costCapEngaged) {
+      this.costCapEngaged = true;
+      this.logger.warn('Scheduler: daily cost cap reached — pausing new model intake (VM stays up, in-flight runs finish)', {
+        terminalToday,
+        maxModelsPerDay: caps.maxModelsPerDay,
+      });
+    } else if (!reached && this.costCapEngaged) {
+      this.costCapEngaged = false;
+      this.logger.info('Scheduler: daily cost cap cleared — resuming model intake', {
+        terminalToday,
+        maxModelsPerDay: caps.maxModelsPerDay,
+      });
+    }
+    return reached;
+  }
+
   private async poll(): Promise<void> {
     if (this.shuttingDown) return;
+    await this.heartbeatActiveEntries();
+    await this.reclaimStuckEntries();
     if (this.activeRuns >= this.options.maxConcurrentRuns) return;
     if (this.deferredCleanups.size > 0) {
       this.logger.info('Scheduler: waiting for deferred Buildkite poll before dequeuing next model', {
@@ -122,18 +258,36 @@ export class Scheduler {
           modelId: inFlight.modelId,
           status: inFlight.status,
         });
+        // Take over the lease abandoned by the previous daemon so our heartbeat
+        // keeps the entry fresh (prevents a concurrent reclaim to `pending`).
+        const adoptedToken = (await this.queueService.adoptEntry(inFlight.id)) ?? inFlight.leaseToken;
+        if (adoptedToken) this.entryLeases.set(inFlight.id, adoptedToken);
         this.activeRuns++;
         this.entryInProcess.add(inFlight.id);
         this.processEntry(inFlight, { resume: true }).finally(() => {
           this.activeRuns--;
           this.entryInProcess.delete(inFlight.id);
+          // Keep the lease for deferred (detached-poll) entries so we keep
+          // heartbeating them until the poll completes; the deferred cleanup
+          // drops the lease. Otherwise the periodic reclaimer could reset a
+          // still-running deferred run to pending.
+          if (!this.deferredCleanups.has(inFlight.id)) {
+            this.entryLeases.delete(inFlight.id);
+          }
         });
         return;
       }
 
+      // Cost cap: pause NEW work intake once the daily terminal-model ceiling is
+      // hit. This gates only new dequeues — never the VM (stopping = loss) and
+      // never in-flight/resume runs (handled above). Capping models/day caps the
+      // downstream CI-eval builds + EIS reasoning each model triggers.
+      if (await this.isDailyCostCapReached()) return;
+
       const entry = await this.queueService.dequeue();
       if (!entry) return;
 
+      if (entry.leaseToken) this.entryLeases.set(entry.id, entry.leaseToken);
       this.activeRuns++;
       this.entryInProcess.add(entry.id);
 
@@ -141,6 +295,9 @@ export class Scheduler {
       this.processEntry(entry).finally(() => {
         this.activeRuns--;
         this.entryInProcess.delete(entry.id);
+        if (!this.deferredCleanups.has(entry.id)) {
+          this.entryLeases.delete(entry.id);
+        }
       });
     } catch (err) {
       console.error('Scheduler poll error:', err);
@@ -158,6 +315,12 @@ export class Scheduler {
       stage: 'idle',
       startedAt: new Date().toISOString(),
     };
+
+    // The lease token stamped on claim/adopt. Every terminal write for this
+    // entry — including those in the detached Buildkite poll that runs after
+    // this method returns — is fenced with it, so a zombie daemon can't clobber
+    // us. Captured here because `entryLeases` is released once this returns.
+    const leaseToken = this.entryLeases.get(entry.id);
 
     let releasePublicEndpoint: (() => Promise<void>) | undefined;
     let deferInfrastructureTeardown = false;
@@ -233,7 +396,7 @@ export class Scheduler {
           if (tunnelPromise) {
             tunnelPromise.then((r) => r.cleanup()).catch(() => {});
           }
-          await this.queueService.updateStatus(entry.id, 'failed', result.error);
+          await this.failEntry(entry, result.error ?? 'Stage 1 benchmark failed', leaseToken);
           return;
         }
       }
@@ -332,11 +495,12 @@ export class Scheduler {
             tunnelService: publicEndpointMeta?.tunnelService,
             publicEndpointUrl: publicEndpointMeta?.publicEndpointUrl,
           },
+          leaseToken,
           skipSuiteIds,
         );
 
         if (ciOutcome.aborted) {
-          await this.queueService.updateStatus(entry.id, 'failed', ciOutcome.abortReason);
+          await this.failEntry(entry, ciOutcome.abortReason ?? 'CI eval aborted', leaseToken);
           return;
         }
 
@@ -365,7 +529,7 @@ export class Scheduler {
         }
 
         if (stage2Result.status === 'error') {
-          await this.queueService.updateStatus(entry.id, 'failed', stage2Result.reason);
+          await this.failEntry(entry, stage2Result.reason ?? 'Stage 2 eval error', leaseToken);
           return;
         }
       } else if (useCiEvalsAsStage2 && !run.stage2Result && !deferPostStage2) {
@@ -377,10 +541,10 @@ export class Scheduler {
         return;
       }
 
-      await this.finalizePipeline(run, entry.id);
+      await this.finalizePipeline(run, entry.id, leaseToken);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await this.queueService.updateStatus(entry.id, 'failed', message);
+      await this.failEntry(entry, message, leaseToken);
     } finally {
       if (!deferInfrastructureTeardown) {
         await this.releaseInfrastructure({
@@ -391,8 +555,89 @@ export class Scheduler {
     }
   }
 
+  /**
+   * Terminal-failure chokepoint: classify the failure and either auto-re-enqueue
+   * the model (transient-infra / resource-fit, within budget) or mark it failed
+   * (quarantine). The failed status is always written with the held lease token
+   * so a zombie daemon can't clobber a live owner. The re-enqueued entry carries
+   * an incremented `infraRetryCount` so the budget is enforced across restarts.
+   *
+   * ponytail: resource-fit retries currently re-run at the same concurrency —
+   * the budget (default 1) bounds the waste; per-entry concurrency-override on
+   * retry is the upgrade path.
+   */
+  private async failEntry(
+    entry: QueueEntry,
+    message: string,
+    leaseToken: string | undefined,
+  ): Promise<void> {
+    const classification = classifyFailure(message);
+    const retryEnabled = this.config?.retry?.enabled !== false;
+    const retryCount = entry.metadata?.infraRetryCount ?? 0;
+    const budget =
+      classification.category === 'resource-fit'
+        ? (this.config?.retry?.maxResourceFitRetries ?? 1)
+        : (this.config?.retry?.maxInfraRetries ?? 2);
+    const willRetry = retryEnabled && classification.retriable && retryCount < budget;
+    // Tag classified failures so operators can triage by category in the queue;
+    // leave `unknown` messages pristine (a `[unknown]` prefix is just noise).
+    const tagged =
+      classification.category === 'unknown'
+        ? message
+        : `[${classification.category}] ${message}`;
+    const statusMessage = willRetry ? `${tagged} (auto-retry ${retryCount + 1}/${budget})` : tagged;
+
+    const applied = await this.writeTerminal(entry.id, 'failed', statusMessage, leaseToken);
+    if (!applied) {
+      // Fenced out (lease lost) or already terminal — another owner controls
+      // this entry now. Do NOT re-enqueue: that would duplicate the model.
+      return;
+    }
+
+    if (willRetry) {
+      try {
+        await this.queueService.enqueue(
+          entry.modelId,
+          entry.source,
+          entry.priority,
+          entry.requestedBy ?? undefined,
+          {
+            ...entry.metadata,
+            infraRetryCount: retryCount + 1,
+            reason: `auto-retry after ${classification.category} failure`,
+          },
+        );
+        this.logger.warn('Scheduler: transient failure — re-enqueued for auto-retry', {
+          modelId: entry.modelId,
+          category: classification.category,
+          attempt: retryCount + 1,
+          budget,
+        });
+      } catch (err) {
+        this.logger.error('Scheduler: failed to re-enqueue after transient failure', {
+          modelId: entry.modelId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
+    if (classification.retriable) {
+      this.logger.warn('Scheduler: retry budget exhausted — quarantining model', {
+        modelId: entry.modelId,
+        category: classification.category,
+        retryCount,
+        budget,
+      });
+    }
+  }
+
   /** Stage 3 reasoning, recommendation report, queue completion, Slack. */
-  private async finalizePipeline(run: PipelineRun, queueEntryId: string): Promise<void> {
+  private async finalizePipeline(
+    run: PipelineRun,
+    queueEntryId: string,
+    leaseToken: string | undefined,
+  ): Promise<void> {
     if (this.stage3Worker) {
       const stage3Result = await this.stage3Worker.execute(run);
       run.stage3Result = stage3Result;
@@ -419,13 +664,14 @@ export class Scheduler {
     const stage2Failed =
       run.stage2Result?.status === 'failed' || run.stage2Result?.status === 'error';
     if (stage2Failed) {
-      await this.queueService.updateStatus(
+      await this.writeTerminal(
         queueEntryId,
         'failed',
         run.stage2Result?.reason ?? 'Stage 2 Kibana CI eval failed',
+        leaseToken,
       );
     } else {
-      await this.queueService.updateStatus(queueEntryId, 'completed');
+      await this.writeTerminal(queueEntryId, 'completed', undefined, leaseToken);
     }
 
     this.onModelCompleted?.(run.modelId);
@@ -504,6 +750,9 @@ export class Scheduler {
     this.deferredCleanups.set(queueEntryId, cleanup);
     void cleanup.pollPromise.finally(() => {
       this.deferredCleanups.delete(queueEntryId);
+      // Deferred poll (and its terminal write via finalizePipeline) is done —
+      // release the lease we retained so it stayed heartbeated.
+      this.entryLeases.delete(queueEntryId);
     });
   }
 
@@ -518,6 +767,7 @@ export class Scheduler {
       tunnelService?: TunnelService;
       publicEndpointUrl?: string;
     },
+    leaseToken: string | undefined,
     skipSuiteIds?: string[],
   ): Promise<CIEvalRunResult> {
     if (!this.ciEvals || !run.deployment || !this.config) {
@@ -778,10 +1028,11 @@ export class Scheduler {
               'CI Evals: vLLM deployment taken over externally during Buildkite poll — aborting Stage 2 for this model (retriable)',
               { modelId: run.modelId, reason },
             );
-            void this.queueService.updateStatus(
+            void this.writeTerminal(
               queueEntryId,
               'failed',
               `Stage 2 aborted: shared-VM takeover — ${reason}. Re-enqueue to retry once the GPU is free.`,
+              leaseToken,
             );
           },
           logLevel: this.config.logLevel,
@@ -800,7 +1051,7 @@ export class Scheduler {
           if (this.resultsStore) {
             await this.resultsStore.saveStage2Result(stage2Result);
           }
-          await this.finalizePipeline(run, queueEntryId);
+          await this.finalizePipeline(run, queueEntryId, leaseToken);
         })
         .catch(async (err) => {
           const msg = err instanceof Error ? err.message : String(err);
@@ -822,11 +1073,7 @@ export class Scheduler {
             modelId: run.modelId,
             error: msg,
           });
-          await this.queueService.updateStatus(
-            queueEntryId,
-            'failed',
-            msg,
-          );
+          await this.writeTerminal(queueEntryId, 'failed', msg, leaseToken);
         })
         .then(() =>
           this.releaseInfrastructure({

@@ -13,7 +13,8 @@ const RECOVERABLE_BUILD_STATES = new Set(['running', 'scheduled', 'blocked', 'ca
 
 export interface RecoverActiveEntriesResult {
   recovered: number;
-  failed: number;
+  /** Entries reset to `pending` for retry (previous daemon died mid-run). */
+  reclaimed: number;
 }
 
 /**
@@ -70,8 +71,12 @@ export async function resolveCompletedEvalSuites(
 }
 
 /**
- * On daemon startup, fail orphaned active queue entries unless a Buildkite CI eval
- * is still running for that model (recoverable after unclean shutdown).
+ * On daemon startup, recover orphaned active queue entries. When a Buildkite CI
+ * eval is still in-flight (or terminal) for a `benchmarking` model, the entry is
+ * left for the scheduler's resume path. Otherwise the entry is reclaimed back to
+ * `pending` for a fresh retry rather than failed — a crash should not lose a
+ * queued model. The VM lease is acquired before this runs, so any active entry
+ * is genuinely orphaned by a dead daemon.
  */
 export async function recoverOrFailActiveEntries(
   queueService: QueueService,
@@ -82,28 +87,18 @@ export async function recoverOrFailActiveEntries(
 ): Promise<RecoverActiveEntriesResult> {
   const entries = await queueService.getActiveEntries();
   let recovered = 0;
-  let failed = 0;
+  let reclaimed = 0;
 
   for (const entry of entries) {
     if (entry.status !== 'benchmarking') {
-      await queueService.updateStatus(
-        entry.id,
-        'failed',
-        'Orphaned active entry — previous daemon exited before completion',
-      );
-      failed++;
+      if (await queueService.reclaimEntry(entry.id)) reclaimed++;
       continue;
     }
 
     const ciEvalResults = await resultsStore.getCIEvalResults(entry.modelId, { limit: 30 });
     const runningEval = ciEvalResults.find((r) => r.status === 'running');
     if (!runningEval) {
-      await queueService.updateStatus(
-        entry.id,
-        'failed',
-        'Orphaned active entry — previous daemon exited before completion',
-      );
-      failed++;
+      if (await queueService.reclaimEntry(entry.id)) reclaimed++;
       continue;
     }
 
@@ -115,12 +110,7 @@ export async function recoverOrFailActiveEntries(
       buildState !== undefined &&
       (RECOVERABLE_BUILD_STATES.has(buildState) || isTerminalBuildkiteState(buildState));
     if (!recoverable) {
-      await queueService.updateStatus(
-        entry.id,
-        'failed',
-        'Orphaned active entry — previous daemon exited before completion',
-      );
-      failed++;
+      if (await queueService.reclaimEntry(entry.id)) reclaimed++;
       continue;
     }
 
@@ -134,5 +124,5 @@ export async function recoverOrFailActiveEntries(
     recovered++;
   }
 
-  return { recovered, failed };
+  return { recovered, reclaimed };
 }

@@ -115,4 +115,36 @@ describe('SlackNotifier', () => {
     const allText = JSON.stringify(body.blocks);
     expect(allText).toContain('TTFT p99 is 310ms');
   });
+
+  describe('notifyHealthDigest', () => {
+    it('renders an all-nominal header when no signal is breached', async () => {
+      const notifier = new SlackNotifier({ webhookUrl: 'https://hooks.slack.com/test', logLevel: 'error' });
+      const res = await notifier.notifyHealthDigest({
+        window: 'last 24h',
+        signals: [{ label: 'Queue', value: '2 pending', alert: false }],
+      });
+
+      expect(res.success).toBe(true);
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.blocks[0].text.text).toContain('all nominal');
+    });
+
+    it('renders an alert header + count when a signal is breached', async () => {
+      const notifier = new SlackNotifier({ webhookUrl: 'https://hooks.slack.com/test', logLevel: 'error' });
+      await notifier.notifyHealthDigest({
+        window: 'last 24h',
+        signals: [
+          { label: 'Daemon lease', value: '600s old', alert: true },
+          { label: 'VM utilization', value: '4%', alert: true },
+          { label: 'Queue', value: '0 pending', alert: false },
+        ],
+      });
+
+      const body = JSON.parse(fetchSpy.mock.calls[0]![1].body);
+      expect(body.blocks[0].text.text).toContain('2 alert(s)');
+      const allText = JSON.stringify(body.blocks);
+      expect(allText).toContain('Daemon lease');
+      expect(allText).toContain('VM utilization');
+    });
+  });
 });

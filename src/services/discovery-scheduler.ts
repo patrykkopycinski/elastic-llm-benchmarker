@@ -19,6 +19,61 @@ export interface ScoredModel extends ModelInfo {
   hardwareFit: boolean;
   /** Combined score: trending * 0.6 + hardware bonus (0 or 40) */
   totalScore: number;
+  /** ISO creation date from HuggingFace (used for recency / supersession). */
+  createdAt: string | null;
+  /** Normalized family key (org + base name, size/version/variant stripped). */
+  family: string;
+  /** True when a newer, hardware-fitting sibling in the same family exists. */
+  superseded: boolean;
+}
+
+/**
+ * A same-family sibling must be at least this much newer to supersede a model.
+ * Separates a genuinely older generation (months apart) from same-generation
+ * size variants (released together, e.g. Qwen3-Coder-30B vs -480B).
+ */
+const SUPERSEDE_MIN_AGE_GAP_MS = 30 * 24 * 60 * 60 * 1000;
+
+/** Variant/quantization suffix tokens that never distinguish a model family. */
+const FAMILY_VARIANT_TOKENS = new Set([
+  'instruct', 'chat', 'it', 'base', 'preview', 'thinking', 'reasoner', 'reasoning',
+  'fp8', 'fp16', 'bf16', 'awq', 'gptq', 'gguf', 'mlx', 'int3', 'int4', 'int8',
+]);
+
+function isSizeToken(token: string): boolean {
+  // Dense size (7b, 1.5b, 32b), MoE active params (a3b, a22b), or NxMb (8x7b).
+  return (
+    /^\d+(\.\d+)?b$/.test(token) ||
+    /^a\d+(\.\d+)?b$/.test(token) ||
+    /^\d+x\d+(\.\d+)?b$/.test(token)
+  );
+}
+
+/**
+ * Derive a normalized family key from a model id, stripping the size, series
+ * number, and variant/quantization suffixes so different generations of the
+ * same family collapse together (e.g. `Qwen/Qwen2.5-Coder-32B-Instruct` and
+ * `Qwen/Qwen3-Coder-30B-A3B-Instruct` both → `qwen/qwen-coder`).
+ */
+export function deriveModelFamily(modelId: string): string {
+  const slash = modelId.indexOf('/');
+  const org = (slash >= 0 ? modelId.slice(0, slash) : '').toLowerCase();
+  const name = (slash >= 0 ? modelId.slice(slash + 1) : modelId).toLowerCase();
+  const tokens = name.split(/[-_.]/).filter(Boolean);
+  const kept: string[] = [];
+  tokens.forEach((tok, i) => {
+    if (i === 0) {
+      // Strip a series number glued to the root token: qwen2→qwen, llama3→llama.
+      kept.push(tok.replace(/\d+$/, '') || tok);
+      return;
+    }
+    if (isSizeToken(tok)) return;
+    if (FAMILY_VARIANT_TOKENS.has(tok)) return;
+    if (/^v?\d+(\.\d+)*$/.test(tok)) return; // standalone version token (2.5, 3, 3.1, v2)
+    kept.push(tok);
+  });
+  const familyName = kept.join('-') || name;
+  return org ? `${org}/${familyName}` : familyName;
 }
 
 /**
@@ -124,7 +179,8 @@ export class DiscoveryScheduler {
   async runOnce(): Promise<RunOnceResult> {
     try {
       const scored = await this.discoverAndScore();
-      const stats = await this.autoQueue(scored);
+      const recentlyTerminal = await this.recentlyTerminalModelIds();
+      const stats = await this.autoQueue(scored, recentlyTerminal);
 
       return {
         discovered: scored.length,
@@ -233,6 +289,9 @@ export class DiscoveryScheduler {
           trendingScore: Math.round(trendingScore * 100) / 100,
           hardwareFit: fits,
           totalScore: Math.round(totalScore * 100) / 100,
+          createdAt: createdAt ? createdAt.toISOString() : null,
+          family: deriveModelFamily(model.id),
+          superseded: false,
         });
       } catch (err) {
         this.logger.debug(`Skipping ${model.id}: error during scoring: ${String(err)}`);
@@ -240,8 +299,44 @@ export class DiscoveryScheduler {
       }
     }
 
+    this.markSupersededByFamily(scored);
     scored.sort((a, b) => b.totalScore - a.totalScore);
     return scored;
+  }
+
+  /**
+   * Flag models that a newer, hardware-fitting sibling in the same family has
+   * superseded. Prevents a stale generation (e.g. Qwen2.5-Coder) from winning a
+   * benchmarking slot over a newer sibling that fits the same hardware. The
+   * flag is advisory for scoring; {@link autoQueue} skips superseded models.
+   */
+  private markSupersededByFamily(scored: ScoredModel[]): void {
+    const byFamily = new Map<string, ScoredModel[]>();
+    for (const model of scored) {
+      const group = byFamily.get(model.family);
+      if (group) group.push(model);
+      else byFamily.set(model.family, [model]);
+    }
+
+    for (const group of byFamily.values()) {
+      if (group.length < 2) continue;
+      for (const model of group) {
+        const modelMs = model.createdAt ? Date.parse(model.createdAt) : NaN;
+        if (Number.isNaN(modelMs)) continue;
+        const hasNewerFittingSibling = group.some((other) => {
+          if (other === model || !other.hardwareFit) return false;
+          const otherMs = other.createdAt ? Date.parse(other.createdAt) : NaN;
+          return !Number.isNaN(otherMs) && otherMs - modelMs >= SUPERSEDE_MIN_AGE_GAP_MS;
+        });
+        if (hasNewerFittingSibling) {
+          model.superseded = true;
+          this.logger.info('Discovery: model superseded by a newer same-family release', {
+            modelId: model.id,
+            family: model.family,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -250,7 +345,31 @@ export class DiscoveryScheduler {
    * When `autoQueue` is disabled, returns all models as skipped.
    * Never throws.
    */
-  async autoQueue(scoredModels: ScoredModel[]): Promise<AutoQueueResult> {
+  /**
+   * Model ids that reached a terminal state (completed/failed) within the
+   * configured freshness window. Skipping these keeps discovery from spending
+   * cost-cap budget re-benchmarking a just-evaluated or quarantined model. An
+   * ES error fails open (empty set) so discovery is never blocked. Returns an
+   * empty set when the freshness filter is disabled (0 days).
+   */
+  private async recentlyTerminalModelIds(): Promise<ReadonlySet<string>> {
+    const days = this.deps.config.skipRecentlyBenchmarkedDays ?? 30;
+    if (days <= 0) return new Set();
+    const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    try {
+      return await this.deps.queueService.findRecentTerminalModelIds(sinceIso);
+    } catch (err) {
+      this.logger.warn('Discovery: recent-terminal dedup query failed (failing open)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Set();
+    }
+  }
+
+  async autoQueue(
+    scoredModels: ScoredModel[],
+    skipModelIds: ReadonlySet<string> = new Set(),
+  ): Promise<AutoQueueResult> {
     if (!this.deps.config.autoQueue) {
       return { queued: 0, skipped: scoredModels.length, errors: 0 };
     }
@@ -263,6 +382,22 @@ export class DiscoveryScheduler {
     for (const model of scoredModels) {
       try {
         if (this.deps.discoveryService.isEvaluated(model.id)) {
+          skipped++;
+          continue;
+        }
+
+        if (skipModelIds.has(model.id)) {
+          this.logger.debug(
+            `Skipping ${model.id}: benchmarked or quarantined within the freshness window`,
+          );
+          skipped++;
+          continue;
+        }
+
+        if (model.superseded) {
+          this.logger.debug(
+            `Skipping ${model.id}: superseded by a newer same-family release that fits the hardware`,
+          );
           skipped++;
           continue;
         }

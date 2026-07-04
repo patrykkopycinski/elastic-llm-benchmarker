@@ -106,6 +106,7 @@ describe('recoverOrFailActiveEntries', () => {
     queueService = {
       getActiveEntries: vi.fn(),
       updateStatus: vi.fn(),
+      reclaimEntry: vi.fn().mockResolvedValue(true),
     } as unknown as QueueService;
     resultsStore = {
       getCIEvalResults: vi.fn(),
@@ -128,6 +129,8 @@ describe('recoverOrFailActiveEntries', () => {
         completedAt: null,
         errorMessage: null,
         requestedBy: null,
+        leaseToken: null,
+        heartbeatAt: null,
       },
     ]);
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
@@ -155,11 +158,11 @@ describe('recoverOrFailActiveEntries', () => {
       logger,
     );
 
-    expect(result).toEqual({ recovered: 1, failed: 0 });
-    expect(queueService.updateStatus).not.toHaveBeenCalled();
+    expect(result).toEqual({ recovered: 1, reclaimed: 0 });
+    expect(queueService.reclaimEntry).not.toHaveBeenCalled();
   });
 
-  it('fails benchmarking entry when Buildkite build state is unknown', async () => {
+  it('reclaims benchmarking entry to pending when Buildkite build state is unknown', async () => {
     vi.mocked(queueService.getActiveEntries).mockResolvedValue([
       {
         id: 'q1',
@@ -172,6 +175,8 @@ describe('recoverOrFailActiveEntries', () => {
         completedAt: null,
         errorMessage: null,
         requestedBy: null,
+        leaseToken: null,
+        heartbeatAt: null,
       },
     ]);
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
@@ -199,12 +204,9 @@ describe('recoverOrFailActiveEntries', () => {
       logger,
     );
 
-    expect(result).toEqual({ recovered: 0, failed: 1 });
-    expect(queueService.updateStatus).toHaveBeenCalledWith(
-      'q1',
-      'failed',
-      expect.stringContaining('Orphaned active entry'),
-    );
+    expect(result).toEqual({ recovered: 0, reclaimed: 1 });
+    expect(queueService.reclaimEntry).toHaveBeenCalledWith('q1');
+    expect(queueService.updateStatus).not.toHaveBeenCalled();
   });
 
   it('recovers benchmarking entry when Buildkite build already finished (passed)', async () => {
@@ -220,6 +222,8 @@ describe('recoverOrFailActiveEntries', () => {
         completedAt: null,
         errorMessage: null,
         requestedBy: null,
+        leaseToken: null,
+        heartbeatAt: null,
       },
     ]);
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
@@ -247,8 +251,8 @@ describe('recoverOrFailActiveEntries', () => {
       logger,
     );
 
-    expect(result).toEqual({ recovered: 1, failed: 0 });
-    expect(queueService.updateStatus).not.toHaveBeenCalled();
+    expect(result).toEqual({ recovered: 1, reclaimed: 0 });
+    expect(queueService.reclaimEntry).not.toHaveBeenCalled();
   });
 });
 

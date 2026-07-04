@@ -7,7 +7,7 @@ import type {
   ModelEvaluationReport,
 } from '../types/benchmark.js';
 import type { BenchmarkThresholds } from '../types/config.js';
-import { resolveMaxITLMs } from '../types/config.js';
+import { resolveMaxITLMs, resolveMinToolCallSuccessRate } from '../types/config.js';
 import { getModelParamsBillions } from './gpu-requirements.js';
 import { createLogger } from '../utils/logger.js';
 
@@ -339,34 +339,41 @@ export class ModelEvaluationEngine {
     benchmarkResult: BenchmarkResult,
   ): CriterionEvaluation {
     const toolCallResults = benchmarkResult.toolCallResults;
+    // Resolve the success-rate floor for this model's size tier. A flat 100%
+    // floor excludes smaller models that emit occasional malformed tool-call
+    // JSON; Agent Builder recovers those via validate_tool_calls filter + retry.
+    const paramBillions = getModelParamsBillions(benchmarkResult.modelId);
+    const minRate = this.benchmarkThresholds
+      ? resolveMinToolCallSuccessRate(this.benchmarkThresholds, paramBillions)
+      : this.minToolCallSuccessRate;
 
     if (!toolCallResults) {
       return {
         criterion: 'tool_calling',
-        description: `Single-tool calling success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
+        description: `Single-tool calling success rate >= ${(minRate * 100).toFixed(0)}%`,
         passed: false,
         severity: 'HARD',
         actualValue: 'no tool call data',
-        requiredValue: `success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
+        requiredValue: `success rate >= ${(minRate * 100).toFixed(0)}%`,
         message: `No tool call benchmark data available for model ${benchmarkResult.modelId}. Cannot verify hard requirement.`,
       };
     }
 
     const successRate = toolCallResults.successRate;
-    const passed = successRate >= this.minToolCallSuccessRate;
+    const passed = successRate >= minRate;
 
     const actualDescription = `${(successRate * 100).toFixed(1)}% success rate (${toolCallResults.totalTests} tests)`;
 
     return {
       criterion: 'tool_calling',
-      description: `Single-tool calling success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
+      description: `Single-tool calling success rate >= ${(minRate * 100).toFixed(0)}%`,
       passed,
       severity: 'HARD',
       actualValue: actualDescription,
-      requiredValue: `success rate >= ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
+      requiredValue: `success rate >= ${(minRate * 100).toFixed(0)}%`,
       message: passed
         ? `Tool calling meets requirement with ${(successRate * 100).toFixed(1)}% success rate`
-        : `Tool calling success rate ${(successRate * 100).toFixed(1)}% is below the required ${(this.minToolCallSuccessRate * 100).toFixed(0)}%`,
+        : `Tool calling success rate ${(successRate * 100).toFixed(1)}% is below the required ${(minRate * 100).toFixed(0)}%${paramBillions ? ` (~${paramBillions}B tier)` : ''}`,
     };
   }
 

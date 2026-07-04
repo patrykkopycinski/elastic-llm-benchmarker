@@ -64,6 +64,9 @@ const DEFAULT_SEARCH = '';
 const DEFAULT_TOOL_CALLING_WHITELIST = new Set([
   'llama',
   'qwen2',
+  'qwen2_moe',
+  'qwen3',
+  'qwen3_moe',
   'mistral',
   'mixtral',
 ]);
@@ -84,6 +87,8 @@ const COMPATIBLE_ARCHITECTURES = new Set([
   'qwen',
   'qwen2',
   'qwen2_moe',
+  'qwen3',
+  'qwen3_moe',
   'gemma',
   'gemma2',
   'phi',

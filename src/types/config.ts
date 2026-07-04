@@ -30,6 +30,18 @@ export const itlTierSchema = z.object({
 });
 
 /**
+ * Single tier for parameter-count-based single-tool success-rate floors.
+ * First tier where parameterCountBillions <= maxParamsBillions applies.
+ * Smaller models get a lower (but still usable) floor because they emit the
+ * occasional malformed tool-call JSON that Agent Builder's validate_tool_calls
+ * filter + retry recover from — a flat 100% floor excludes them needlessly.
+ */
+export const toolCallTierSchema = z.object({
+  maxParamsBillions: z.number().positive(),
+  minSuccessRate: z.number().min(0).max(1),
+});
+
+/**
  * Benchmark threshold configuration for model evaluation criteria
  */
 export const benchmarkThresholdsSchema = z.object({
@@ -44,7 +56,20 @@ export const benchmarkThresholdsSchema = z.object({
     { maxParamsBillions: Infinity, maxITLMs: 100 },
   ]),
   maxToolCallLatencyMs: z.number().positive().default(1000),
+  /** Legacy flat single-tool success floor (used when model param count is unknown) */
   minToolCallSuccessRate: z.number().min(0).max(1).default(1.0),
+  /**
+   * Tiered single-tool success-rate floors by model size (param count in billions).
+   * A flat 100% floor rejects otherwise-usable smaller models that emit occasional
+   * malformed tool-call JSON (recovered by Agent Builder's validate_tool_calls filter
+   * + retry). Mirrors maxITLMsTiers: first tier where params <= maxParamsBillions.
+   */
+  minToolCallSuccessRateTiers: z.array(toolCallTierSchema).default([
+    { maxParamsBillions: 14, minSuccessRate: 0.9 },
+    { maxParamsBillions: 40, minSuccessRate: 0.95 },
+    { maxParamsBillions: 80, minSuccessRate: 0.98 },
+    { maxParamsBillions: Infinity, minSuccessRate: 1.0 },
+  ]),
   concurrencyLevels: z.array(z.number().int().positive()).default([1, 4, 16]),
   healthCheckTimeoutSeconds: z.number().int().positive().default(1800),
 });
@@ -550,6 +575,87 @@ export const agentBuilderBaselineSchema = z.object({
 });
 
 /**
+ * Cost cap / spend guardrail configuration.
+ *
+ * Smallest-automation-first spend ceiling: counts models that reached a
+ * terminal state (completed/failed) in the current UTC day and pauses NEW
+ * work intake once the ceiling is hit. It NEVER stops the GPU VM (stopping =
+ * permanent loss) and NEVER interrupts an in-flight or resuming run — only
+ * new dequeues (and, when hard-capped, discovery auto-queueing) are gated.
+ * Capping models/day transitively caps the downstream CI-eval builds and EIS
+ * reasoning tokens each model triggers, so a single knob is enough for v1.
+ */
+export const costCapsConfigSchema = z.object({
+  /** Whether the daily spend ceiling is enforced. Defaults to false. */
+  enabled: z.boolean().default(false),
+  /**
+   * Max models that may reach a terminal state per UTC day before the daemon
+   * pauses dequeuing new pending work. In-flight/resume runs still finish.
+   */
+  maxModelsPerDay: z.number().int().positive().default(20),
+});
+
+/**
+ * Periodic maintenance & health-digest policy (24/7-autonomy P0/P1). One daily
+ * tick emits a VM cost/utilization snapshot to ES, posts a Slack health digest
+ * (and fires on threshold breaches), and re-enqueues retriable quarantined
+ * (`failed`) entries. Never stops the VM — the ephemeral GPU host is lost if
+ * stopped, so low utilization is a signal to widen intake, not to shut down.
+ */
+export const maintenanceConfigSchema = z.object({
+  /** Whether the maintenance/health tick runs. Defaults to true. */
+  enabled: z.boolean().default(true),
+  /** How often the maintenance tick runs. */
+  intervalHours: z.number().positive().default(24),
+  /**
+   * Estimated all-in hourly cost (USD) of the GPU VM, used only to report burn
+   * vs. throughput. Default reflects a 2×A100-80GB on-demand VM.
+   */
+  vmHourlyCostUsd: z.number().min(0).default(8),
+  /**
+   * Utilization ratio (benchmark-hours / wall-hours) below which the digest
+   * flags the VM as underused — the lever is raising the daily cap / widening
+   * discovery, never stopping the VM.
+   */
+  lowUtilizationThreshold: z.number().min(0).max(1).default(0.2),
+  /** Alert when the daemon lease heartbeat is older than this (ms). */
+  staleLeaseAlertMs: z.number().int().positive().default(300_000),
+  /** Re-enqueue retriable quarantined failures older than this many days. */
+  dlqRetryAfterDays: z.number().min(0).default(7),
+  /** Max quarantined entries to re-enqueue per sweep (bounded, cost-cap gated). */
+  dlqMaxRequeuePerSweep: z.number().int().min(0).default(5),
+  /** Post the daily health digest to Slack (requires slack.webhookUrl). */
+  postSlackDigest: z.boolean().default(true),
+});
+
+/**
+ * Auto-retry policy for failed queue entries, driven by failure classification
+ * (see src/utils/failure-classifier.ts). Transient-infra and resource-fit
+ * failures are re-enqueued (bounded) instead of quarantined; model-arch and
+ * unknown failures are never auto-retried.
+ */
+export const retryConfigSchema = z.object({
+  /** Whether classification-driven auto-retry is enabled. Defaults to true. */
+  enabled: z.boolean().default(true),
+  /** Max auto re-enqueues for transient-infra failures (network, disk, docker). */
+  maxInfraRetries: z.number().int().nonnegative().default(2),
+  /** Max auto re-enqueues for resource-fit failures (OOM / concurrency). */
+  maxResourceFitRetries: z.number().int().nonnegative().default(1),
+});
+
+/**
+ * Scheduler runtime tuning. Currently just the stuck-entry reclaimer TTL: the
+ * heartbeat-age window after which an entry stuck in `deploying`/`benchmarking`
+ * (from a crashed/abandoned daemon) is reset to `pending` and retried. The
+ * periodic reclaim also throttles itself to at most once per this window. Must
+ * stay comfortably above the daemon poll interval so a live run's heartbeat
+ * always lands first. Defaults to 120s (matches the queue lease staleness).
+ */
+export const schedulerConfigSchema = z.object({
+  entryStaleAfterMs: z.number().int().positive().default(120_000),
+});
+
+/**
  * Discovery scheduler configuration for automated model discovery and queueing.
  */
 export const discoverySchedulerConfigSchema = z.object({
@@ -567,6 +673,13 @@ export const discoverySchedulerConfigSchema = z.object({
   autoQueue: z.boolean().default(true),
   /** Hardware profile ID used for dry-run fit checks. */
   hardwareProfileId: z.string().default('2xa100-80gb'),
+  /**
+   * Skip auto-queueing a model that already reached a terminal state
+   * (completed or failed/quarantined) within this many days. Prevents
+   * discovery from spending cost-cap budget re-benchmarking a model that was
+   * just evaluated or quarantined. 0 disables the freshness filter.
+   */
+  skipRecentlyBenchmarkedDays: z.number().int().min(0).default(30),
 });
 
 /**
@@ -609,8 +722,16 @@ export const appConfigSchema = z.object({
   edotCollector: edotCollectorConfigSchema.default({}),
   /** Kibana repository configuration for cloning the Kibana main repo. */
   kibanaRepo: kibanaRepoConfigSchema.default({}),
+  /** Scheduler runtime tuning (stuck-entry reclaimer TTL). */
+  scheduler: schedulerConfigSchema.default({}),
   /** Discovery scheduler configuration for automated model discovery. */
   discoveryScheduler: discoverySchedulerConfigSchema.default({}),
+  /** Cost cap / daily spend guardrail (gates new work intake, never the VM). */
+  costCaps: costCapsConfigSchema.default({}),
+  /** Periodic maintenance: VM cost emission, health digest, DLQ re-try sweep. */
+  maintenance: maintenanceConfigSchema.default({}),
+  /** Classification-driven auto-retry policy for failed queue entries. */
+  retry: retryConfigSchema.default({}),
   /** Smoke test configuration for validating deployed models before CI. */
   smokeTest: smokeTestConfigSchema.default({}),
   /** Buildkite CI eval configuration. */
@@ -687,6 +808,34 @@ export function resolveMaxItlP50Ms(
   );
 }
 
+/**
+ * Resolves the parameter-count-aware minimum single-tool success rate from a tier
+ * list. Uses the first tier where parameterCountBillions <= maxParamsBillions.
+ * Falls back to the flat `minToolCallSuccessRate` when the param count is unknown
+ * or non-positive. Larger (more capable) models get a stricter floor; smaller ones
+ * a lower floor that Agent Builder's malformed-tool-call filter + retry tolerate.
+ */
+export function resolveMinToolCallSuccessRate(
+  thresholds: BenchmarkThresholds,
+  parameterCountBillions: number | null,
+): number {
+  const tiers = thresholds.minToolCallSuccessRateTiers;
+  const flatFallback = thresholds.minToolCallSuccessRate;
+  if (parameterCountBillions === null || parameterCountBillions <= 0) {
+    return flatFallback;
+  }
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    return flatFallback;
+  }
+  const sorted = [...tiers].sort((a, b) => a.maxParamsBillions - b.maxParamsBillions);
+  for (const tier of sorted) {
+    if (parameterCountBillions <= tier.maxParamsBillions) {
+      return tier.minSuccessRate;
+    }
+  }
+  return sorted[sorted.length - 1]?.minSuccessRate ?? flatFallback;
+}
+
 export type VMHardwareProfile = z.infer<typeof vmHardwareProfileSchema>;
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
@@ -705,10 +854,15 @@ export type EmailChannelConfig = z.infer<typeof emailChannelConfigSchema>;
 export type ElasticsearchConfig = z.infer<typeof elasticsearchConfigSchema>;
 export type ElasticAgentConfig = z.infer<typeof elasticAgentConfigSchema>;
 export type Stage2Thresholds = z.infer<typeof stage2ThresholdsSchema>;
+export type ToolCallTier = z.infer<typeof toolCallTierSchema>;
 export type GoldenClusterConfig = z.infer<typeof goldenClusterConfigSchema>;
 export type EdotCollectorConfig = z.infer<typeof edotCollectorConfigSchema>;
 export type KibanaRepoConfig = z.infer<typeof kibanaRepoConfigSchema>;
 export type DiscoverySchedulerConfig = z.infer<typeof discoverySchedulerConfigSchema>;
+export type SchedulerConfig = z.infer<typeof schedulerConfigSchema>;
+export type CostCapsConfig = z.infer<typeof costCapsConfigSchema>;
+export type MaintenanceConfig = z.infer<typeof maintenanceConfigSchema>;
+export type RetryConfig = z.infer<typeof retryConfigSchema>;
 export type SmokeTestConfig = z.infer<typeof smokeTestConfigSchema>;
 export type BuildkiteConfig = z.infer<typeof buildkiteConfigSchema>;
 export type AgentBuilderBaselineConfig = z.infer<typeof agentBuilderBaselineSchema>;

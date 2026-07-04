@@ -787,4 +787,84 @@ describe('VllmDeploymentService', () => {
       );
     });
   });
+
+  describe('ensureDiskSpace — LRU eviction', () => {
+    const KEEP_ID = 'meta-llama/Llama-3-70B-Instruct';
+    const KEEP_DIR = 'models--meta-llama--Llama-3-70B-Instruct';
+    const MOUNT = '/var/lib/docker/volumes/vllm-hf-cache/_data';
+    const dirs = [
+      `${MOUNT}/hub/models--org--old-a`, // oldest (evict first)
+      `${MOUNT}/hub/${KEEP_DIR}`, // protected
+      `${MOUNT}/hub/models--org--old-b`,
+    ];
+
+    function wire(startFreeGb: number, bumpPerEvictGb: number) {
+      let freeGb = startFreeGb;
+      const evicted: string[] = [];
+      mockExec.mockImplementation((_c: SSHConfig, command: string) => {
+        if (command.includes('df -PBG')) {
+          return Promise.resolve(createCommandResult({ stdout: `${freeGb}\n` }));
+        }
+        if (command.includes('docker system prune')) {
+          return Promise.resolve(createCommandResult());
+        }
+        if (command.includes('docker volume inspect')) {
+          return Promise.resolve(createCommandResult({ stdout: `${MOUNT}\n` }));
+        }
+        if (command.includes('ls -1d -tr')) {
+          return Promise.resolve(createCommandResult({ stdout: `${dirs.join('\n')}\n` }));
+        }
+        if (command.includes('rm -rf') && command.includes('/hub/models--')) {
+          const dir = command.replace('rm -rf', '').trim();
+          evicted.push(dir.split('/').pop() ?? '');
+          freeGb += bumpPerEvictGb;
+          return Promise.resolve(createCommandResult());
+        }
+        // host prefetch cache clear + anything else
+        return Promise.resolve(createCommandResult());
+      });
+      return { evicted, getFree: () => freeGb };
+    }
+
+    it('evicts oldest models until the threshold clears, protecting the deploy target', async () => {
+      const { evicted } = wire(10, 40); // 10 → 50 → 90 (>= 80 default)
+      const svc = new VllmDeploymentService(createMockSSHPool(mockExec), 'error', {
+        minFreeDiskGb: 80,
+        hfCacheVolume: 'vllm-hf-cache',
+      });
+
+      await svc.ensureDiskSpace(testSSHConfig, KEEP_ID);
+
+      expect(evicted).toContain('models--org--old-a');
+      expect(evicted).toContain('models--org--old-b');
+      expect(evicted).not.toContain(KEEP_DIR);
+    });
+
+    it('stops evicting as soon as free space clears the threshold', async () => {
+      const { evicted } = wire(10, 100); // first eviction jumps to 110 (>= 80)
+      const svc = new VllmDeploymentService(createMockSSHPool(mockExec), 'error', {
+        minFreeDiskGb: 80,
+        hfCacheVolume: 'vllm-hf-cache',
+      });
+
+      await svc.ensureDiskSpace(testSSHConfig, KEEP_ID);
+
+      // Only the single oldest dir is removed; the loop breaks before touching more.
+      expect(evicted).toEqual(['models--org--old-a']);
+    });
+
+    it('skips GC entirely when free disk already exceeds the threshold', async () => {
+      wire(500, 40);
+      const svc = new VllmDeploymentService(createMockSSHPool(mockExec), 'error', {
+        minFreeDiskGb: 80,
+        hfCacheVolume: 'vllm-hf-cache',
+      });
+
+      await svc.ensureDiskSpace(testSSHConfig, KEEP_ID);
+
+      const calls = mockExec.mock.calls.map((c: unknown[]) => c[1] as string);
+      expect(calls.some((cmd) => cmd.includes('rm -rf'))).toBe(false);
+      expect(calls.some((cmd) => cmd.includes('docker system prune'))).toBe(false);
+    });
+  });
 });

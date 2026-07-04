@@ -40,6 +40,21 @@ if [[ -z "${ELASTICSEARCH_API_KEY:-}" ]]; then
   fi
 fi
 
+# Boot-time log tail-truncate. launchd does NOT rotate StandardOutPath, so the
+# daemon log would grow unbounded across KeepAlive respawns. Keep the last ~5MB
+# whenever the file exceeds ~50MB. Runs once per launch (each launchd respawn),
+# which is enough because launchd restarts the daemon on any crash/reboot.
+LOG_FILE="${BENCHMARKER_DAEMON_LOG:-${ROOT}/.smoke-logs/daemon.log}"
+mkdir -p "$(dirname "$LOG_FILE")"
+if [[ -f "$LOG_FILE" ]]; then
+  LOG_SIZE=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+  if [[ "${LOG_SIZE:-0}" -gt 52428800 ]]; then
+    TAIL_TMP="${LOG_FILE}.tail"
+    tail -c 5242880 "$LOG_FILE" > "$TAIL_TMP" 2>/dev/null && mv "$TAIL_TMP" "$LOG_FILE"
+    echo "[start-local] truncated $LOG_FILE (was ${LOG_SIZE} bytes, kept last ~5MB)" >> "$LOG_FILE"
+  fi
+fi
+
 export BENCHMARKER_CONFIG="${ROOT}/config/local.json"
 
 if [[ -z "${BUILDKITE_API_TOKEN:-}" && -f "${HOME}/.buildkite/token" ]]; then

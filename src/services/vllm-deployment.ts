@@ -58,6 +58,15 @@ export interface VllmDeploymentOptions {
    * `vllm-hf-cache` (a docker-managed named volume). Set to '' to disable the mount.
    */
   hfCacheVolume?: string;
+  /**
+   * Minimum free disk (GB) required on the docker filesystem before a deploy.
+   * When free space is below this, a pre-deploy GC prunes dead docker resources,
+   * clears the host HuggingFace prefetch cache, then LRU-evicts the oldest cached
+   * model weight sets from the shared `vllm-hf-cache` volume (never the model
+   * being deployed) until the threshold clears.
+   * Default 80 (headroom for a ~70B download). Set to 0 to disable the check.
+   */
+  minFreeDiskGb?: number;
 }
 
 /** Result of a successful vLLM deployment */
@@ -277,6 +286,7 @@ export class VllmDeploymentService {
     chatTemplate?: string;
     useSudo: boolean;
     otlpTracesEndpoint: string | null;
+    minFreeDiskGb: number;
   };
 
   /**
@@ -309,6 +319,7 @@ export class VllmDeploymentService {
       useSudo: options.useSudo ?? false,
       otlpTracesEndpoint: options.otlpTracesEndpoint ?? null,
       hfCacheVolume: options.hfCacheVolume ?? 'vllm-hf-cache',
+      minFreeDiskGb: options.minFreeDiskGb ?? 80,
     };
 
     // Initialize the health check service with matching configuration
@@ -390,6 +401,12 @@ export class VllmDeploymentService {
         ),
       });
     }
+
+    // Step 0: Reclaim disk if the VM is low on space, so the weight download +
+    // container layer never hit "no space left on device" mid-deploy. Best-effort:
+    // never blocks the deploy — if the disk is genuinely full the docker run fails
+    // and the scheduler's classifier retries it after this GC has run once.
+    await this.ensureDiskSpace(sshConfig, model.id);
 
     // Step 1: Stop existing vLLM containers
     await this.stopExistingContainers(sshConfig, model.id);
@@ -866,6 +883,193 @@ export class VllmDeploymentService {
    */
   private generateContainerName(modelId: string): string {
     return modelIdToContainerName(modelId, this.options.containerNamePrefix);
+  }
+
+  /**
+   * Read free disk (GB) on the docker filesystem. Returns null if it can't be
+   * parsed (df/docker unavailable) so callers fail open rather than GC blindly.
+   */
+  private async readFreeDiskGb(sshConfig: SSHConfig): Promise<number | null> {
+    try {
+      const result = await this.execSSH(
+        sshConfig,
+        `df -PBG "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || echo /)" | awk 'NR==2 {gsub(/[^0-9]/,"",$4); print $4}'`,
+        20_000,
+      );
+      const gb = Number.parseInt(result.stdout.trim(), 10);
+      return Number.isFinite(gb) ? gb : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Pre-deploy disk hygiene. When free space is below `minFreeDiskGb`, reclaim
+   * space in escalating, SAFE steps and re-check after each:
+   *   1. `docker system prune -f` — dead containers, dangling images, build
+   *      cache, unused networks. Never touches named volumes or in-use images.
+   *   2. Clear the HOST HuggingFace prefetch cache (`~/.cache/huggingface/hub`,
+   *      and `/root/...` when running docker with sudo). This is the download
+   *      cache used by `prefetchWeights` on the host; the container serves
+   *      weights from the `vllm-hf-cache` docker volume, so clearing the host
+   *      cache never breaks a running model.
+   *   3. LRU-evict the OLDEST cached models from the `vllm-hf-cache` docker
+   *      volume (skipping the model about to be deployed), one at a time, until
+   *      free space clears the threshold. This is where the real reclaim lives:
+   *      each `models--org--name` weight set is tens of GB, and the volume — not
+   *      the host prefetch dir — is what actually fills the VM. Evicted models
+   *      simply re-download on their next benchmark.
+   *
+   * `keepModelId`, when provided, protects that model's weight set from eviction
+   * so a deploy never deletes the very weights it is about to serve. Best-effort
+   * throughout; a GC failure is logged, not thrown (never stops the VM, never
+   * blocks deploy).
+   */
+  async ensureDiskSpace(sshConfig: SSHConfig, keepModelId?: string): Promise<void> {
+    const minFreeGb = this.options.minFreeDiskGb;
+    if (minFreeGb <= 0) return;
+
+    const before = await this.readFreeDiskGb(sshConfig);
+    if (before === null) {
+      this.logger.debug('ensureDiskSpace: could not read free disk — skipping GC');
+      return;
+    }
+    if (before >= minFreeGb) {
+      this.logger.debug('ensureDiskSpace: sufficient free disk', { freeGb: before, minFreeGb });
+      return;
+    }
+
+    this.logger.warn('ensureDiskSpace: low disk — running pre-deploy GC', {
+      freeGb: before,
+      minFreeGb,
+    });
+
+    try {
+      await this.execSSH(sshConfig, 'docker system prune -f', 120_000);
+    } catch (err) {
+      this.logger.warn('ensureDiskSpace: docker prune failed (continuing)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    let after = await this.readFreeDiskGb(sshConfig);
+    if (after !== null && after < minFreeGb) {
+      // Escalate: clear the host prefetch cache (never the weights volume).
+      const hubPath = this.options.useSudo
+        ? '/root/.cache/huggingface/hub'
+        : '"$HOME"/.cache/huggingface/hub';
+      try {
+        await this.execSSH(sshConfig, `rm -rf ${hubPath}`, 120_000);
+        this.logger.info('ensureDiskSpace: cleared host HuggingFace prefetch cache', { hubPath });
+      } catch (err) {
+        this.logger.warn('ensureDiskSpace: failed to clear host HF cache (continuing)', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      after = await this.readFreeDiskGb(sshConfig);
+    }
+
+    if (after !== null && after < minFreeGb) {
+      // Final escalation: LRU-evict the oldest cached model weight sets from the
+      // shared volume until free space clears the threshold. This is the reclaim
+      // that actually moves the needle (steps 1–2 rarely free more than a few GB).
+      after = await this.evictOldestCachedModels(sshConfig, minFreeGb, after, keepModelId);
+    }
+
+    this.logger.info('ensureDiskSpace: GC complete', {
+      freeGbBefore: before,
+      freeGbAfter: after,
+      minFreeGb,
+      stillLow: after !== null && after < minFreeGb,
+    });
+  }
+
+  /**
+   * LRU-evict cached model weight sets from the `vllm-hf-cache` docker volume,
+   * oldest access-time first, deleting one at a time and re-checking free disk
+   * after each until it clears `minFreeGb` (or nothing is left to evict). The
+   * model named by `keepModelId` is never evicted. Best-effort: any failure is
+   * logged and the current free-disk reading is returned unchanged.
+   *
+   * HuggingFace stores each repo under `<mount>/hub/models--<org>--<name>` (the
+   * repo id with `/` replaced by `--`), so the keep-dir is derived by the same
+   * transform.
+   */
+  private async evictOldestCachedModels(
+    sshConfig: SSHConfig,
+    minFreeGb: number,
+    currentFreeGb: number | null,
+    keepModelId?: string,
+  ): Promise<number | null> {
+    const volume = this.options.hfCacheVolume;
+    if (!volume) return currentFreeGb;
+
+    let mountpoint: string;
+    try {
+      const mp = await this.execSSH(
+        sshConfig,
+        `docker volume inspect -f '{{.Mountpoint}}' ${volume}`,
+        20_000,
+      );
+      mountpoint = mp.stdout.trim();
+      if (!mountpoint) return currentFreeGb;
+    } catch (err) {
+      this.logger.warn('ensureDiskSpace: could not resolve HF cache volume mountpoint', {
+        volume,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return currentFreeGb;
+    }
+
+    const hubDir = `${mountpoint}/hub`;
+    // Oldest-access-time first (`-tr`), one dir per line. Absolute paths (`-d` on
+    // the glob) so deletion targets are unambiguous.
+    let dirs: string[];
+    try {
+      const listing = await this.execSSH(
+        sshConfig,
+        `ls -1d -tr --time=atime ${hubDir}/models--* 2>/dev/null || true`,
+        30_000,
+      );
+      dirs = listing.stdout
+        .split('\n')
+        .map((d) => d.trim())
+        .filter((d) => d.length > 0);
+    } catch (err) {
+      this.logger.warn('ensureDiskSpace: could not list cached models for eviction', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return currentFreeGb;
+    }
+
+    const keepDir = keepModelId ? `models--${keepModelId.replace(/\//g, '--')}` : null;
+    let free = currentFreeGb;
+
+    for (const dir of dirs) {
+      if (free !== null && free >= minFreeGb) break;
+      const base = dir.split('/').pop() ?? '';
+      if (keepDir && base === keepDir) {
+        this.logger.debug('ensureDiskSpace: skipping keep model during eviction', { dir: base });
+        continue;
+      }
+      try {
+        await this.execSSH(sshConfig, `rm -rf ${dir}`, 180_000);
+        const freed = await this.readFreeDiskGb(sshConfig);
+        this.logger.info('ensureDiskSpace: evicted cached model to reclaim disk', {
+          model: base,
+          freeGbAfter: freed,
+          minFreeGb,
+        });
+        free = freed;
+      } catch (err) {
+        this.logger.warn('ensureDiskSpace: failed to evict cached model (continuing)', {
+          model: base,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return free;
   }
 
   /**

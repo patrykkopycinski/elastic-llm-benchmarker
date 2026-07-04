@@ -682,15 +682,36 @@ describe('ModelCandidateFilter', () => {
   });
 
   describe('instruct variant filter', () => {
-    it('should reject base models without instruct/chat in the id', () => {
+    it('never hard-rejects on a missing instruct/chat name — warns instead when no parser is known', () => {
       const filter = new ModelCandidateFilter('error', { requireInstructVariant: true });
+      // No known vLLM parser (unknown arch, no qwen/llama/mistral id hint) and no
+      // instruct/chat name marker: uncertain, so warn — but never hard-reject.
       const model = createModelCandidate({
-        id: 'meta-llama/Llama-3.1-70B',
+        id: 'some-org/mystery-base-model',
+        architecture: 'unknown-arch',
+        supportsToolCalling: false,
         parameterCount: 70_000_000_000,
       });
       const result = filter.evaluate(model);
 
-      expect(result.rejections.some((r) => r.criterion === 'instruct_variant')).toBe(true);
+      expect(result.rejections.some((r) => r.criterion === 'instruct_variant')).toBe(false);
+      expect(result.warnings.some((r) => r.criterion === 'instruct_variant')).toBe(true);
+    });
+
+    it('accepts a no-name model with a known vLLM chat/tool parser (capability beats naming — Ornith case)', () => {
+      const filter = new ModelCandidateFilter('error', { requireInstructVariant: true });
+      // Ornith-1.0-35B: Qwen3.5-MoE arch, id lacks "instruct"/"chat"/"qwen", yet it
+      // is the best-evaluated model (support/high). The capability signal (hermes
+      // parser via qwen arch) must clear it — the old name-only gate rejected it.
+      const model = createModelCandidate({
+        id: 'deepreinforce-ai/Ornith-1.0-35B',
+        architecture: 'qwen3_5_moe',
+        parameterCount: 35_000_000_000,
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.rejections.some((r) => r.criterion === 'instruct_variant')).toBe(false);
+      expect(result.warnings.some((r) => r.criterion === 'instruct_variant')).toBe(false);
     });
 
     it('should accept instruct-tuned models', () => {

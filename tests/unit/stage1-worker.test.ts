@@ -414,5 +414,55 @@ describe('Stage1WorkerImpl', () => {
         expect.stringContaining('OOM'),
       );
     });
+
+    it('should surface rejection reasons as result.error when benchmark completes but does not pass', async () => {
+      // Model deploys and benchmarks run to completion but fail the gate
+      // (e.g. container crashed at higher concurrency). This path does NOT
+      // throw, so without propagating rejectionReasons the queue entry would
+      // record error_message: null — a silent failure.
+      const metrics: BenchmarkMetrics = {
+        itlMs: 10,
+        ttftMs: 100,
+        throughputTokensPerSec: 1500,
+        p99LatencyMs: 50,
+        concurrencyLevel: 1,
+      };
+      deps.vllmEngine = {
+        engineType: 'vllm',
+        deploy: vi.fn().mockResolvedValue({
+          deploymentId: 'c-1',
+          deploymentName: 'vllm-test',
+          deploymentCommand: 'docker run',
+          modelId: 'meta-llama/Llama-3-8B',
+          toolCallParser: null,
+          parallelismConfig: 1,
+          maxModelLen: 4096,
+          apiEndpoint: 'http://localhost:8000',
+          timestamp: new Date().toISOString(),
+          engineImage: 'vllm:latest',
+          healthCheckResult: {
+            healthy: true,
+            totalTimeMs: 1000,
+            pollAttempts: 3,
+            errorClassification: null,
+            containerLogs: null,
+            modelInfo: null,
+          },
+        }),
+        stop: vi.fn().mockResolvedValue(true),
+        runBenchmarks: vi.fn().mockResolvedValue({
+          passed: false,
+          runs: [{ concurrencyLevel: 1, success: true, metrics, rawOutput: 'ok' }],
+          combinedRawOutput: 'cannot exec in a stopped container',
+          rejectionReasons: ['Benchmark failed at concurrency level(s): 4, 16'],
+        }),
+      } as unknown as VllmEngine;
+      worker = new Stage1WorkerImpl(deps);
+
+      const result: Stage1Result = await worker.execute(createPipelineRun());
+
+      expect(result.status).toBe('failed');
+      expect(result.error).toContain('concurrency level(s): 4, 16');
+    });
   });
 });
