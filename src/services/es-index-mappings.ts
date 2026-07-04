@@ -13,6 +13,7 @@ export const INDEX_NAMES = {
   RECOMMENDATION_REPORTS: 'recommendation-reports',
   BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
   BENCHMARKER_DAEMON_LEASE: 'benchmarker-daemon-lease',
+  BENCHMARKER_VM_COST: 'benchmarker-vm-cost',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -122,6 +123,8 @@ export const INDEX_MAPPINGS: Record<
         completed_at: { type: 'date' },
         error_message: { type: 'text' },
         requested_by: { type: 'keyword' },
+        lease_token: { type: 'keyword' },
+        heartbeat_at: { type: 'date' },
       },
     },
     settings: {
@@ -430,6 +433,28 @@ export const INDEX_MAPPINGS: Record<
       },
     },
   },
+  // Daily VM cost-accrual + utilization snapshot (24/7-autonomy P0). The GPU VM
+  // is ephemeral and never stopped, so it burns 24/7 whether or not work is
+  // queued. This index records burn vs. throughput so the operator sees when to
+  // raise the daily cap / widen discovery — the lever is intake, not the VM.
+  [INDEX_NAMES.BENCHMARKER_VM_COST]: {
+    mappings: {
+      properties: {
+        '@timestamp': { type: 'date' },
+        vm_host: { type: 'keyword' },
+        hardware_profile_id: { type: 'keyword' },
+        window_hours: { type: 'float' },
+        wall_hours: { type: 'float' },
+        benchmark_hours: { type: 'float' },
+        utilization_ratio: { type: 'float' },
+        hourly_cost_usd: { type: 'float' },
+        estimated_cost_usd: { type: 'float' },
+        runs_in_window: { type: 'integer' },
+        low_utilization: { type: 'boolean' },
+      },
+    },
+    settings: { number_of_shards: 1, number_of_replicas: 0 },
+  },
 };
 
 export const benchmarkEvaluationsMapping = {
@@ -544,15 +569,40 @@ export async function ensureDateSuffixedTemplates(esClient: Client): Promise<voi
   }
 }
 
+/**
+ * True when index creation failed because the cluster rejected the shard /
+ * replica settings — the signature of a serverless cluster, which manages
+ * shards itself. Matched on the error text so we don't need to probe the
+ * cluster flavour up-front.
+ */
+function isSettingsUnsupportedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /serverless mode|number_of_replicas|number_of_shards/i.test(msg);
+}
+
 export async function ensureIndices(esClient: Client): Promise<void> {
   for (const [indexName, indexConfig] of Object.entries(INDEX_MAPPINGS)) {
     const exists = await esClient.indices.exists({ index: indexName });
-    if (!exists) {
+    if (exists) continue;
+
+    const mappings = indexConfig.mappings as Record<string, unknown>;
+    const settings = indexConfig.settings as Record<string, unknown> | undefined;
+    try {
       await esClient.indices.create({
         index: indexName,
-        mappings: indexConfig.mappings as Record<string, unknown>,
-        settings: indexConfig.settings as Record<string, unknown>,
+        mappings,
+        ...(settings ? { settings } : {}),
       });
+    } catch (err) {
+      // Serverless clusters reject explicit shard/replica settings. Fall back
+      // to a mappings-only create so a fresh index still gets its typed mapping
+      // (rather than dynamic guessing) on serverless. Stateful clusters keep
+      // the shard/replica settings on the first-attempt create above.
+      if (settings && isSettingsUnsupportedError(err)) {
+        await esClient.indices.create({ index: indexName, mappings });
+      } else {
+        throw err;
+      }
     }
   }
   await ensureDateSuffixedTemplates(esClient);

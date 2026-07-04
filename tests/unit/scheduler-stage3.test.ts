@@ -15,11 +15,16 @@ function createMockQueueService(): QueueService {
     getQueue: vi.fn(),
     getById: vi.fn(),
     getCurrent: vi.fn().mockResolvedValue(null),
-    updateStatus: vi.fn().mockResolvedValue(undefined),
+    updateStatus: vi.fn().mockResolvedValue(true),
+    complete: vi.fn().mockResolvedValue({ applied: true }),
+    fail: vi.fn().mockResolvedValue({ applied: true }),
     cancel: vi.fn(),
     findPending: vi.fn().mockResolvedValue([]),
     failActiveEntries: vi.fn().mockResolvedValue(0),
     getActiveEntries: vi.fn().mockResolvedValue([]),
+    reclaimStaleEntries: vi.fn().mockResolvedValue(0),
+    heartbeat: vi.fn().mockResolvedValue(true),
+    adoptEntry: vi.fn().mockResolvedValue(null),
     hasPending: vi.fn(),
     shouldAutoStop: vi.fn(),
   };
@@ -162,7 +167,7 @@ describe('Scheduler Stage 3 chaining', () => {
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
   });
 
   it('should complete pipeline even when stage3 returns error (non-fatal)', async () => {
@@ -190,7 +195,7 @@ describe('Scheduler Stage 3 chaining', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(stage3Worker.execute).toHaveBeenCalledTimes(1);
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
   });
 
   it('should transition directly to COMPLETED when no stage3Worker is provided', async () => {
@@ -207,6 +212,6 @@ describe('Scheduler Stage 3 chaining', () => {
     await scheduler.start();
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+    expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
   });
 });

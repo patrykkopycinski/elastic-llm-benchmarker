@@ -5,9 +5,9 @@ import type { SshPortForward } from '../../src/utils/ssh-port-forward.js';
 import type { SSHConfig } from '../../src/types/config.js';
 
 const sshConfig = {
-  host: '34.29.5.12',
+  host: '203.0.113.10',
   port: 22,
-  username: 'patryk',
+  username: 'test-user',
   privateKeyPath: '/tmp/key',
 } satisfies SSHConfig;
 
@@ -194,6 +194,55 @@ describe('CiEvalInfrastructureGuard', () => {
     await vi.runOnlyPendingTimersAsync();
 
     expect(tunnelService.reconnect).toHaveBeenCalledTimes(1);
+    guard.stop();
+  });
+
+  it('adopts the reconnected tunnel URL and does not loop when the hostname rotated', async () => {
+    // reconnect hands back a DIFFERENT surviving-tunnel hostname (cloudflared reuse).
+    const tunnelService = {
+      reconnect: vi.fn().mockResolvedValue({
+        success: true,
+        tunnel: { publicUrl: 'https://ambien-underground-ball-pressure.trycloudflare.com' },
+        error: null,
+        reused: true,
+      }),
+    };
+
+    // fetch order per interval: local-probe(ok), public-probe(fail), public-reprobe(ok).
+    // The reprobe must hit the NEW url — if the guard kept the stale url it would fail and
+    // the next interval would reconnect again. We assert reconnect fires exactly once across
+    // two intervals to prove convergence.
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('wellness-rating-sensor-movers')) {
+        return { ok: false } as Response; // stale original url is dead
+      }
+      return { ok: true } as Response; // local endpoint + new tunnel url are healthy
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const guard = new CiEvalInfrastructureGuard({
+      ssh: sshConfig,
+      sshPool,
+      localPort: 18000,
+      deploymentName: 'vllm-model-test',
+      sshForward,
+      publicEndpointUrl: 'https://wellness-rating-sensor-movers.trycloudflare.com',
+      tunnelService: tunnelService as never,
+      checkIntervalMs: 60_000,
+    });
+
+    guard.start();
+    await vi.runOnlyPendingTimersAsync();
+    // Second interval: the guard should now probe the adopted url (healthy) and NOT reconnect.
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(tunnelService.reconnect).toHaveBeenCalledTimes(1);
+    // Every public probe after adoption targets the new hostname, never the dead original.
+    const probedNewUrl = fetchMock.mock.calls.some((c) =>
+      String(c[0]).includes('ambien-underground-ball-pressure'),
+    );
+    expect(probedNewUrl).toBe(true);
     guard.stop();
   });
 });

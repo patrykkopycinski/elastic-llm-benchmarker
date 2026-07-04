@@ -69,3 +69,7 @@ data/checkpoints.db
 data/*.db
 .hf-cache/
 .cache/
+
+# Rendered launchd plist (contains absolute operator home path); only the .template is tracked
+deploy/*.plist
+!deploy/*.plist.template

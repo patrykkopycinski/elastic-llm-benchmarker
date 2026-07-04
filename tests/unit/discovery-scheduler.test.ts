@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DiscoveryScheduler } from '../../src/services/discovery-scheduler.js';
+import { DiscoveryScheduler, deriveModelFamily } from '../../src/services/discovery-scheduler.js';
 import { createLogger } from '../../src/utils/logger.js';
 
 import type { ModelDiscoveryService } from '../../src/services/model-discovery.js';
@@ -34,6 +34,7 @@ function createMockConfig(): DiscoverySchedulerConfig {
     minTrendingScore: 0,
     autoQueue: true,
     hardwareProfileId: '1xl4',
+    skipRecentlyBenchmarkedDays: 30,
   };
 }
 
@@ -71,6 +72,7 @@ function createMockDeps(overrides: Partial<{
     enqueue: vi.fn().mockResolvedValue(undefined),
     dequeue: vi.fn().mockResolvedValue(undefined),
     getQueueSize: vi.fn().mockReturnValue(0),
+    findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set<string>()),
   } as unknown as QueueService;
 
   const logger = overrides.logger ?? createLogger('silent');
@@ -266,6 +268,58 @@ describe('DiscoveryScheduler', () => {
       expect(result.queued).toBe(1);
       expect(result.skipped).toBe(1);
     });
+
+    it('skips models benchmarked or quarantined within the freshness window', async () => {
+      const models = [createMockModelInfo(), createMockModelInfo({ id: 'org/model-b' })];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const queueService = {
+        enqueue,
+        // model-a was terminal (completed or quarantined) within the window.
+        findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set(['org/model-a'])),
+      } as unknown as QueueService;
+
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const result = await scheduler.runOnce();
+
+      expect(result.queued).toBe(1);
+      expect(result.skipped).toBe(1);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+      expect(enqueue.mock.calls[0][0]).toBe('org/model-b');
+    });
+
+    it('fails open (queues normally) when the dedup query throws', async () => {
+      const models = [createMockModelInfo()];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: new Date().toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const queueService = {
+        enqueue: vi.fn().mockResolvedValue(undefined),
+        findRecentTerminalModelIds: vi.fn().mockRejectedValue(new Error('es down')),
+      } as unknown as QueueService;
+
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const result = await scheduler.runOnce();
+
+      expect(result.queued).toBe(1);
+      expect(queueService.enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('429 retry logic', () => {
@@ -417,6 +471,99 @@ describe('DiscoveryScheduler', () => {
 
       const result = await scheduler.runOnce();
       expect(result).toEqual({ discovered: 0, queued: 0, skipped: 0, errors: 0, hardwareFitCount: 0 });
+    });
+  });
+
+  describe('deriveModelFamily', () => {
+    it('collapses different generations of the same family to one key', () => {
+      expect(deriveModelFamily('Qwen/Qwen2.5-Coder-32B-Instruct')).toBe('qwen/qwen-coder');
+      expect(deriveModelFamily('Qwen/Qwen3-Coder-30B-A3B-Instruct')).toBe('qwen/qwen-coder');
+      expect(deriveModelFamily('Qwen/Qwen2.5-Coder-32B-Instruct')).toBe(
+        deriveModelFamily('Qwen/Qwen3-Coder-30B-A3B-Instruct'),
+      );
+    });
+
+    it('strips size, series, and variant tokens', () => {
+      expect(deriveModelFamily('meta-llama/Llama-3.1-8B-Instruct')).toBe('meta-llama/llama');
+      expect(deriveModelFamily('meta-llama/Llama-3.3-70B-Instruct')).toBe('meta-llama/llama');
+      expect(deriveModelFamily('mistralai/Mixtral-8x7B-Instruct-v0.1')).toBe('mistralai/mixtral');
+    });
+
+    it('keeps distinct families distinct', () => {
+      expect(deriveModelFamily('Qwen/Qwen3-Coder-30B-A3B-Instruct')).not.toBe(
+        deriveModelFamily('Qwen/Qwen3-32B-Instruct'),
+      );
+    });
+  });
+
+  describe('same-family supersession', () => {
+    it('marks the older generation superseded and skips it in autoQueue', async () => {
+      const now = new Date('2026-07-04T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'Qwen/Qwen2.5-Coder-32B-Instruct' }),
+        createMockModelInfo({ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct' }),
+      ];
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockImplementation((id: string) => {
+          if (id === 'Qwen/Qwen2.5-Coder-32B-Instruct') {
+            return Promise.resolve({ downloads: 100000, createdAt: '2024-11-01T00:00:00Z' });
+          }
+          return Promise.resolve({ downloads: 5000, createdAt: '2025-07-01T00:00:00Z' });
+        }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+      const queueService = { enqueue } as unknown as QueueService;
+
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      const stale = scored.find((m) => m.id === 'Qwen/Qwen2.5-Coder-32B-Instruct')!;
+      const latest = scored.find((m) => m.id === 'Qwen/Qwen3-Coder-30B-A3B-Instruct')!;
+      expect(stale.superseded).toBe(true);
+      expect(latest.superseded).toBe(false);
+
+      const stats = await scheduler.autoQueue(scored);
+      expect(stats.queued).toBe(1);
+      expect(stats.skipped).toBe(1);
+      const enqueuedIds = enqueue.mock.calls.map((c) => c[0]);
+      expect(enqueuedIds).toContain('Qwen/Qwen3-Coder-30B-A3B-Instruct');
+      expect(enqueuedIds).not.toContain('Qwen/Qwen2.5-Coder-32B-Instruct');
+    });
+
+    it('does NOT supersede same-generation size variants released together', async () => {
+      const now = new Date('2026-07-04T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct' }),
+        createMockModelInfo({ id: 'Qwen/Qwen3-Coder-480B-A35B-Instruct' }),
+      ];
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        // Both released within a few days → within the 30-day supersession gap.
+        fetchModelInfo: vi.fn().mockImplementation((id: string) =>
+          Promise.resolve({
+            downloads: 5000,
+            createdAt: id.includes('480B') ? '2025-07-03T00:00:00Z' : '2025-07-01T00:00:00Z',
+          }),
+        ),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(scored.every((m) => !m.superseded)).toBe(true);
     });
   });
 });

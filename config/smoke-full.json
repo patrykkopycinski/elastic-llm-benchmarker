@@ -91,6 +91,9 @@
     "triggerFullEval": false,
     "detachPoll": true
   },
+  "scheduler": {
+    "entryStaleAfterMs": 120000
+  },
   "discoveryScheduler": {
     "enabled": false,
     "intervalMinutes": 1440,

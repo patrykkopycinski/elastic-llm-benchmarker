@@ -726,6 +726,28 @@ export class ElasticsearchResultsStore {
     }));
   }
 
+  /**
+   * Count error events (excluding circuit-breaker state changes) recorded at or
+   * after `sinceIso`, optionally filtered by category. Drives the health-digest
+   * signals for recent-error spikes and golden-forwarding failures. Returns 0
+   * on any query error so the digest never crashes on a missing index.
+   */
+  async countErrorsSince(sinceIso: string, errorCategory?: string): Promise<number> {
+    const filter: Record<string, unknown>[] = [{ range: { '@timestamp': { gte: sinceIso } } }];
+    if (errorCategory) filter.push({ term: { error_category: errorCategory } });
+    try {
+      const res = await this.esClient.count({
+        index: INDEX_NAMES.BENCHMARKER_ERRORS,
+        query: {
+          bool: { filter, must_not: [{ exists: { field: 'circuit_breaker_state' } }] },
+        },
+      });
+      return res.count ?? 0;
+    } catch {
+      return 0;
+    }
+  }
+
   async saveEvalResult(result: EvalSuiteResult): Promise<void> {
     const dateSuffix = result.startedAt.slice(0, 10);
     const index = `${INDEX_NAMES.BENCHMARKER_EVALUATIONS}-${dateSuffix}`;

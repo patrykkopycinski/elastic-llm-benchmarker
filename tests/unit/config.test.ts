@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { loadConfig, loadConfigFile, formatValidationErrors } from '../../src/config/index.js';
+import {
+  benchmarkThresholdsSchema,
+  resolveMinToolCallSuccessRate,
+} from '../../src/types/config.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { ZodError } from 'zod';
@@ -306,5 +310,27 @@ describe('formatValidationErrors', () => {
       'security-alerts-rag-regression',
       'security-esql-generation-regression',
     ]);
+  });
+});
+
+describe('resolveMinToolCallSuccessRate', () => {
+  const thresholds = benchmarkThresholdsSchema.parse({});
+
+  it('applies the smallest-tier floor for small models', () => {
+    expect(resolveMinToolCallSuccessRate(thresholds, 7)).toBe(0.9);
+    expect(resolveMinToolCallSuccessRate(thresholds, 14)).toBe(0.9);
+  });
+
+  it('applies stricter floors as model size grows', () => {
+    expect(resolveMinToolCallSuccessRate(thresholds, 35)).toBe(0.95);
+    expect(resolveMinToolCallSuccessRate(thresholds, 70)).toBe(0.98);
+    expect(resolveMinToolCallSuccessRate(thresholds, 200)).toBe(1.0);
+  });
+
+  it('falls back to the flat floor when param count is unknown or non-positive', () => {
+    expect(resolveMinToolCallSuccessRate(thresholds, null)).toBe(
+      thresholds.minToolCallSuccessRate,
+    );
+    expect(resolveMinToolCallSuccessRate(thresholds, 0)).toBe(thresholds.minToolCallSuccessRate);
   });
 });

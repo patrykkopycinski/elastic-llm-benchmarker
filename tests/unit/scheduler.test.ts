@@ -35,6 +35,8 @@ describe('Scheduler', () => {
     completedAt: null,
     errorMessage: null,
     requestedBy: null,
+    leaseToken: 'lease-1',
+    heartbeatAt: null,
   };
 
   const successStage1: Stage1Result = {
@@ -94,10 +96,15 @@ describe('Scheduler', () => {
       dequeue: dequeueMock,
       getCurrent: getCurrentMock,
       findPending: vi.fn().mockResolvedValue([]),
-      updateStatus: vi.fn().mockResolvedValue(undefined),
+      updateStatus: vi.fn().mockResolvedValue(true),
       enqueue: vi.fn().mockResolvedValue(undefined),
       claim: vi.fn().mockResolvedValue(null),
-      complete: vi.fn().mockResolvedValue(undefined),
+      complete: vi.fn().mockResolvedValue({ applied: true }),
+      fail: vi.fn().mockResolvedValue({ applied: true }),
+      heartbeat: vi.fn().mockResolvedValue(true),
+      adoptEntry: vi.fn().mockResolvedValue('adopted-token'),
+      countTerminalSince: vi.fn().mockResolvedValue(0),
+      reclaimStaleEntries: vi.fn().mockResolvedValue(0),
     } as unknown as QueueService;
 
     stage1Worker = {
@@ -154,11 +161,8 @@ describe('Scheduler', () => {
       }),
     );
 
-    // Queue status updated to completed (2 args: id, status)
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
-      baseEntry.id,
-      'completed',
-    );
+    // Terminal write is fenced by the held lease token via complete().
+    expect(queueService.complete).toHaveBeenCalledWith(baseEntry.id, 'lease-1');
   });
 
   it('stops at Stage 1 failure and does not chain Stage 2/3', async () => {
@@ -179,11 +183,15 @@ describe('Scheduler', () => {
     expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
     expect(stage2Worker.execute).not.toHaveBeenCalled();
     expect(stage3Worker.execute).not.toHaveBeenCalled();
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+    // Routed through failEntry → fenced fail(): 'deployment_timeout' is
+    // unclassified (unknown, non-retriable) so the message is untagged and no
+    // auto-retry fires. The held lease token fences the terminal write.
+    expect(queueService.fail).toHaveBeenCalledWith(
       baseEntry.id,
-      'failed',
       'deployment_timeout',
+      'lease-1',
     );
+    expect(queueService.enqueue).not.toHaveBeenCalled();
   });
 
   it('handles Stage 2 failure gracefully', async () => {
@@ -205,10 +213,10 @@ describe('Scheduler', () => {
     expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
     // Stage 3 should NOT run when Stage 2 fails
     expect(stage3Worker.execute).not.toHaveBeenCalled();
-    expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+    expect(queueService.fail).toHaveBeenCalledWith(
       baseEntry.id,
-      'failed',
       'eval_suite_failed',
+      'lease-1',
     );
   });
 
@@ -224,5 +232,211 @@ describe('Scheduler', () => {
 
     expect(dequeueMock).not.toHaveBeenCalled();
     expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+  });
+
+  describe('cost cap', () => {
+    const configWithCap = (maxModelsPerDay: number) =>
+      ({
+        logLevel: 'error',
+        costCaps: { enabled: true, maxModelsPerDay },
+        retry: { enabled: true, maxInfraRetries: 2, maxResourceFitRetries: 1 },
+      }) as never;
+
+    it('pauses new dequeues once the daily terminal-model cap is reached', async () => {
+      (queueService.countTerminalSince as ReturnType<typeof vi.fn>).mockResolvedValue(5);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        configWithCap(5),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 50));
+      await scheduler.stop();
+
+      // Cap reached → never dequeues, never touches the VM.
+      expect(dequeueMock).not.toHaveBeenCalled();
+      expect(stage1Worker.execute).not.toHaveBeenCalled();
+    });
+
+    it('still dequeues while under the daily cap', async () => {
+      (queueService.countTerminalSince as ReturnType<typeof vi.fn>).mockResolvedValue(2);
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        configWithCap(5),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(dequeueMock).toHaveBeenCalled();
+      expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not gate when cost caps are disabled', async () => {
+      (queueService.countTerminalSince as ReturnType<typeof vi.fn>).mockResolvedValue(999);
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+      // No config → costCaps undefined → gate is a no-op.
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(dequeueMock).toHaveBeenCalled();
+      expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('failure classification + auto-retry', () => {
+    const retryConfig = () =>
+      ({
+        logLevel: 'error',
+        costCaps: { enabled: false, maxModelsPerDay: 20 },
+        retry: { enabled: true, maxInfraRetries: 2, maxResourceFitRetries: 1 },
+      }) as never;
+
+    it('re-enqueues on a transient-infra Stage 1 failure (within budget)', async () => {
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...successStage1,
+        status: 'failed',
+        error: 'Health check timed out after 604162ms',
+      });
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        retryConfig(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      // Tagged failed (fenced by lease) + re-enqueued with incremented retry count.
+      expect(queueService.fail).toHaveBeenCalledWith(
+        baseEntry.id,
+        expect.stringContaining('[transient-infra]'),
+        'lease-1',
+      );
+      expect(queueService.enqueue).toHaveBeenCalledWith(
+        baseEntry.modelId,
+        baseEntry.source,
+        baseEntry.priority,
+        undefined,
+        expect.objectContaining({ infraRetryCount: 1 }),
+      );
+    });
+
+    it('quarantines (no re-enqueue) on a model-arch failure', async () => {
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...successStage1,
+        status: 'failed',
+        error: 'Model architectures are not supported by vLLM',
+      });
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        retryConfig(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(queueService.fail).toHaveBeenCalledWith(
+        baseEntry.id,
+        expect.stringContaining('[model-arch]'),
+        'lease-1',
+      );
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('quarantines a transient failure once the retry budget is exhausted', async () => {
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...successStage1,
+        status: 'failed',
+        error: 'fetch failed',
+      });
+      // Entry already retried twice (budget maxInfraRetries=2) → no further retry.
+      dequeueMock.mockResolvedValueOnce({
+        ...baseEntry,
+        metadata: { infraRetryCount: 2 },
+      });
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        retryConfig(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+      expect(queueService.fail).toHaveBeenCalledWith(
+        baseEntry.id,
+        expect.stringContaining('[transient-infra]'),
+        'lease-1',
+      );
+    });
+
+    it('does NOT re-enqueue when the fenced fail() is rejected (lease lost)', async () => {
+      // A zombie daemon whose lease was reclaimed must not re-enqueue: the live
+      // owner already controls the entry. fail() reports the write did not apply.
+      (queueService.fail as ReturnType<typeof vi.fn>).mockResolvedValue({
+        applied: false,
+        reason: 'lease-mismatch',
+      });
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue({
+        ...successStage1,
+        status: 'failed',
+        error: 'fetch failed',
+      });
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        retryConfig(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(queueService.fail).toHaveBeenCalledWith(
+        baseEntry.id,
+        expect.stringContaining('[transient-infra]'),
+        'lease-1',
+      );
+      // Fenced out → no duplicate re-enqueue.
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
   });
 });

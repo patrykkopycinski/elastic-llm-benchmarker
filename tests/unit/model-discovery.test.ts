@@ -177,6 +177,32 @@ describe('ModelDiscoveryService', () => {
       expect(result.models[0]!.license).toBe('apache-2.0');
     });
 
+    it('should accept qwen3_moe models (newest Qwen family) through the whitelist', async () => {
+      const mockModel = createMockHFModel({
+        id: 'Qwen/Qwen3-Coder-30B-A3B-Instruct',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+        config: { model_type: 'qwen3_moe', architectures: ['Qwen3MoeForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'qwen3_moe',
+        architectures: ['Qwen3MoeForCausalLM'],
+        max_position_embeddings: 262144,
+      });
+
+      const configs = new Map([['Qwen/Qwen3-Coder-30B-A3B-Instruct', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({ minContextWindow: 128000 });
+
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.id).toBe('Qwen/Qwen3-Coder-30B-A3B-Instruct');
+      expect(result.models[0]!.architecture).toBe('qwen3_moe');
+    });
+
     it('should reject models with insufficient context window', async () => {
       const mockModel = createMockHFModel({
         id: 'org/small-ctx-model',

@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>elastic-llm-benchmarker — 24/7 Autonomy Gap Analysis</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1014;
+    --surface: #16181d;
+    --surface-elev: #1d2026;
+    --border: #2a2e36;
+    --border-strong: #3a3f49;
+    --text: #e8e6e3;
+    --text-muted: #a0a09c;
+    --text-soft: #6e7079;
+    --accent: #e8845c;
+    --accent-soft: #3a201a;
+    --good: #6fb87f;
+    --good-soft: #1a2e21;
+    --warn: #d4a93f;
+    --warn-soft: #2e2614;
+    --bad: #e07575;
+    --bad-soft: #3a1d1d;
+    --info: #6fa6e0;
+    --info-soft: #1a2436;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 0 6rem;
+    background: var(--bg); color: var(--text);
+    font-family: var(--sans); line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 3rem 2rem 2rem; max-width: 1080px; margin: 0 auto;
+    border-bottom: 1px solid var(--border);
+  }
+  h1 { font-size: 1.9rem; margin: 0 0 .4rem; letter-spacing: -0.02em; }
+  h2 {
+    font-size: 1.35rem; margin: 2.6rem 0 1rem; letter-spacing: -0.01em;
+    padding-bottom: .4rem; border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 1.05rem; margin: 1.6rem 0 .5rem; }
+  main { max-width: 1080px; margin: 0 auto; padding: 0 2rem; }
+  .sub { color: var(--text-muted); font-size: .95rem; }
+  code, .mono { font-family: var(--mono); font-size: .86em; }
+  code { background: var(--surface-elev); padding: .1em .4em; border-radius: 4px; }
+  a { color: var(--info); }
+  .legend { display: flex; flex-wrap: wrap; gap: .6rem; margin: 1.2rem 0 0; }
+  .pill {
+    display: inline-flex; align-items: center; gap: .4rem;
+    font-size: .8rem; font-weight: 600; padding: .25rem .7rem; border-radius: 999px;
+    border: 1px solid var(--border-strong);
+  }
+  .pill.done { background: var(--good-soft); color: var(--good); border-color: var(--good); }
+  .pill.p0 { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+  .pill.p1 { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+  .pill.p2 { background: var(--info-soft); color: var(--info); border-color: var(--info); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.2rem 1.4rem; margin: 1rem 0;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.45);
+  }
+  .card.done { border-left: 3px solid var(--good); }
+  .card.p0 { border-left: 3px solid var(--bad); }
+  .card.p1 { border-left: 3px solid var(--warn); }
+  .card.p2 { border-left: 3px solid var(--info); }
+  .card h3 { margin-top: 0; display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .card h3 .tag { font-family: var(--mono); font-size: .72rem; color: var(--text-soft); font-weight: 400; }
+  .kv { margin: .55rem 0; }
+  .kv b { color: var(--text); }
+  .kv .label {
+    display: inline-block; min-width: 6.5rem; color: var(--text-soft);
+    font-size: .8rem; text-transform: uppercase; letter-spacing: .04em;
+    vertical-align: top;
+  }
+  .kv .val { display: inline-block; width: calc(100% - 7rem); }
+  ul { margin: .4rem 0; padding-left: 1.2rem; }
+  li { margin: .25rem 0; }
+  .callout {
+    background: var(--accent-soft); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: .9rem 1.1rem; margin: 1rem 0; color: var(--text);
+  }
+  .callout.info { background: var(--info-soft); border-left-color: var(--info); }
+  .callout.warn { background: var(--warn-soft); border-left-color: var(--warn); }
+  .callout b { color: var(--text); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .55rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-soft); font-weight: 600; font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: none; }
+  .file { font-family: var(--mono); font-size: .82em; color: var(--accent); }
+  footer { max-width: 1080px; margin: 3rem auto 0; padding: 1.4rem 2rem 0; border-top: 1px solid var(--border); color: var(--text-soft); font-size: .85rem; }
+</style>
+</head>
+<body>
+<header>
+  <h1>24/7 Autonomy Gap Analysis</h1>
+  <div class="sub">elastic-llm-benchmarker &middot; hands-off benchmarking pipeline &middot; generated 2026-07-04</div>
+  <p class="sub" style="margin-top:1rem;max-width:70ch">
+    What it takes to leave the benchmarker running unattended: discover promising
+    models, benchmark them on the shared GPU VM, run Kibana CI evals, forward
+    traces to golden &mdash; indefinitely, recovering from its own failures without a
+    human at the keyboard. This tracks every gap between today and that bar.
+  </p>
+  <div class="legend">
+    <span class="pill done">&#10003; Closed</span>
+    <span class="pill p0">P0 &middot; blocks unattended operation</span>
+    <span class="pill p1">P1 &middot; degrades reliability</span>
+    <span class="pill p2">P2 &middot; scale / polish</span>
+  </div>
+</header>
+
+<main>
+
+  <h2>Just closed this session</h2>
+  <p class="sub">The two root-cause fixes requested, plus the guardrails landed earlier in the session.</p>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Lease fencing on terminal writes <span class="tag">queue-service.ts &middot; scheduler.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val"><code>updateStatus</code> fenced terminal writes with <code>lease_token == null || == token</code>. After a reclaim nulled the token, a zombie/late daemon write still matched the <code>== null</code> branch &rarr; <b>spurious <code>failed</code></b> stamped over an entry another owner (or a fresh <code>pending</code>) controlled. <code>finalizePipeline</code> and the detached-poll takeover/error handlers wrote terminal status with <b>no token at all</b>.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">Dedicated <code>complete(id, token)</code> / <code>fail(id, msg, token)</code>: read the doc, require an <b>exact</b> lease-token match (no null escape), reject already-terminal (idempotent), then write with <code>if_seq_no</code>/<code>if_primary_term</code> optimistic concurrency &mdash; retrying on a 409 (a heartbeat racing the write) while re-checking the lease each attempt. The token is threaded to <b>every</b> terminal-write site, including the detached Buildkite poll (leases are no longer dropped for deferred entries so they keep heartbeating).</span></div>
+    <div class="kv"><span class="label">Impact</span><span class="val">A daemon whose lease was reclaimed/adopted can never clobber the live owner. Kills the spurious-<code>failed</code> class. Also fixed a latent bug: a fenced-out failure no longer triggers a duplicate re-enqueue.</span></div>
+    <div class="kv"><span class="label">Verified</span><span class="val">7 new <code>complete/fail</code> fencing tests + reclaim <code>excludeIds</code> test; 1027 unit tests green; <code>tsc</code> + lint clean; build OK.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Periodic stuck-entry reclaimer <span class="tag">scheduler.ts &middot; queue-service.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val"><code>reclaimStaleEntries()</code> ran <b>once</b> on startup (cli.ts). A run stuck in <code>deploying</code>/<code>benchmarking</code> while the daemon kept running required a manual <code>curl</code> reset to <code>pending</code>.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The scheduler runs the reclaimer every poll (throttled to once per heartbeat TTL, 120s) as a backstop. It resets entries stale past the TTL back to <code>pending</code> and <b>never touches entries this daemon owns</b> (a new <code>excludeIds</code> guard covers active leases + in-process + deferred cleanups; owned entries are also kept fresh by the heartbeat).</span></div>
+    <div class="kv"><span class="label">Impact</span><span class="val">No more manual resets. A crashed/abandoned run self-heals to <code>pending</code> and is retried automatically.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Guardrails landed earlier this session</h3>
+    <ul>
+      <li><b>Daily cost cap</b> &mdash; <code>costCaps.maxModelsPerDay: 15</code> gates new dequeues once the daily terminal-model ceiling is hit; never stops the VM, never touches in-flight/resume runs. Fails open on a count-query error.</li>
+      <li><b>Failure classifier + auto-retry</b> &mdash; <code>transient-infra</code> / <code>resource-fit</code> / <code>model-arch</code> / <code>unknown</code>; retriable classes auto-re-enqueue within budget (<code>maxInfraRetries: 2</code>, <code>maxResourceFitRetries: 1</code>), the rest quarantine.</li>
+      <li><b>VM disk-GC (LRU)</b> &mdash; pre-deploy free-space check LRU-evicts the oldest model weight sets from the <code>vllm-hf-cache</code> Docker volume, protecting the deploy target.</li>
+      <li><b>Discovery scheduler ON</b> &mdash; <code>discoveryScheduler.enabled: true</code>, polls HF daily, auto-queues hardware-fit candidates gated behind the cost cap.</li>
+    </ul>
+  </div>
+
+  <h2>Closed &mdash; P0 (were blocking true unattended operation)</h2>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Daemon supervision / auto-restart <span class="tag">deploy/*.plist.template &middot; install-launchd.sh &middot; start-local.sh</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">The daemon ran as a foreground process; a crash or reboot left nothing to restart it.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">A committed LaunchAgent template (<span class="file">deploy/com.elastic-llm-benchmarker.plist.template</span>) with <code>KeepAlive</code>+<code>RunAtLoad</code>+30s <code>ThrottleInterval</code>, rendered into <code>~/Library/LaunchAgents</code> by <span class="file">scripts/install-launchd.sh</span> (real paths never touch the repo). Recovery is safe: startup reclaim + resume/adopt pick up in-flight entries, so KeepAlive never double-processes a model. Log-rotation solved: <code>start-local.sh</code> tail-truncates the daemon log (keep last ~5MB above 50MB) on each launchd respawn.</span></div>
+    <div class="kv"><span class="label">Operator</span><span class="val">One command: <code>./scripts/install-launchd.sh</code> (loads it) or <code>--render</code> to preview. The in-process health digest surfaces a stale-lease alert; pair with an external cron for defense-in-depth.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> CI-eval guard checked a stale tunnel URL <span class="tag">ci-eval-infrastructure-guard.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">The guard captured <code>publicEndpointUrl</code> once at construction and health-checked the dead URL forever after a tunnel rotated, "recovering" onto a different live tunnel every loop &mdash; one refactor from a spurious takeover/abort of a healthy eval.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The guard tracks a mutable <code>currentPublicUrl</code>; on reconnect it adopts the new tunnel URL and logs that the Buildkite-injected URL is stale, breaking the flap loop. Regression test asserts the guard adopts the rotated hostname and does not loop.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> VM cost accrual &amp; idle detection <span class="tag">maintenance-scheduler.ts &middot; benchmarker-vm-cost</span></h3>
+    <div class="kv"><span class="label">Constraint</span><span class="val"><b>Permanent</b>: the GPU VM is ephemeral &mdash; stopping it loses it. The pipeline never stops the VM.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The daily maintenance tick emits a cost/utilization snapshot (<code>utilization_ratio</code> = benchmark-hours / wall-hours, <code>estimated_cost_usd</code> = <code>vmHourlyCostUsd</code> &times; wall-hours) to the new <code>benchmarker-vm-cost</code> index and flags <code>low_utilization</code> below <code>maintenance.lowUtilizationThreshold</code> (default 20%). No auto-stop &mdash; the lever is raising <code>maxModelsPerDay</code> / widening discovery.</span></div>
+  </div>
+
+  <h2>Closed &mdash; P1 (reliability / observability)</h2>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Health-digest alerting when the pipeline wedges <span class="tag">slack-notifier.ts &middot; maintenance-scheduler.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">Slack fired on per-model verdicts only; nothing paged when the pipeline stuck (cost cap engaged, DLQ growing, discovery idle, golden forwarding failing, daemon lease stale).</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val"><code>SlackNotifier.notifyHealthDigest()</code> posts a daily digest from the maintenance tick with a breach-aware header (<code>:rotating_light:</code> + alert count). Signals: daemon-lease age, queue depth, throughput (idle detection), VM utilization/burn, cost-cap state, errors logged (incl. golden-forward category), and DLQ re-tries. Threshold breaches are logged and headlined.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Quarantine / DLQ periodic re-try <span class="tag">queue-service.ts &middot; maintenance-scheduler.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">A retry-budget-exhausted model sat <code>failed</code> forever; no periodic re-evaluation (a <code>transient-infra</code> failure may become runnable after a vLLM image bump) and no category surface.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The maintenance tick re-classifies <code>failed</code> entries older than <code>maintenance.dlqRetryAfterDays</code> (default 7) via the failure classifier and re-enqueues only the <b>retriable</b> ones back to <code>pending</code> (<code>requeueFailedEntries</code>), bounded by <code>dlqMaxRequeuePerSweep</code> and gated by the daily cost cap. Quarantine counts by status surface in the digest.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Discovery de-dup &amp; freshness <span class="tag">discovery-scheduler.ts &middot; queue-service.ts</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">Discovery could re-surface models already benchmarked or quarantined, spending cost-cap budget on repeats. (Latest-per-family supersession already existed.)</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">Before auto-queue, <code>DiscoveryScheduler</code> queries <code>QueueService.findRecentTerminalModelIds()</code> and skips any model terminal (completed <b>or</b> quarantined) within <code>discoveryScheduler.skipRecentlyBenchmarkedDays</code> (default 30). Fails open on an ES error so discovery is never blocked. Complements the existing <code>markSupersededByFamily</code> latest-per-family preference.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Golden-forwarding health monitored <span class="tag">folded into the health digest</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">Forwarding 429s/503s landed in error indices but nothing surfaced them &mdash; silent data loss to the shared cluster.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The health digest counts recent <code>benchmarker-errors</code> and a dedicated <code>golden-forward</code> category via <code>countErrorsSince()</code>, alerting when any golden-forward error is logged. Golden stays write-only.</span></div>
+  </div>
+
+  <div class="card done">
+    <h3><span class="pill done">&#10003;</span> Secret-hygiene guard generalized <span class="tag">pre-commit-check-credentials.sh</span></h3>
+    <div class="kv"><span class="label">Was</span><span class="val">The pre-commit hook only caught one hardcoded VM IP and one home dir &mdash; a different real IP, token type, or key path would slip into a tracked file.</span></div>
+    <div class="kv"><span class="label">Now</span><span class="val">The hook rejects <b>any</b> real routable IPv4 (awk range-filter excludes loopback/RFC1918/link-local/TEST-NET/placeholder), any macOS/Linux home-dir path or SSH private-key path, and a broader token set (GitHub, HF, Slack, AWS, GCP, PEM blocks), plus the <code>.env*</code>/<code>config/local.json</code> files themselves. Rotation policy note stands: rotate anything that reached a shared branch.</span></div>
+  </div>
+
+  <h2>Open gaps &mdash; P2 (scale / polish)</h2>
+
+  <table>
+    <thead><tr><th>Gap</th><th>Why it's P2</th><th>Shape</th></tr></thead>
+    <tbody>
+      <tr><td>Single-VM throughput ceiling</td><td>One model at a time is a deliberate constraint; scaling needs multi-VM orchestration (explicitly removed as off-happy-path).</td><td>Defer until a real second-VM consumer exists.</td></tr>
+      <tr><td>Cost/throughput dashboard</td><td>Nice-to-have once P0 VM-cost emission lands.</td><td>Kibana panel over the emitted cost/utilization metrics.</td></tr>
+      <tr><td>Adaptive discovery cadence</td><td>Fixed daily interval is fine at current volume.</td><td>Scale <code>intervalMinutes</code> to queue depth + cap headroom.</td></tr>
+      <tr><td>Eval-suite matrix expansion</td><td>Three security suites cover the current bar.</td><td>Add suites as the model matrix grows.</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout info">
+    <b>Status.</b> All P0 and P1 gaps are now closed in code. The only remaining
+    operator action is the one-command LaunchAgent install
+    (<code>./scripts/install-launchd.sh</code>) &mdash; the sandbox cannot
+    <code>launchctl load</code> for you. P2 items are deliberately deferred
+    (single-VM ceiling is an intentional constraint; the rest are polish on top
+    of the now-emitted cost/utilization metrics).
+  </div>
+
+  <div class="callout warn">
+    <b>Deploy note.</b> The fixes are built into <code>dist/</code> and load on
+    the next daemon restart. Per the never-interrupt-CI-evals / never-stop-VM
+    rules, bounce the daemon only after the current eval reaches a terminal
+    state (graceful <code>SIGTERM</code> awaits the in-flight deferred Buildkite
+    poll). Once supervised by launchd, KeepAlive handles restarts automatically.
+  </div>
+
+</main>
+
+<footer>
+  Generated for the elastic-llm-benchmarker 24/7-autonomy review. Status reflects
+  code + running-daemon state at 2026-07-04 ~14:58 UTC+2. Closed items verified by
+  <code>tsc --noEmit</code>, ESLint, 1027 passing unit tests, and a clean build.
+</footer>
+</body>
+</html>

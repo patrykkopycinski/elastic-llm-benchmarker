@@ -15,11 +15,16 @@ function createMockQueueService(): QueueService {
     getQueue: vi.fn(),
     getById: vi.fn(),
     getCurrent: vi.fn().mockResolvedValue(null),
-    updateStatus: vi.fn().mockResolvedValue(undefined),
+    updateStatus: vi.fn().mockResolvedValue(true),
+    complete: vi.fn().mockResolvedValue({ applied: true }),
+    fail: vi.fn().mockResolvedValue({ applied: true }),
     cancel: vi.fn(),
     findPending: vi.fn().mockResolvedValue([]),
     failActiveEntries: vi.fn().mockResolvedValue(0),
     getActiveEntries: vi.fn().mockResolvedValue([]),
+    reclaimStaleEntries: vi.fn().mockResolvedValue(0),
+    heartbeat: vi.fn().mockResolvedValue(true),
+    adoptEntry: vi.fn().mockResolvedValue(null),
     hasPending: vi.fn(),
     shouldAutoStop: vi.fn(),
   };
@@ -117,7 +122,9 @@ describe('Scheduler Stage 2 chaining', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
-      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+      // No lease token on the entry → writeTerminal falls back to the unfenced
+      // updateStatus path (id, status, errorMessage).
+      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
     });
 
     it('should mark failed when stage1 fails', async () => {
@@ -142,7 +149,14 @@ describe('Scheduler Stage 2 chaining', () => {
       await scheduler.start();
       await vi.advanceTimersByTimeAsync(100);
 
-      expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'failed', undefined);
+      // Routed through failEntry → writeTerminal: a Stage 1 failure with no
+      // error gets a default message (no silent null), classified `unknown`
+      // (untagged). No lease token → unfenced updateStatus fallback (3 args).
+      expect(queueService.updateStatus).toHaveBeenCalledWith(
+        'entry-1',
+        'failed',
+        'Stage 1 benchmark failed',
+      );
     });
   });
 
@@ -165,7 +179,7 @@ describe('Scheduler Stage 2 chaining', () => {
       const runArg = (stage2Worker.execute as ReturnType<typeof vi.fn>).mock.calls[0][0] as PipelineRun;
       expect(runArg.modelId).toBe('meta-llama/Llama-3-8B');
       expect(resultsStore.saveStage2Result).toHaveBeenCalledTimes(1);
-      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
     });
 
     it('should mark completed when stage2 is skipped', async () => {
@@ -193,7 +207,7 @@ describe('Scheduler Stage 2 chaining', () => {
 
       expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
       expect(resultsStore.saveStage2Result).toHaveBeenCalledTimes(1);
-      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed');
+      expect(queueService.updateStatus).toHaveBeenLastCalledWith('entry-1', 'completed', undefined);
     });
 
     it('should mark failed when stage2 errors', async () => {
@@ -220,7 +234,11 @@ describe('Scheduler Stage 2 chaining', () => {
       await vi.advanceTimersByTimeAsync(100);
 
       expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
-      expect(queueService.updateStatus).toHaveBeenCalledWith('entry-1', 'failed', 'repo bootstrap failed');
+      expect(queueService.updateStatus).toHaveBeenCalledWith(
+        'entry-1',
+        'failed',
+        'repo bootstrap failed',
+      );
     });
   });
 });

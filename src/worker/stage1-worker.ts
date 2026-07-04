@@ -326,6 +326,16 @@ export class Stage1WorkerImpl implements Stage1Worker {
 
       // Populate result fields
       result.status = benchmarkResult.passed ? 'success' : 'failed';
+      // A benchmark that ran to completion but did not pass is still a failure
+      // the queue entry must explain — otherwise `error_message` lands `null`
+      // and operators cannot tell why the model was rejected. Surface the
+      // rejection reasons (ITL over gate, container crash, no successful runs).
+      if (!benchmarkResult.passed) {
+        result.error =
+          benchmarkResult.rejectionReasons.length > 0
+            ? benchmarkResult.rejectionReasons.join('; ')
+            : 'Stage 1 benchmark did not pass (no rejection reason reported)';
+      }
       result.rawOutput = benchmarkResult.combinedRawOutput;
       if (metrics.length > 0) {
         result.metrics = {

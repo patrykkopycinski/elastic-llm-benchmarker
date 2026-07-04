@@ -64,6 +64,7 @@ import { SystemHealthChecker } from './services/system-health-check.js';
 import { SlackNotifier } from './services/slack-notifier.js';
 import { LocalConnector } from './services/local-connector.js';
 import { DiscoveryScheduler } from './services/discovery-scheduler.js';
+import { MaintenanceScheduler } from './services/maintenance-scheduler.js';
 import { createAgentBuilderFilter } from './services/agent-builder-baseline.js';
 import { ModelDiscoveryService } from './services/model-discovery.js';
 import { HardwareEstimator } from './services/hardware-estimator.js';
@@ -1517,6 +1518,33 @@ if (_binaryName === 'benchmarker-queue') {
 
       const resultsStore = new ElasticsearchResultsStore(esClient);
 
+      // Cross-host GPU VM lease — acquire BEFORE any queue cleanup. The local
+      // lockfile only guards this host; a daemon on another machine sharing this
+      // Elasticsearch cluster + GPU VM would otherwise deploy concurrently and
+      // thrash the VM (and the serial Buildkite pipeline). Critically, acquiring
+      // first also prevents a second daemon from reclaiming/failing in-flight
+      // queue entries that a live daemon is still processing.
+      const gpuVmLease = new GpuVmLeaseService({
+        esClient,
+        vmHost: config.ssh.host,
+        logLevel: config.logLevel,
+      });
+      const leaseResult = await gpuVmLease.acquire();
+      if (!leaseResult.success) {
+        const held = leaseResult.heldBy;
+        logger.error('GPU VM lease held by another benchmarker daemon — refusing to start', {
+          vmHost: config.ssh.host,
+          heldBy: held
+            ? `${held.ownerHostname} (pid ${held.ownerPid}, heartbeat ${held.heartbeatAt})`
+            : (leaseResult.error ?? 'unknown'),
+        });
+        lockfile.release();
+        await resultsStore.close();
+        await esClient.close();
+        process.exit(1);
+      }
+      logger.info('Acquired GPU VM lease', { vmHost: config.ssh.host });
+
       const ciEvalsEnabled =
         (enableCIEvals || config.buildkite.enabled) && Boolean(config.buildkite.apiToken);
 
@@ -1540,7 +1568,7 @@ if (_binaryName === 'benchmarker-queue') {
           },
           config.logLevel,
         );
-        const { recovered, failed } = await recoverOrFailActiveEntries(
+        const { recovered, reclaimed } = await recoverOrFailActiveEntries(
           queueService,
           resultsStore,
           buildkiteTrigger,
@@ -1552,18 +1580,21 @@ if (_binaryName === 'benchmarker-queue') {
             recovered,
           });
         }
-        if (failed > 0) {
-          logger.warn('Cleared orphaned active queue entries before starting scheduler', {
-            count: failed,
+        if (reclaimed > 0) {
+          logger.warn('Reclaimed orphaned active queue entries to pending for retry', {
+            count: reclaimed,
           });
         }
       } else {
-        const orphanedActive = await queueService.failActiveEntries(
-          'Orphaned active entry — previous daemon exited before completion',
+        // VM lease already acquired above, so any in-flight entry is genuinely
+        // orphaned by a dead daemon. Reclaim stale ones to `pending` for retry
+        // instead of failing them (a crash shouldn't lose a queued model).
+        const reclaimed = await queueService.reclaimStaleEntries(
+          config.scheduler.entryStaleAfterMs,
         );
-        if (orphanedActive > 0) {
-          logger.warn('Cleared orphaned active queue entries before starting scheduler', {
-            count: orphanedActive,
+        if (reclaimed > 0) {
+          logger.warn('Reclaimed stale in-flight queue entries to pending before starting scheduler', {
+            count: reclaimed,
           });
         }
       }
@@ -1775,34 +1806,8 @@ if (_binaryName === 'benchmarker-queue') {
         ciEvalsOptions,
       );
 
-      // Cross-host GPU VM lease. The local lockfile only guards this host; a
-      // daemon on another machine sharing this Elasticsearch cluster + GPU VM
-      // would otherwise deploy concurrently and thrash the VM (and the serial
-      // Buildkite pipeline). Refuse to start while another daemon holds a fresh
-      // lease on the same VM host.
-      const gpuVmLease = new GpuVmLeaseService({
-        esClient,
-        vmHost: config.ssh.host,
-        logLevel: config.logLevel,
-      });
-      const leaseResult = await gpuVmLease.acquire();
-      if (!leaseResult.success) {
-        const held = leaseResult.heldBy;
-        logger.error('GPU VM lease held by another benchmarker daemon — refusing to start', {
-          vmHost: config.ssh.host,
-          heldBy: held
-            ? `${held.ownerHostname} (pid ${held.ownerPid}, heartbeat ${held.heartbeatAt})`
-            : (leaseResult.error ?? 'unknown'),
-        });
-        discoveryScheduler?.stop();
-        lockfile.release();
-        await resultsStore.close();
-        await esClient.close();
-        process.exit(1);
-      }
-      logger.info('Acquired GPU VM lease', {
-        vmHost: config.ssh.host,
-      });
+      // GPU VM lease acquired earlier (before queue cleanup). Keep it fresh
+      // with a periodic heartbeat so other daemons see it as live.
       const leaseHeartbeat = setInterval(() => {
         void gpuVmLease.heartbeat();
       }, 30_000);
@@ -1811,6 +1816,27 @@ if (_binaryName === 'benchmarker-queue') {
 
       logger.info(`Scheduler starting. Polling every ${pollInterval} ms...`);
       scheduler.start();
+
+      // Periodic maintenance & health tick: VM cost/utilization emission, DLQ
+      // re-try sweep, and Slack health digest. Never stops the VM.
+      let maintenanceScheduler: MaintenanceScheduler | undefined;
+      if (config.maintenance.enabled) {
+        maintenanceScheduler = new MaintenanceScheduler({
+          esClient,
+          queueService,
+          resultsStore,
+          config: config.maintenance,
+          costCaps: config.costCaps,
+          vmHost: config.ssh.host,
+          hardwareProfileId: config.discoveryScheduler.hardwareProfileId,
+          slackNotifier,
+          logger,
+        });
+        maintenanceScheduler.start();
+        logger.info(
+          `Maintenance scheduler started (interval: ${config.maintenance.intervalHours}h)`,
+        );
+      }
 
       // Graceful shutdown — ignore SIGHUP so agent/shell disconnect does not kill mid-Buildkite poll.
       process.on('SIGHUP', () => {
@@ -1822,6 +1848,7 @@ if (_binaryName === 'benchmarker-queue') {
         logger.info(`Received ${signal}. Stopping scheduler...`);
         clearInterval(leaseHeartbeat);
         discoveryScheduler?.stop();
+        maintenanceScheduler?.stop();
         await scheduler.stop();
         await gpuVmLease.release();
         lockfile.release();

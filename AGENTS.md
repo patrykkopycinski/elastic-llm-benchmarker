@@ -35,6 +35,7 @@ npm run start -- --config config.yaml --stage2 --stage3 --api-port 3200
 9. **API keys are SHA-256 hashed**: Never store plaintext API keys in ES. Use `crypto.createHash('sha256').update(key).digest('hex')` for comparison.
 10. **No orphaned services**: If a service is not referenced on the happy path (start → scheduler → worker → store → forwarder), delete it. Do not keep dead code.
 11. **Agent Builder baseline gate**: Models must pass `agentBuilderBaseline` before enqueue/discovery (see below). Use `--force` on manual enqueue to override. Parallel/multi-tool calling is **not** required — Agent Builder uses single-tool calls only.
+12. **NEVER stop the GPU VM**: The GPU VM is **ephemeral — stopping it destroys it permanently** (no persistent disk to restart from). Never run `gcloud compute instances stop/suspend/delete`, cloud-console Stop, or `ssh <vm> 'shutdown/poweroff/halt/reboot'`. "Stop the benchmarker" always means the **local daemon** (`./scripts/stop-local.sh` / `benchmarker-queue stop`) or the vLLM container — never the host. If you think the VM must stop, ask the operator first and state that stopping = permanent loss. See rule `never-stop-benchmarker-gpu-vm`.
 
 ## Agent Builder Baseline (model selection gate)
 
@@ -235,6 +236,7 @@ context/
 - **No commit unless asked**: Do not commit, push, or put credentials in tracked files unless the user explicitly requests it.
 - **Sanitize before push**: If real VM IPs, SSH paths, or tokens land in tracked files or commits, rewrite to placeholders (including git history) before pushing — never leave operator values on the remote.
 - **One model at a time**: Never deploy or benchmark multiple models concurrently on the GPU VM — keep scheduler `maxConcurrentRuns` at 1.
+- **Always benchmark the latest per family**: Before enqueuing/deploying any model, verify it's the newest release in its family via Hugging Face (`hub_repo_search` `sort:createdAt` / `hub_repo_details`) — never a stale generation (e.g. `Qwen2.5-Coder` is 2 gens behind `Qwen3-Coder-Next` as of 2026). Pick the newest generation that fits the hardware natively; if the flagship needs a quant the GPU can't run well (FP8 on Ampere/A100), pick the newest variant that fits bf16 and say so. See rule `prefer-latest-model-per-family`.
 - **Customer-ready deploy commands**: Dashboard must expose one-click copy of the full vLLM/docker run command per model for customer handoff.
 - **Finish only when green**: Keep validating and fixing until smoke tests and Buildkite evals pass — do not declare the pipeline done mid-run.
 - **Real Kibana CI evals**: Stage 2 qualification must run against Buildkite on-demand security matrix suites, not local Kibana bootstrap.
@@ -242,7 +244,7 @@ context/
 ## Learned Workspace Facts
 
 - **Local dev ES**: Port **9223**; `docker compose --env-file .env.docker` with `ELASTIC_PASSWORD` and security enabled; `setup-local.sh` pulls 9.x DRA snapshot for `/_inference/_ccm` (Stage 3 EIS).
-- **GPU VM profile**: Default hardware is `2xa100-80gb` (2× A100-80GB); operator SSH/VM values live in gitignored `config/local.json`.
+- **GPU VM profile**: Default hardware is `2xa100-80gb` (2× A100-80GB); operator SSH/VM values live in gitignored `config/local.json`. **The VM is ephemeral — never stop/suspend/delete/shutdown it; stopping = permanent loss** (Critical Project Rule 12 / `never-stop-benchmarker-gpu-vm` rule). `stop-local.sh` and `benchmarker-queue stop` only SIGTERM the local daemon, not the VM.
 - **Golden cluster forwarding**: Only kbn/evals OTel traces reach golden ES via Buildkite — not via `GoldenForwarder`.
 - **Dashboard/API server**: Built-in UI not started by daemon alone — run `npm run api` or use start flags; defaults port **3200**; recommendations table has expandable deployment rows with copy-command.
 - **vLLM deploy defaults**: Docker image `vllm/vllm-openai:latest`; `tensor-parallel-size` = VM `gpuCount`; resolved pip version logged after deploy.

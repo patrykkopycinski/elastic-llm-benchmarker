@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for the elastic-llm-benchmarker daemon (24/7-autonomy P0:
+  daemon supervision / auto-restart).
+
+  Do NOT edit this template with real paths and commit it. Run
+  scripts/install-launchd.sh, which renders the __PLACEHOLDER__ tokens from the
+  current checkout into ~/Library/LaunchAgents/com.elastic-llm-benchmarker.plist
+  (gitignored location) and loads it.
+
+  KeepAlive + RunAtLoad give crash-restart and boot-start. Recovery is safe: on
+  restart the daemon reclaims stale in-flight entries (reclaimStaleEntries) and
+  resumes/adopts the current run, so KeepAlive never double-processes a model.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.elastic-llm-benchmarker</string>
+
+  <!--
+    run-daemon.sh restores the nvm-managed node on PATH (launchd starts with a
+    bare environment and no login shell, so cli.js's `#!/usr/bin/env node`
+    shebang would otherwise fail to resolve), then execs start-local.sh.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec __REPO_ROOT__/scripts/run-daemon.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Do not thrash-restart: wait 30s between respawns. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__REPO_ROOT__/.smoke-logs/daemon.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO_ROOT__/.smoke-logs/daemon.log</string>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>
