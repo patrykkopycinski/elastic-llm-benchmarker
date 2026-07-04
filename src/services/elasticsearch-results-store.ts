@@ -95,6 +95,11 @@ function resultToEs(result: BenchmarkResult): Record<string, unknown> {
   return {
     '@timestamp': result.timestamp,
     model_id: result.modelId,
+    model_name: result.modelName ?? null,
+    architecture: result.architecture ?? null,
+    parameter_count: result.parameterCount ?? null,
+    context_window: result.contextWindow ?? null,
+    supports_tool_calling: result.supportsToolCalling ?? null,
     timestamp: result.timestamp,
     vllm_version: result.vllmVersion,
     docker_command: result.dockerCommand,
@@ -147,6 +152,11 @@ function esHitToResult(hit: Record<string, unknown>): BenchmarkResult {
   const tcr = hit.tool_call_results as Record<string, unknown> | null;
   return {
     modelId: hit.model_id as string,
+    modelName: (hit.model_name as string | null) ?? undefined,
+    architecture: (hit.architecture as string | null) ?? undefined,
+    parameterCount: (hit.parameter_count as number | null) ?? null,
+    contextWindow: (hit.context_window as number | null) ?? undefined,
+    supportsToolCalling: (hit.supports_tool_calling as boolean | null) ?? undefined,
     timestamp: hit.timestamp as string,
     vllmVersion: hit.vllm_version as string,
     dockerCommand: hit.docker_command as string,
@@ -579,35 +589,20 @@ export class ElasticsearchResultsStore {
     return hits.map((hit) => esHitToReport(hit));
   }
 
-  async saveModel(entry: ModelCatalogEntry): Promise<void> {
-    const now = new Date().toISOString();
-    const doc: Record<string, unknown> = {
-      model_id: entry.modelId,
-      name: entry.name,
-      architecture: entry.architecture,
-      parameter_count: entry.parameterCount,
-      context_window: entry.contextWindow,
-      license: entry.license,
-      supports_tool_calling: entry.supportsToolCalling,
-      quantizations: entry.quantizations,
-      source: entry.source,
-      last_updated: now,
-    };
-    const exists = await this.esClient.exists({
-      index: INDEX_NAMES.BENCHMARKER_MODELS,
-      id: entry.modelId,
-    });
-    if (!exists) {
-      doc.discovered_at = now;
-    }
-    await this.esClient.index({
-      index: INDEX_NAMES.BENCHMARKER_MODELS,
-      id: entry.modelId,
-      document: doc,
-      refresh: true,
-    });
-  }
-
+  /**
+   * Distinct models that have actually been benchmarked, sourced from the
+   * `benchmarker-results` index (the source of truth). This powers the
+   * dashboard leaderboard.
+   *
+   * Model metadata (name/architecture/params/context/tool-calling) is read
+   * from the most recent result via a `top_hits` sub-aggregation. Results
+   * written before this metadata was persisted leave those fields blank and
+   * the UI renders "—" until the model is benchmarked again.
+   *
+   * ponytail: the `architecture` / `source` filters are applied client-side
+   * against the derived catalog (results have `architecture` but no `source`),
+   * so the `source` filter is a no-op and retained only for API compatibility.
+   */
   async queryModels(
     filters?: {
       architecture?: string;
@@ -615,52 +610,59 @@ export class ElasticsearchResultsStore {
       source?: string;
     },
   ): Promise<ModelCatalogEntry[]> {
-    const must: Record<string, unknown>[] = [];
-    if (filters?.architecture) must.push({ term: { architecture: filters.architecture } });
-    if (filters?.supportsToolCalling !== undefined)
-      must.push({ term: { supports_tool_calling: filters.supportsToolCalling } });
-    if (filters?.source) must.push({ term: { source: filters.source } });
-
     const resp = await this.esClient.search({
-      index: INDEX_NAMES.BENCHMARKER_MODELS,
-      query: must.length > 0 ? { bool: { must } } : { match_all: {} },
-      size: 1000,
+      index: INDEX_NAMES.BENCHMARKER_RESULTS,
+      size: 0,
+      aggs: {
+        models: {
+          terms: { field: 'model_id', size: 1000 },
+          aggs: {
+            latest: {
+              top_hits: {
+                size: 1,
+                sort: [{ '@timestamp': { order: 'desc' } }],
+                _source: [
+                  'model_name',
+                  'architecture',
+                  'parameter_count',
+                  'context_window',
+                  'supports_tool_calling',
+                ],
+              },
+            },
+          },
+        },
+      },
     });
-    const hits = (resp.hits.hits ?? []).map((h) => h._source).filter(Boolean) as Record<
-      string,
-      unknown
-    >[];
-    return hits.map((h) => ({
-      modelId: h.model_id as string,
-      name: h.name as string,
-      architecture: h.architecture as string,
-      parameterCount: (h.parameter_count as number | null) ?? null,
-      contextWindow: h.context_window as number,
-      license: h.license as string,
-      supportsToolCalling: (h.supports_tool_calling as boolean) ?? false,
-      quantizations: (h.quantizations as string[]) ?? [],
-      source: h.source as 'hf_discovery' | 'user',
-    }));
-  }
+    const buckets =
+      (resp.aggregations?.models as {
+        buckets?: {
+          key: string;
+          latest?: { hits?: { hits?: { _source?: Record<string, unknown> }[] } };
+        }[];
+      } | undefined)?.buckets ?? [];
 
-  async getModel(modelId: string): Promise<ModelCatalogEntry | null> {
-    const resp = await this.esClient.get({
-      index: INDEX_NAMES.BENCHMARKER_MODELS,
-      id: modelId,
+    const entries: ModelCatalogEntry[] = buckets.map((b) => {
+      const src = b.latest?.hits?.hits?.[0]?._source ?? {};
+      return {
+        modelId: b.key,
+        name: (src.model_name as string | null) || b.key,
+        architecture: (src.architecture as string | null) ?? '',
+        parameterCount: (src.parameter_count as number | null) ?? null,
+        contextWindow: (src.context_window as number | null) ?? 0,
+        license: '',
+        supportsToolCalling: (src.supports_tool_calling as boolean | null) ?? false,
+        quantizations: [],
+        source: 'hf_discovery' as const,
+      };
     });
-    if (!resp.found) return null;
-    const h = resp._source as Record<string, unknown>;
-    return {
-      modelId: h.model_id as string,
-      name: h.name as string,
-      architecture: h.architecture as string,
-      parameterCount: (h.parameter_count as number | null) ?? null,
-      contextWindow: h.context_window as number,
-      license: h.license as string,
-      supportsToolCalling: (h.supports_tool_calling as boolean) ?? false,
-      quantizations: (h.quantizations as string[]) ?? [],
-      source: h.source as 'hf_discovery' | 'user',
-    };
+
+    return entries.filter((e) => {
+      if (filters?.architecture && e.architecture !== filters.architecture) return false;
+      if (filters?.supportsToolCalling !== undefined && e.supportsToolCalling !== filters.supportsToolCalling)
+        return false;
+      return true;
+    });
   }
 
   async saveError(event: ErrorEvent): Promise<void> {

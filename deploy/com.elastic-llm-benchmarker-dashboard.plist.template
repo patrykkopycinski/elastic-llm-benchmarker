@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  LaunchAgent template for the elastic-llm-benchmarker dashboard / REST API
+  (queue-server). The daemon does NOT serve the dashboard, so it is supervised
+  as its own LaunchAgent.
+
+  Do NOT edit this template with real paths and commit it. Run
+  scripts/install-launchd.sh dashboard, which renders the __REPO_ROOT__ token
+  from the current checkout into
+  ~/Library/LaunchAgents/com.elastic-llm-benchmarker-dashboard.plist
+  (gitignored location) and loads it.
+
+  KeepAlive + RunAtLoad give crash-restart and boot-start. The dashboard is
+  stateless (read-only over Elasticsearch), so restarts are always safe.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.elastic-llm-benchmarker-dashboard</string>
+
+  <!--
+    run-dashboard.sh restores the nvm-managed node on PATH (launchd starts with
+    a bare environment), sources .env for the ES credentials, and execs the
+    queue-server via tsx.
+  -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec __REPO_ROOT__/scripts/run-dashboard.sh</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+    <key>Crashed</key>
+    <true/>
+  </dict>
+
+  <!-- Do not thrash-restart: wait 30s between respawns. -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__REPO_ROOT__/.smoke-logs/dashboard.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO_ROOT__/.smoke-logs/dashboard.log</string>
+
+  <!--
+    Standard (not Background) QoS. Background applies aggressive CPU/IO
+    throttling that starves node's startup — a <1s boot stretches to ~3 minutes
+    before the port binds, which is unacceptable for a user-facing dashboard.
+    Standard is the default foreground QoS: prompt startup, no throttle.
+  -->
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>
