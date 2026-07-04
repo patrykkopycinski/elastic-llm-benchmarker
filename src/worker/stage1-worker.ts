@@ -262,6 +262,11 @@ export class Stage1WorkerImpl implements Stage1Worker {
       this.logger.info('Stage 1: storing results', { modelId: run.modelId });
       const benchmarkRecord: BenchmarkResult = {
         modelId: run.modelId,
+        modelName: modelInfo.name,
+        architecture: modelInfo.architecture,
+        parameterCount: modelInfo.parameterCount,
+        contextWindow: modelInfo.contextWindow,
+        supportsToolCalling: modelInfo.supportsToolCalling,
         timestamp: new Date().toISOString(),
         vllmVersion: deployment.engineImage,
         dockerCommand: deployment.deploymentCommand,

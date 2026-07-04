@@ -113,6 +113,16 @@ export interface GpuUtilization {
 export interface BenchmarkResult {
   /** HuggingFace model ID */
   modelId: string;
+  /** Human-readable model name (optional; from the model card at benchmark time) */
+  modelName?: string;
+  /** Model architecture type (optional; from the model card at benchmark time) */
+  architecture?: string;
+  /** Number of model parameters (optional; from the model card at benchmark time) */
+  parameterCount?: number | null;
+  /** Maximum context window size in tokens (optional; from the model card at benchmark time) */
+  contextWindow?: number;
+  /** Whether the model supports tool/function calling (optional; from the model card) */
+  supportsToolCalling?: boolean;
   /** Timestamp of the benchmark run */
   timestamp: string;
   /** vLLM version used */

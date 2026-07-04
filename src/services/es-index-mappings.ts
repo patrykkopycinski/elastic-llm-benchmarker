@@ -5,7 +5,6 @@ export const INDEX_NAMES = {
   BENCHMARKER_EVAL_REPORTS: 'benchmarker-eval-reports',
   BENCHMARKER_QUEUE: 'benchmarker-queue',
   BENCHMARKER_CHECKPOINTS: 'benchmarker-checkpoints',
-  BENCHMARKER_MODELS: 'benchmarker-models',
   BENCHMARKER_ERRORS: 'benchmarker-errors',
   BENCHMARKER_EVALUATIONS: 'benchmark-evaluations',
   BENCHMARKER_STAGE2: 'benchmark-stage2',
@@ -25,6 +24,11 @@ export const INDEX_MAPPINGS: Record<
       properties: {
         '@timestamp': { type: 'date', fields: { keyword: { type: 'keyword' } } },
         model_id: { type: 'keyword' },
+        model_name: { type: 'text', fields: { keyword: { type: 'keyword' } } },
+        architecture: { type: 'keyword' },
+        parameter_count: { type: 'long' },
+        context_window: { type: 'integer' },
+        supports_tool_calling: { type: 'boolean' },
         timestamp: { type: 'keyword' },
         vllm_version: { type: 'keyword' },
         docker_command: { type: 'text' },
@@ -151,28 +155,6 @@ export const INDEX_MAPPINGS: Record<
             category: { type: 'keyword' },
           },
         },
-      },
-    },
-    settings: {
-      number_of_shards: 1,
-      number_of_replicas: 1,
-    },
-  },
-  [INDEX_NAMES.BENCHMARKER_MODELS]: {
-    mappings: {
-      properties: {
-        model_id: { type: 'keyword' },
-        name: { type: 'text', fields: { keyword: { type: 'keyword' } } },
-        architecture: { type: 'keyword' },
-        parameter_count: { type: 'long' },
-        parameter_count_billions: { type: 'float' },
-        context_window: { type: 'integer' },
-        license: { type: 'keyword' },
-        supports_tool_calling: { type: 'boolean' },
-        quantizations: { type: 'keyword' },
-        source: { type: 'keyword' },
-        discovered_at: { type: 'date' },
-        last_updated: { type: 'date' },
       },
     },
     settings: {

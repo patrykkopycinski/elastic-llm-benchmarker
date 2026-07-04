@@ -181,7 +181,6 @@ The CLI has two binaries that share the same entry point (`src/cli.ts`):
 |-------|---------|
 | `benchmarker-results` | Stage 1 benchmark results (metrics, hardware, vLLM config) |
 | `benchmarker-queue` | Work queue entries |
-| `benchmarker-models` | Discovered model metadata |
 | `benchmarker-eval-reports` | Evaluation classification reports |
 | `benchmark-evaluations` | Stage 2 eval suite results |
 | `benchmark-stage2` | Stage 2 detailed results |
