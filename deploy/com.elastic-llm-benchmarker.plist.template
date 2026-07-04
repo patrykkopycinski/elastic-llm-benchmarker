@@ -17,11 +17,16 @@
   <key>Label</key>
   <string>com.elastic-llm-benchmarker</string>
 
+  <!--
+    run-daemon.sh restores the nvm-managed node on PATH (launchd starts with a
+    bare environment and no login shell, so cli.js's `#!/usr/bin/env node`
+    shebang would otherwise fail to resolve), then execs start-local.sh.
+  -->
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>exec __REPO_ROOT__/scripts/start-local.sh</string>
+    <string>exec __REPO_ROOT__/scripts/run-daemon.sh</string>
   </array>
 
   <key>WorkingDirectory</key>
