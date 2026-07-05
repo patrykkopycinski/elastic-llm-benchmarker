@@ -417,9 +417,16 @@ export class Stage1WorkerImpl implements Stage1Worker {
         this.config.benchmarkThresholds,
         paramBillions,
       );
+      // Gate on the SINGLE-TOOL success rate — Agent Builder issues single-tool
+      // calls only, so a model that can't do parallel calls (4 of 5 benchmark
+      // scenarios) must not be penalized. Fall back to the all-scenarios rate for
+      // results produced before singleToolSuccessRate existed.
+      const gateSuccessRate =
+        toolCallResults === null
+          ? null
+          : (toolCallResults.singleToolSuccessRate ?? toolCallResults.successRate);
       const toolCallGatePassed =
-        toolCallResults === null ||
-        toolCallResults.successRate >= minToolCallSuccessRate;
+        gateSuccessRate === null || gateSuccessRate >= minToolCallSuccessRate;
 
       const stage2Eligible =
         avgItlP50 < maxItlP50Ms &&
@@ -437,6 +444,8 @@ export class Stage1WorkerImpl implements Stage1Worker {
         avgTtft,
         contextWindow,
         toolCallSuccessRate: toolCallResults?.successRate ?? null,
+        singleToolSuccessRate: toolCallResults?.singleToolSuccessRate ?? null,
+        gateSuccessRate,
         minToolCallSuccessRate,
         toolCallGatePassed,
       });

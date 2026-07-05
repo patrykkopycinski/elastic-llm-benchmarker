@@ -686,11 +686,70 @@ describe('ToolCallBenchmarkService', () => {
       expect(report.failureReasons.some((r) => r.includes('Success rate'))).toBe(true);
     });
 
+    it('reports singleToolSuccessRate over single-tool scenarios only, ignoring parallel failures', () => {
+      // A model that nails the single-tool call but fails every parallel scenario:
+      // overall successRate is dragged down, but singleToolSuccessRate stays 1.0.
+      const results: ParallelToolCallTestResult[] = [
+        {
+          requestedCalls: 1,
+          returnedCalls: 1,
+          allCallsReturned: true,
+          allCallsValid: true,
+          validFunctionNames: ['get_weather'],
+          latencyMs: 150,
+          error: null,
+        },
+        {
+          requestedCalls: 2,
+          returnedCalls: 1,
+          allCallsReturned: false,
+          allCallsValid: true,
+          validFunctionNames: ['get_weather'],
+          latencyMs: 200,
+          error: null,
+        },
+        {
+          requestedCalls: 3,
+          returnedCalls: 1,
+          allCallsReturned: false,
+          allCallsValid: true,
+          validFunctionNames: ['get_stock_price'],
+          latencyMs: 250,
+          error: null,
+        },
+      ];
+
+      const report = service.aggregateResults(results, 1);
+
+      // Overall (single + parallel) is only 1/3, but single-tool is a clean 1/1.
+      expect(report.toolCallResult.successRate).toBeCloseTo(1 / 3, 4);
+      expect(report.toolCallResult.singleToolSuccessRate).toBe(1);
+    });
+
+    it('reports singleToolSuccessRate 0 when the single-tool scenario itself fails', () => {
+      const results: ParallelToolCallTestResult[] = [
+        {
+          requestedCalls: 1,
+          returnedCalls: 0,
+          allCallsReturned: false,
+          allCallsValid: false,
+          validFunctionNames: [],
+          latencyMs: 100,
+          error: null,
+        },
+      ];
+
+      const report = service.aggregateResults(results, 0);
+
+      expect(report.toolCallResult.singleToolSuccessRate).toBe(0);
+    });
+
     it('should handle empty results', () => {
       const report = service.aggregateResults([], 0);
 
       expect(report.toolCallResult.totalTests).toBe(0);
       expect(report.toolCallResult.successRate).toBe(0);
+      expect(report.toolCallResult.singleToolSuccessRate).toBe(0);
       expect(report.toolCallResult.avgToolCallLatencyMs).toBe(0);
       expect(report.toolCallResult.maxConcurrentCalls).toBe(0);
       expect(report.toolCallResult.supportsParallelCalls).toBe(false);
