@@ -432,6 +432,7 @@ export class DiscoveryScheduler {
       const result = await this.deps.discoveryService.discover({
         limit: this.deps.config.maxModelsPerRun * 3,
         search: this.deps.config.search,
+        sort: this.deps.config.sort,
         ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
         ...(minParamBillions
           ? { minParameterCount: minParamBillions * 1_000_000_000 }

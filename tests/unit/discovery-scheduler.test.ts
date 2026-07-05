@@ -30,6 +30,7 @@ function createMockConfig(): DiscoverySchedulerConfig {
     enabled: true,
     intervalMinutes: 1,
     search: undefined,
+    sort: 'downloads',
     maxModelsPerRun: 2,
     minTrendingScore: 0,
     autoQueue: true,
@@ -126,6 +127,27 @@ describe('DiscoveryScheduler', () => {
 
       expect(newHot.trendingScore).toBeGreaterThan(oldPopular.trendingScore);
       expect(newHot.totalScore).toBeGreaterThan(oldPopular.totalScore);
+    });
+
+    it('passes the configured sort key through to the discovery sweep', async () => {
+      const discoveryService = {
+        discover: vi.fn().mockResolvedValue({ models: [], totalScanned: 0, totalRejected: 0, timestamp: new Date().toISOString() }),
+        fetchModelConfig: vi.fn(),
+        fetchModelInfo: vi.fn(),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = createMockConfig();
+      config.sort = 'lastModified';
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      await scheduler.discoverAndScore();
+
+      expect(discoveryService.discover).toHaveBeenCalledWith(
+        expect.objectContaining({ sort: 'lastModified' }),
+      );
     });
 
     it('filters models below minTrendingScore', async () => {

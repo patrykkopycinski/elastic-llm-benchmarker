@@ -665,6 +665,17 @@ export const discoverySchedulerConfigSchema = z.object({
   intervalMinutes: z.number().int().positive().default(60),
   /** Optional search query to filter models by name or tag. */
   search: z.string().optional(),
+  /**
+   * HuggingFace sort key for the discovery sweep. `downloads` (default)
+   * surfaces established, reputable models — but once those are all
+   * benchmarked, the feed yields nothing new. Switch to `lastModified` or
+   * `createdAt` to catch freshly-published qualifying models early (at the
+   * cost of more low-quality community merges/quants in the funnel, which the
+   * candidate filter still rejects).
+   */
+  sort: z
+    .enum(['downloads', 'likes', 'trending', 'lastModified', 'createdAt'])
+    .default('downloads'),
   /** Maximum number of models to accept per discovery run. */
   maxModelsPerRun: z.number().int().positive().default(10),
   /** Minimum trending score (0–100) required for a model to be considered. */
