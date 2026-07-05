@@ -17,53 +17,12 @@ import { createEngine } from '../engines/engine-factory.js';
 import { ToolCallBenchmarkService } from '../services/tool-call-benchmark.js';
 import type { ModelInfo, ToolCallResult, BenchmarkResult } from '../types/benchmark.js';
 import type { EngineDeploymentResult, EngineFullBenchmarkResult } from '../engines/engine-types.js';
-import type { SSHConfig, VMHardwareProfile } from '../types/config.js';
+import type { VMHardwareProfile } from '../types/config.js';
 import { createLogger } from '../utils/logger.js';
-import { spawn, type ChildProcess } from 'node:child_process';
-import * as net from 'node:net';
+import { startSSHTunnel, waitForTunnel, TUNNEL_LOCAL_PORT } from '../utils/ssh-tunnel.js';
+import { type ChildProcess } from 'node:child_process';
 
 const logger = createLogger();
-const TUNNEL_LOCAL_PORT = 18000;
-
-function startSSHTunnel(sshConfig: SSHConfig): ChildProcess {
-  const args = [
-    '-N', '-L', `${TUNNEL_LOCAL_PORT}:localhost:8000`,
-    '-o', 'StrictHostKeyChecking=no',
-    '-o', 'ExitOnForwardFailure=yes',
-    '-p', String(sshConfig.port),
-  ];
-  if (sshConfig.privateKeyPath) {
-    args.push('-i', sshConfig.privateKeyPath);
-  }
-  args.push(`${sshConfig.username}@${sshConfig.host}`);
-
-  const proc = spawn('ssh', args, { stdio: 'pipe' });
-  proc.stderr?.on('data', (d: Buffer) => {
-    const msg = d.toString().trim();
-    if (msg) logger.debug(`SSH tunnel stderr: ${msg}`);
-  });
-  return proc;
-}
-
-async function waitForTunnel(timeoutMs = 15000): Promise<boolean> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const sock = net.connect(TUNNEL_LOCAL_PORT, '127.0.0.1', () => {
-          sock.destroy();
-          resolve();
-        });
-        sock.on('error', reject);
-        sock.setTimeout(1000, () => { sock.destroy(); reject(new Error('timeout')); });
-      });
-      return true;
-    } catch {
-      await new Promise((r) => setTimeout(r, 500));
-    }
-  }
-  return false;
-}
 
 function buildEsAuth(es: { apiKey?: string; username?: string; password?: string }) {
   if (es.apiKey) return { apiKey: es.apiKey };
@@ -223,7 +182,7 @@ async function main() {
         let tunnel: ChildProcess | null = null;
         try {
           logger.info(`Starting SSH tunnel for tool-call benchmarks: ${modelId}`);
-          tunnel = startSSHTunnel(config.ssh);
+          tunnel = startSSHTunnel(config.ssh, logger);
           const tunnelReady = await waitForTunnel();
           if (!tunnelReady) {
             throw new Error('SSH tunnel failed to become ready within 15s');
