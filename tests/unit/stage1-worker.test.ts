@@ -190,13 +190,14 @@ describe('Stage1WorkerImpl', () => {
           },
           {
             category: 'config',
-            title: 'Limit context length',
-            description: 'Cap with --max-model-len 8192 for stability.',
+            title: 'Raise context length',
+            description: 'Set --max-model-len 131072 for full context.',
             estimatedImpact: 'medium',
           },
         ],
       };
 
+      deps.config.stage2Thresholds.minContextWindow = 128_000;
       deps.resultsStore = createMockResultsStore(reasoning);
       worker = new Stage1WorkerImpl(deps);
 
@@ -207,7 +208,49 @@ describe('Stage1WorkerImpl', () => {
       const overrides = deployCall![3] as VllmDeploymentOptions | undefined;
       expect(overrides).toBeDefined();
       expect(overrides!.gpuMemoryUtilization).toBe(0.75);
-      expect(overrides!.maxModelLen).toBe(8192);
+      // 131072 >= stage2Thresholds.minContextWindow (128000) → preserved.
+      expect(overrides!.maxModelLen).toBe(131072);
+    });
+
+    it('should neutralize a reasoning max-model-len below the Stage 2 context floor', async () => {
+      const reasoning: Stage3Result = {
+        runId: 'run-prev',
+        modelId: 'meta-llama/Llama-3-8B',
+        status: 'success',
+        startedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T00:01:00Z',
+        suggestions: [
+          {
+            category: 'config',
+            title: 'Reduce GPU memory util',
+            description:
+              'Use --gpu-memory-utilization 0.75 to avoid OOM on this model.',
+            estimatedImpact: 'high',
+          },
+          {
+            category: 'config',
+            title: 'Limit context length',
+            description: 'Cap with --max-model-len 8192 for stability.',
+            estimatedImpact: 'medium',
+          },
+        ],
+      };
+
+      deps.config.stage2Thresholds.minContextWindow = 128_000;
+      deps.resultsStore = createMockResultsStore(reasoning);
+      worker = new Stage1WorkerImpl(deps);
+
+      await worker.execute(createPipelineRun());
+
+      const deployCall = vi.mocked(deps.vllmEngine.deploy).mock.calls[0];
+      expect(deployCall).toBeDefined();
+      const overrides = deployCall![3] as VllmDeploymentOptions | undefined;
+      expect(overrides).toBeDefined();
+      // gpu-mem-util override is still honored...
+      expect(overrides!.gpuMemoryUtilization).toBe(0.75);
+      // ...but the sub-floor 8192 max-model-len is dropped (→ vLLM `auto`), so the
+      // Stage 2 security eval suites (prompts >8192 tokens) don't 400 on context.
+      expect(overrides!.maxModelLen).toBeUndefined();
     });
 
     it('should pass undefined overrides when previous reasoning has no parseable suggestions', async () => {

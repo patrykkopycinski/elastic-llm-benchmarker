@@ -211,9 +211,32 @@ export class Stage1WorkerImpl implements Stage1Worker {
             previousReasoning.suggestions,
           );
           if (deploymentOverrides) {
+            // Guard: Stage 3 reasoning optimizes benchmark throughput/memory and may
+            // suggest reducing --max-model-len (e.g. to 8192). But the same deployment
+            // also serves the Stage 2 security eval suites, whose prompts exceed small
+            // contexts (alert-triage sends >8192 tokens). A capped context makes every
+            // Stage 2 build fail with a 400 "maximum context length is N tokens". Never
+            // let a reasoning suggestion drop max-model-len below the Stage 2 context
+            // floor — fall back to `auto` (the model's advertised max) instead.
+            const contextFloor = this.config.stage2Thresholds.minContextWindow;
+            const suggestedMaxLen = deploymentOverrides.maxModelLen;
+            if (
+              suggestedMaxLen !== null &&
+              suggestedMaxLen !== undefined &&
+              suggestedMaxLen < contextFloor
+            ) {
+              this.logger.warn(
+                'Stage 1: ignoring reasoning max-model-len override below Stage 2 context floor',
+                { modelId: run.modelId, suggested: suggestedMaxLen, floor: contextFloor },
+              );
+              deploymentOverrides.maxModelLen = undefined;
+            }
             this.logger.info('Stage 1: applying reasoning overrides', {
               modelId: run.modelId,
-              overrides: Object.keys(deploymentOverrides),
+              overrides: Object.keys(deploymentOverrides).filter(
+                (k) =>
+                  deploymentOverrides![k as keyof VllmDeploymentOptions] !== undefined,
+              ),
             });
           }
         }

@@ -80,7 +80,17 @@ export function getVllmParamsForModel(
   // ─── Llama 3.x (JSON tool calling; explicit chat template for 3.1/3.2) ──────
   // Llama 3.1/3.2 need the vLLM-bundled template because their tokenizer templates
   // may not work as well with vLLM's llama3_json parser out of the box.
-  if (id.includes('llama') || id.includes('codellama')) {
+  //
+  // Match by architecture too, not just the id substring: Llama-derived fine-tunes
+  // whose id does NOT contain "llama" (e.g. fdtn-ai/Foundation-Sec-8B-Instruct,
+  // arch normalized to "llama" from LlamaForCausalLM) must still get the llama3_json
+  // parser. Without this they deploy with NO tool-call flags, and every Agent Builder
+  // `converse` (which sends tool_choice="auto") fails with vLLM 400: "auto tool choice
+  // requires --enable-auto-tool-choice and --tool-call-parser to be set" — silently
+  // failing all Stage 2 security suites. Exclude "llama4" so Llama 4 arch strings fall
+  // through to their dedicated (pythonic) branch above.
+  const isLlamaArch = arch.includes('llama') && !arch.includes('llama4');
+  if (id.includes('llama') || id.includes('codellama') || isLlamaArch) {
     const unslothKey =
       id.includes('llama-3.2') || id.includes('llama3.2')
         ? 'llama-3.2'
@@ -288,6 +298,9 @@ export function getVllmParamsForModel(
 /**
  * Resolves only the tool-call parser for a model (for callers that don't need full params).
  */
-export function getToolCallParserForModelId(modelId: string): string | null {
-  return getVllmParamsForModel(modelId).toolCallParser;
+export function getToolCallParserForModelId(
+  modelId: string,
+  architecture?: string | null,
+): string | null {
+  return getVllmParamsForModel(modelId, architecture).toolCallParser;
 }

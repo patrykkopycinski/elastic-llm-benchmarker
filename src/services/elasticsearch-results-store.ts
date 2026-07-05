@@ -1083,6 +1083,7 @@ export class ElasticsearchResultsStore {
         body: {
           '@timestamp': new Date().toISOString(),
           run_id: result.runId,
+          queue_entry_id: result.queueEntryId ?? null,
           model_id: result.modelId,
           buildkite_build_url: result.buildkiteBuildUrl,
           buildkite_build_number: result.buildkiteBuildNumber,
@@ -1130,6 +1131,7 @@ export class ElasticsearchResultsStore {
         }>
       ).map((hit) => ({
         runId: hit._source['run_id'] as string,
+        queueEntryId: (hit._source['queue_entry_id'] as string | null) ?? undefined,
         modelId: hit._source['model_id'] as string,
         buildkiteBuildUrl: hit._source['buildkite_build_url'] as string,
         buildkiteBuildNumber: hit._source['buildkite_build_number'] as number,

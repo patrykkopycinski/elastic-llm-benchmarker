@@ -511,16 +511,19 @@ program
     'Print a vLLM docker run command with tool calling enabled for the given model (for local deploy + tool-call-benchmark)',
   )
   .option('--model <id>', 'Model ID (e.g. meta-llama/Llama-3.3-70B-Instruct)', 'meta-llama/Llama-3.3-70B-Instruct')
+  .option('--architecture <arch>', 'Model architecture (e.g. llama) — needed for Llama-derived models whose id lacks "llama"')
   .option('--port <n>', 'Host port to expose (default: 8000)', '8000')
   .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:latest')
   .option('--tensor-parallel <n>', 'Tensor parallel size (GPUs)', '2')
   .action((opts) => {
     const modelId = opts['model'] as string;
+    const architecture = opts['architecture'] as string | undefined;
     const port = parseInt(opts['port'] as string, 10);
     const image = opts['image'] as string;
     const tensorParallel = parseInt(opts['tensorParallel'] as string, 10);
     const { command, toolCallParser } = buildDeployCommandWithToolCalling({
       modelId,
+      architecture,
       apiPort: port,
       dockerImage: image,
       tensorParallelSize: tensorParallel,
@@ -541,6 +544,7 @@ program
     'Deploy vLLM with tool calling enabled, wait for healthy, then run the tool-call benchmark (local Docker)',
   )
   .option('--model <id>', 'Model ID', 'meta-llama/Llama-3.3-70B-Instruct')
+  .option('--architecture <arch>', 'Model architecture (e.g. llama) — needed for Llama-derived models whose id lacks "llama"')
   .option('--port <n>', 'Host port', '8000')
   .option('--image <image>', 'vLLM Docker image', 'vllm/vllm-openai:latest')
   .option('--tensor-parallel <n>', 'Tensor parallel size', '2')
@@ -548,6 +552,7 @@ program
   .option('--no-stop', 'Do not stop the container after the benchmark')
   .action(async (opts) => {
     const modelId = opts['model'] as string;
+    const architecture = opts['architecture'] as string | undefined;
     const port = parseInt(opts['port'] as string, 10);
     const image = opts['image'] as string;
     const tensorParallel = parseInt(opts['tensorParallel'] as string, 10);
@@ -556,6 +561,7 @@ program
 
     const { command, toolCallParser } = buildDeployCommandWithToolCalling({
       modelId,
+      architecture,
       apiPort: port,
       dockerImage: image,
       tensorParallelSize: tensorParallel,

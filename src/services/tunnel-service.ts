@@ -427,6 +427,13 @@ class NgrokProvider implements TunnelProvider_Impl {
     const args = ['http', String(localPort), '--log=stdout', '--log-level=warn'];
     if (this.domain) {
       args.push('--domain', this.domain);
+      // Endpoint pooling lets this agent bind the reserved domain even when another
+      // agent still holds it: a prior daemon whose cloud endpoint lingers "online"
+      // during ngrok's grace period (ERR_NGROK_334 on restart), or a second machine
+      // sharing the account. ngrok load-balances across pooled agents; since every
+      // agent forwards to the same GPU VM, requests resolve to the model under test
+      // regardless of which leg serves them. Verified available on the free plan.
+      args.push('--pooling-enabled');
     }
 
     const env: NodeJS.ProcessEnv = { ...process.env };
@@ -741,6 +748,235 @@ class CloudflaredProvider implements TunnelProvider_Impl {
   }
 }
 
+// ─── Cloudflared Named-Tunnel Provider ────────────────────────────────────────
+
+/** Kill zombie `cloudflared tunnel ... run <name>` processes from a prior daemon. */
+async function killOrphanNamedTunnel(tunnelName: string): Promise<void> {
+  const pattern = `cloudflared tunnel .*run ${tunnelName}`;
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern]);
+    const pids = stdout
+      .trim()
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await Promise.all(
+      pids.map(async (pid) => {
+        try {
+          await execFileAsync('kill', ['-TERM', pid]);
+        } catch {
+          // already exited
+        }
+      }),
+    );
+  } catch {
+    // pgrep exit 1 = no matches
+  }
+}
+
+/** True when a `cloudflared ... run <name>` process is currently alive. */
+async function isNamedTunnelRunning(tunnelName: string): Promise<boolean> {
+  const pattern = `cloudflared tunnel .*run ${tunnelName}`;
+  try {
+    const { stdout } = await execFileAsync('pgrep', ['-f', pattern]);
+    return stdout.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Persistent, account-owned **named** Cloudflare tunnel provider.
+ *
+ * Unlike the quick-tunnel provider, the public hostname is STABLE and owned by
+ * the operator's Cloudflare account (routed via DNS to a pre-created tunnel).
+ * There is no per-run URL churn, no `*.trycloudflare.com` abuse-throttling, and
+ * no ngrok reserved-domain collision (ERR_NGROK_334). The daemon supervises one
+ * long-lived `cloudflared tunnel --config <path> run <name>` process and reuses
+ * it across restarts — so an in-flight CI build's injected URL keeps resolving.
+ *
+ * One-time operator setup (outside the daemon):
+ *   cloudflared tunnel login
+ *   cloudflared tunnel create <name>
+ *   cloudflared tunnel route dns <name> <hostname>
+ *   # write ~/.cloudflared/<name>-config.yml with ingress rules → 127.0.0.1:<port>
+ */
+class CloudflaredNamedProvider implements TunnelProvider_Impl {
+  private readonly logger;
+  private readonly tunnelName: string;
+  private readonly publicHostname: string;
+  private readonly configPath: string;
+  private cliProcess: ChildProcess | null = null;
+
+  constructor(config: TunnelConfig, logLevel: string) {
+    this.logger = createLogger(logLevel);
+    if (!config.cloudflaredTunnelName) {
+      throw new TunnelProviderNotAvailableError(
+        'cloudflared_named',
+        'tunnel.cloudflaredTunnelName is required for the named-tunnel provider',
+      );
+    }
+    if (!config.publicHostname) {
+      throw new TunnelProviderNotAvailableError(
+        'cloudflared_named',
+        'tunnel.publicHostname is required for the named-tunnel provider',
+      );
+    }
+    if (!config.cloudflaredConfigPath) {
+      throw new TunnelProviderNotAvailableError(
+        'cloudflared_named',
+        'tunnel.cloudflaredConfigPath is required for the named-tunnel provider',
+      );
+    }
+    this.tunnelName = config.cloudflaredTunnelName;
+    this.publicHostname = config.publicHostname;
+    this.configPath = config.cloudflaredConfigPath;
+  }
+
+  private buildTunnelInfo(localPort: number, establishedAt: string): TunnelInfo {
+    return {
+      publicUrl: this.publicHostname,
+      provider: 'cloudflared_named',
+      localPort,
+      establishedAt,
+      tunnelId: this.tunnelName,
+      region: null,
+    };
+  }
+
+  async checkExisting(localPort: number): Promise<TunnelInfo | null> {
+    // The hostname is stable; a supervising process left by a prior daemon (or by
+    // the operator) keeps it live. Reuse it instead of spawning a duplicate — two
+    // `run <name>` processes on the same tunnel are load-balanced by Cloudflare but
+    // the second just adds churn. DNS is permanent (routed once), so we only check
+    // that a process is alive.
+    if (await isNamedTunnelRunning(this.tunnelName)) {
+      this.logger.info('Reusing running named cloudflared tunnel', {
+        tunnelName: this.tunnelName,
+        publicUrl: this.publicHostname,
+        localPort,
+      });
+      return this.buildTunnelInfo(localPort, new Date().toISOString());
+    }
+    return null;
+  }
+
+  async create(localPort: number): Promise<TunnelInfo> {
+    // A pre-existing supervisor already serves the stable hostname — reuse it.
+    const existing = await this.checkExisting(localPort);
+    if (existing) {
+      return existing;
+    }
+
+    await killOrphanNamedTunnel(this.tunnelName);
+    await waitForLocalBackend(localPort);
+
+    const bin = process.env['CLOUDFLARED_BIN'] ?? 'cloudflared';
+    const args = [
+      'tunnel',
+      '--no-autoupdate',
+      '--config',
+      this.configPath,
+      'run',
+      this.tunnelName,
+    ];
+
+    this.logger.info('Starting named cloudflared tunnel', {
+      tunnelName: this.tunnelName,
+      publicUrl: this.publicHostname,
+      localPort,
+      configPath: this.configPath,
+      bin,
+    });
+
+    // detached so the tunnel OUTLIVES a daemon crash/restart; checkExisting()
+    // reattaches to it on the next boot instead of spawning a duplicate.
+    this.cliProcess = spawn(bin, args, {
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: true,
+    });
+
+    let output = '';
+    let registered = false;
+    const capture = (chunk: Buffer): void => {
+      output += chunk.toString();
+      // cloudflared logs "Registered tunnel connection" (one per edge conn) once the
+      // supervisor is live and serving the stable hostname.
+      if (!registered && /Registered tunnel connection|Connection .* registered/i.test(output)) {
+        registered = true;
+      }
+      if (output.length > 16_000) {
+        output = output.slice(-16_000);
+      }
+    };
+    this.cliProcess.stdout?.on('data', capture);
+    this.cliProcess.stderr?.on('data', capture);
+
+    let spawnError: Error | null = null;
+    this.cliProcess.on('error', (err: Error) => {
+      spawnError = err;
+      this.logger.error('named cloudflared process failed to spawn', {
+        bin,
+        error: err.message,
+      });
+    });
+
+    const deadlineMs = 45_000;
+    const started = Date.now();
+    while (Date.now() - started < deadlineMs) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (spawnError) {
+        break;
+      }
+      if (registered) {
+        const establishedAt = new Date().toISOString();
+        const pid = this.cliProcess.pid;
+        // Let the daemon exit without waiting on the detached supervisor.
+        this.cliProcess.unref();
+        this.logger.info('Named cloudflared tunnel established', {
+          tunnelName: this.tunnelName,
+          publicUrl: this.publicHostname,
+          localPort,
+          pid,
+        });
+        return this.buildTunnelInfo(localPort, establishedAt);
+      }
+      if (this.cliProcess.exitCode !== null) {
+        break;
+      }
+    }
+
+    const exitCode = this.cliProcess?.exitCode ?? null;
+    await this.disconnect();
+    if (spawnError) {
+      throw new Error(
+        `named cloudflared failed to start (${bin}): ${(spawnError as Error).message}`,
+      );
+    }
+    const detail = output.trim() ? ` — cloudflared output: ${output.trim().slice(-1_000)}` : '';
+    if (exitCode !== null) {
+      throw new Error(
+        `named cloudflared exited early (code ${exitCode}) for tunnel ${this.tunnelName}${detail}`,
+      );
+    }
+    throw new Error(
+      `named cloudflared did not register within ${deadlineMs}ms for tunnel ${this.tunnelName}${detail}`,
+    );
+  }
+
+  async disconnect(): Promise<void> {
+    if (this.cliProcess && this.cliProcess.exitCode === null) {
+      this.cliProcess.kill('SIGTERM');
+    }
+    this.cliProcess = null;
+    // The supervisor is detached; across a restart we no longer hold the handle, so
+    // kill any survivor by name so a fresh create() starts clean.
+    await killOrphanNamedTunnel(this.tunnelName);
+    this.logger.info('Named cloudflared tunnel disconnected', { tunnelName: this.tunnelName });
+  }
+}
+
 // ─── Placeholder Providers ────────────────────────────────────────────────────
 
 /**
@@ -849,6 +1085,8 @@ export class TunnelService {
         return new NgrokProvider(this.config, logLevel);
       case 'cloudflared':
         return new CloudflaredProvider(logLevel);
+      case 'cloudflared_named':
+        return new CloudflaredNamedProvider(this.config, logLevel);
       case 'cloudrun':
         return new CloudRunProvider();
       case 'load_balancer':
@@ -1009,12 +1247,12 @@ export class TunnelService {
       localPort: this.config.localPort,
     });
     this.currentTunnel = null;
-    if (this.config.provider === 'cloudflared') {
-      // Reuse-first: a cloudflared quick-tunnel URL is injected into in-flight CI builds,
-      // so it must NOT be rotated while the tunnel process is still alive (a transient
-      // public-endpoint blip must not orphan a running eval). connect()'s checkExisting()
-      // reattaches to the surviving detached tunnel; only when it's genuinely dead
-      // (pid gone or hostname no longer resolving) does it spawn a fresh one.
+    if (this.config.provider === 'cloudflared' || this.config.provider === 'cloudflared_named') {
+      // Reuse-first: the tunnel URL is injected into in-flight CI builds, so it must NOT
+      // be rotated while the tunnel process is still alive (a transient public-endpoint
+      // blip must not orphan a running eval). connect()'s checkExisting() reattaches to
+      // the surviving tunnel; only when it's genuinely dead does it spawn a fresh one.
+      // For the named provider the hostname is stable regardless, so reuse is always safe.
       return this.connect();
     }
     await this.provider.disconnect();

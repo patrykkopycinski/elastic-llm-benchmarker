@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DiscoveryScheduler, deriveModelFamily } from '../../src/services/discovery-scheduler.js';
+import type { ScoredModel } from '../../src/services/discovery-scheduler.js';
 import { createLogger } from '../../src/utils/logger.js';
 
 import type { ModelDiscoveryService } from '../../src/services/model-discovery.js';
@@ -149,6 +150,96 @@ describe('DiscoveryScheduler', () => {
         expect.objectContaining({ sort: 'lastModified' }),
       );
     });
+  });
+
+  describe('freshness fallback', () => {
+    it('retries with lastModified when the primary sort yields 0 hardware-fit candidates', async () => {
+      const now = new Date('2024-06-01T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const discover = vi
+        .fn()
+        .mockImplementation((opts: { sort?: string }) =>
+          Promise.resolve(
+            opts.sort === 'lastModified'
+              ? { models: [createMockModelInfo({ id: 'org/fresh' })], totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }
+              : { models: [createMockModelInfo({ id: 'org/stale' })], totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() },
+          ),
+        );
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi.fn().mockImplementation((id: string) =>
+          Promise.resolve({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32, _fits: id === 'org/fresh' }),
+        ),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: now.toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const hardwareEstimator = {
+        estimateGpuMemory: vi.fn(),
+        dryRunCheck: vi
+          .fn()
+          .mockImplementation((config: Record<string, unknown>) => ({
+            fits: config._fits === true,
+            estimatedGb: 18,
+            availableGb: 21.6,
+            reason: config._fits === true ? 'fits' : 'too big',
+          })),
+        selectBestProfiles: vi.fn(),
+      } as unknown as HardwareEstimator;
+
+      const config = createMockConfig(); // sort: 'downloads'
+      const deps = createMockDeps({ discoveryService, hardwareEstimator, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+
+      // Primary (downloads) sweep + fallback (lastModified) sweep.
+      expect(discover).toHaveBeenCalledTimes(2);
+      expect(discover).toHaveBeenNthCalledWith(1, expect.objectContaining({ sort: 'downloads' }));
+      expect(discover).toHaveBeenNthCalledWith(2, expect.objectContaining({ sort: 'lastModified' }));
+      // The fresh, hardware-fitting model is surfaced by the fallback.
+      const fresh = scored.find((m) => m.id === 'org/fresh');
+      expect(fresh?.hardwareFit).toBe(true);
+    });
+
+    it('does not retry when the configured sort is already freshness-based', async () => {
+      const now = new Date('2024-06-01T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const discover = vi.fn().mockResolvedValue({
+        models: [createMockModelInfo({ id: 'org/stale' })],
+        totalScanned: 1,
+        totalRejected: 0,
+        timestamp: now.toISOString(),
+      });
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi.fn().mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32, _fits: false }),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: now.toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const hardwareEstimator = {
+        estimateGpuMemory: vi.fn(),
+        dryRunCheck: vi.fn().mockReturnValue({ fits: false, estimatedGb: 90, availableGb: 21.6, reason: 'too big' }),
+        selectBestProfiles: vi.fn(),
+      } as unknown as HardwareEstimator;
+
+      const config = createMockConfig();
+      config.sort = 'lastModified';
+      const deps = createMockDeps({ discoveryService, hardwareEstimator, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      await scheduler.discoverAndScore();
+
+      // No second sweep — the freshness feed is already the primary source.
+      expect(discover).toHaveBeenCalledTimes(1);
+    });
 
     it('filters models below minTrendingScore', async () => {
       const now = new Date('2024-06-01T00:00:00Z');
@@ -267,6 +358,35 @@ describe('DiscoveryScheduler', () => {
       expect(result.queued).toBe(0);
       expect(result.skipped).toBe(1);
       expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips models that do not fit the target hardware', async () => {
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const discoveryService = {
+        isEvaluated: vi.fn().mockReturnValue(false),
+      } as unknown as ModelDiscoveryService;
+      const queueService = { enqueue } as unknown as QueueService;
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const makeScored = (id: string, hardwareFit: boolean): ScoredModel => ({
+        ...createMockModelInfo({ id }),
+        trendingScore: 10,
+        hardwareFit,
+        totalScore: hardwareFit ? 50 : 10,
+        createdAt: '2026-01-01T00:00:00Z',
+        family: id,
+        superseded: false,
+      });
+
+      const stats = await scheduler.autoQueue([
+        makeScored('org/fits', true),
+        makeScored('org/too-big', false),
+      ]);
+
+      expect(stats.queued).toBe(1);
+      expect(stats.skipped).toBe(1);
+      expect(enqueue.mock.calls.map((c) => c[0])).toEqual(['org/fits']);
     });
 
     it('skips already-evaluated models', async () => {

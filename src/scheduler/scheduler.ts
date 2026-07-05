@@ -468,10 +468,17 @@ export class Scheduler {
           const priorResults = await this.resultsStore.getCIEvalResults(run.modelId, {
             limit: 30,
           });
+          // Scope completed-suite detection to THIS queue entry. `getCIEvalResults`
+          // is keyed by modelId across all history, so a previous fully-evaluated
+          // run of the same model would otherwise mark every suite complete and
+          // silently no-op Stage 2 on a fresh re-benchmark. `queueEntryId` is stable
+          // across resumes of the same entry; rows written before it existed have
+          // it undefined and are conservatively ignored (suite re-runs, never skips).
+          const entryResults = priorResults.filter((r) => r.queueEntryId === entry.id);
           const evalSuites = this.config.buildkite?.defaultEvalSuites ?? [];
           skipSuiteIds = this.ciEvals.buildkiteTrigger
             ? await resolveCompletedEvalSuites(
-                priorResults,
+                entryResults,
                 evalSuites,
                 this.ciEvals.buildkiteTrigger,
               )
@@ -833,6 +840,7 @@ export class Scheduler {
       if (!this.resultsStore) return;
       await this.resultsStore.saveCIEvalResult({
         runId: run.runId,
+        queueEntryId: run.queueEntryId,
         modelId: run.modelId,
         buildkiteBuildUrl: result.buildUrl,
         buildkiteBuildNumber: result.buildNumber,

@@ -327,6 +327,55 @@ describe('TunnelService', () => {
     });
   });
 
+  describe('cloudflared_named provider', () => {
+    function namedConfig(overrides: Partial<TunnelConfig> = {}): TunnelConfig {
+      return createDefaultTunnelConfig({
+        enabled: true,
+        provider: 'cloudflared_named',
+        cloudflaredTunnelName: 'benchmarker-vllm',
+        publicHostname: 'https://benchmarker.example.com',
+        cloudflaredConfigPath: '/tmp/benchmarker-vllm-config.yml',
+        localPort: 18000,
+        ...overrides,
+      });
+    }
+
+    it('reports the cloudflared_named provider in status', () => {
+      const service = new TunnelService({ config: namedConfig(), logLevel: 'error' });
+      expect(service.getStatus().provider).toBe('cloudflared_named');
+    });
+
+    it('throws at construction when cloudflaredTunnelName is missing', () => {
+      expect(
+        () =>
+          new TunnelService({
+            config: namedConfig({ cloudflaredTunnelName: undefined }),
+            logLevel: 'error',
+          }),
+      ).toThrow(TunnelProviderNotAvailableError);
+    });
+
+    it('throws at construction when publicHostname is missing', () => {
+      expect(
+        () =>
+          new TunnelService({
+            config: namedConfig({ publicHostname: undefined }),
+            logLevel: 'error',
+          }),
+      ).toThrow(/publicHostname is required/);
+    });
+
+    it('throws at construction when cloudflaredConfigPath is missing', () => {
+      expect(
+        () =>
+          new TunnelService({
+            config: namedConfig({ cloudflaredConfigPath: undefined }),
+            logLevel: 'error',
+          }),
+      ).toThrow(/cloudflaredConfigPath is required/);
+    });
+  });
+
   describe('cloudrun provider', () => {
     it('throws TunnelProviderNotAvailableError when trying to connect', async () => {
       const config = createDefaultTunnelConfig({

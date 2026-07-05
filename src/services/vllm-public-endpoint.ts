@@ -53,13 +53,6 @@ async function ensureSshForwardHealthy(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (!sshForward.isRunning) {
       sshForward.start();
-    } else if (!(await probeLocalVllmApi(localPort))) {
-      logger.warn('SSH forward alive but local vLLM API unreachable — restarting forward', {
-        attempt,
-        localPort,
-      });
-      sshForward.stop();
-      sshForward.start();
     }
 
     const tcpReady = await sshForward.waitUntilReady();
@@ -68,8 +61,21 @@ async function ensureSshForwardHealthy(
       return true;
     }
 
-    logger.warn('SSH forward not healthy — retrying', { attempt, localPort, tcpReady });
-    sshForward.stop();
+    if (tcpReady) {
+      // TCP forward is healthy but vLLM's /v1/models is not answering yet. During a
+      // pre-warm that runs concurrently with Stage 1 deploy this is the EXPECTED state
+      // (the model is still loading), not a broken forward — so keep the forward up
+      // (tearing it down would just thrash a working tunnel) and log quietly. The
+      // scheduler re-resolves the tunnel after Stage 1 passes, when vLLM is serving.
+      logger.debug('SSH forward TCP-ready but vLLM API not serving yet — waiting', {
+        attempt,
+        localPort,
+      });
+    } else {
+      // The SSH forward itself never came up — this is a genuine problem worth surfacing.
+      logger.warn('SSH forward not healthy — retrying', { attempt, localPort, tcpReady });
+      sshForward.stop();
+    }
     await new Promise((r) => setTimeout(r, 2_000));
   }
   return false;
@@ -207,8 +213,15 @@ export class VllmPublicEndpointResolver {
         reused: tunnelResult.reused,
       });
 
+      // Smoke tests run in-process and must hit the reliable local SSH forward
+      // (just health-checked above), NOT the public tunnel URL. A cloudflared
+      // quick tunnel's edge can take several seconds to route after the CLI
+      // reports "established", so probing the public URL immediately yields
+      // false-negative 404s that abort Stage 2 before Buildkite is ever
+      // triggered. Buildkite gets `publicEndpointUrl`; the CI eval infra guard
+      // monitors and reconnects the tunnel during polling.
       return {
-        endpointUrl: publicUrl,
+        endpointUrl: localUrl,
         publicEndpointUrl: publicUrl,
         directUrl,
         tunneled: true,
