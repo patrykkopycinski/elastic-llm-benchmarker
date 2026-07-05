@@ -296,6 +296,16 @@ describe('formatValidationErrors', () => {
   it('loads smoke-full.json with git@ kibana repo URL and aligned branches', () => {
     process.env['HUGGINGFACE_TOKEN'] = 'hf_test_token';
     process.env['BUILDKITE_API_TOKEN'] = 'bk_test';
+    // This test asserts what smoke-full.json commits, so it must be hermetic:
+    // an operator dev shell that sourced .env leaks BUILDKITE_KIBANA_BRANCH /
+    // KIBANA_REPO_* into process.env, and buildEnvConfig would overlay them on
+    // top of the file (false-red locally; CI has a clean env). Clear the env
+    // keys this test asserts on so the file's committed values are the source
+    // of truth regardless of the ambient shell.
+    delete process.env['BUILDKITE_KIBANA_BRANCH'];
+    delete process.env['KIBANA_REPO_BRANCH'];
+    delete process.env['KIBANA_REPO_URL'];
+    delete process.env['BUILDKITE_DEFAULT_EVAL_SUITES'];
 
     const config = loadConfig(undefined, {
       configPath: 'config/smoke-full.json',
