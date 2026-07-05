@@ -39,6 +39,80 @@ export interface ParsedHFCard {
   warnings: string[];
 }
 
+/**
+ * Rough parameter-count estimate (in billions) from an HF `config.json` shape.
+ *
+ * MoE-aware: when the config declares an expert count, the per-layer FFN is
+ * summed across ALL experts (Qwen3 `num_experts`, Mixtral `num_local_experts`,
+ * DeepSeek `n_routed_experts` + optional `n_shared_experts`). This makes a
+ * sparse model like `Qwen3-Coder-30B-A3B` report its ~30B TOTAL parameters
+ * instead of the ~3B dense-equivalent the naive `3*h*i` formula produces —
+ * which matters because the param-aware tool-call gate and the 24B baseline
+ * floor both key off the advertised total, not the active-expert subset.
+ *
+ * For a dense model (no expert fields) the result is identical to the prior
+ * `v*h + l*(4h² + 3hi)` estimate, so this is a no-op for non-MoE cards.
+ *
+ * Approximation notes: treats every layer as MoE (ignores `decoder_sparse_step`
+ * / interleaved dense layers) and ignores GQA head reduction — good enough to
+ * clear a floor and pick a tier, not an exact parameter count. Returns null
+ * when the required shape fields are absent.
+ */
+export function estimateParamsBillionsFromConfig(
+  configJson: Record<string, unknown> | null,
+): number | null {
+  if (
+    !configJson ||
+    typeof configJson['hidden_size'] !== 'number' ||
+    typeof configJson['num_hidden_layers'] !== 'number'
+  ) {
+    return null;
+  }
+
+  const h = configJson['hidden_size'] as number;
+  const l = configJson['num_hidden_layers'] as number;
+  const v = typeof configJson['vocab_size'] === 'number' ? (configJson['vocab_size'] as number) : 0;
+  const denseIntermediate =
+    typeof configJson['intermediate_size'] === 'number'
+      ? (configJson['intermediate_size'] as number)
+      : h * 4;
+
+  const numExperts =
+    (typeof configJson['num_experts'] === 'number' ? (configJson['num_experts'] as number) : 0) ||
+    (typeof configJson['num_local_experts'] === 'number'
+      ? (configJson['num_local_experts'] as number)
+      : 0) ||
+    (typeof configJson['n_routed_experts'] === 'number'
+      ? (configJson['n_routed_experts'] as number)
+      : 0);
+
+  let ffnPerLayer: number;
+  if (numExperts > 0) {
+    // MoE configs expose a distinct per-expert FFN width (`moe_intermediate_size`);
+    // Mixtral reuses `intermediate_size` for its experts.
+    const expertWidth =
+      typeof configJson['moe_intermediate_size'] === 'number'
+        ? (configJson['moe_intermediate_size'] as number)
+        : denseIntermediate;
+    // SwiGLU → 3 weight matrices (gate/up/down) of h × expertWidth per expert.
+    ffnPerLayer = numExperts * 3 * h * expertWidth;
+    // DeepSeek-style shared experts add a dense FFN alongside the routed ones.
+    const sharedExperts =
+      typeof configJson['n_shared_experts'] === 'number'
+        ? (configJson['n_shared_experts'] as number)
+        : 0;
+    if (sharedExperts > 0) {
+      ffnPerLayer += sharedExperts * 3 * h * expertWidth;
+    }
+  } else {
+    ffnPerLayer = 3 * h * denseIntermediate;
+  }
+
+  const attnPerLayer = 4 * h * h;
+  const estimate = v * h + l * (attnPerLayer + ffnPerLayer);
+  return estimate / 1_000_000_000;
+}
+
 export class HFCardParser {
   constructor(private readonly baseCacheDir = './.hf-cache') {}
 
@@ -378,23 +452,9 @@ export class HFCardParser {
       return np > 1_000_000_000 ? np / 1_000_000_000 : np;
     }
 
-    if (
-      configJson &&
-      typeof configJson['hidden_size'] === 'number' &&
-      typeof configJson['num_hidden_layers'] === 'number'
-    ) {
-      const h = configJson['hidden_size'] as number;
-      const l = configJson['num_hidden_layers'] as number;
-      const v =
-        typeof configJson['vocab_size'] === 'number'
-          ? (configJson['vocab_size'] as number)
-          : 0;
-      const i =
-        typeof configJson['intermediate_size'] === 'number'
-          ? (configJson['intermediate_size'] as number)
-          : h * 4;
-      const estimate = v * h + l * (4 * h * h + 3 * h * i);
-      return estimate / 1_000_000_000;
+    const configEstimate = estimateParamsBillionsFromConfig(configJson);
+    if (configEstimate !== null) {
+      return configEstimate;
     }
 
     if (metadata && typeof metadata.id === 'string') {
