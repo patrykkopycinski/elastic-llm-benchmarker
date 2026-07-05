@@ -207,8 +207,15 @@ export class VllmPublicEndpointResolver {
         reused: tunnelResult.reused,
       });
 
+      // Smoke tests run in-process and must hit the reliable local SSH forward
+      // (just health-checked above), NOT the public tunnel URL. A cloudflared
+      // quick tunnel's edge can take several seconds to route after the CLI
+      // reports "established", so probing the public URL immediately yields
+      // false-negative 404s that abort Stage 2 before Buildkite is ever
+      // triggered. Buildkite gets `publicEndpointUrl`; the CI eval infra guard
+      // monitors and reconnects the tunnel during polling.
       return {
-        endpointUrl: publicUrl,
+        endpointUrl: localUrl,
         publicEndpointUrl: publicUrl,
         directUrl,
         tunneled: true,

@@ -32,6 +32,18 @@ export interface CiEvalInfrastructureGuardOptions {
   onTakeover?: (reason: string) => void;
   useSudo?: boolean;
   checkIntervalMs?: number;
+  /**
+   * How many CONSECUTIVE failed public-endpoint probes must accrue before the guard
+   * treats the tunnel as unhealthy and attempts a reconnect. A cloudflared quick tunnel
+   * (`*.trycloudflare.com`) flakes on sporadic single requests — a one-off `/v1/models`
+   * round-trip through its edge can time out even while sustained eval traffic flows fine
+   * (observed: build #225 running green while the guard logged `recovered {healthy:false}`
+   * every 15s). Debouncing across intervals means only SUSTAINED unreachability triggers a
+   * reconnect; a transient blip resolves on the next tick. Default 3 (~45s at the 15s
+   * interval). Genuine tunnel death (dead pid / unresolvable hostname) is still handled
+   * immediately inside the provider's reuse path.
+   */
+  publicProbeFailureThreshold?: number;
   logLevel?: string;
 }
 
@@ -42,12 +54,25 @@ export interface CiEvalInfrastructureGuardOptions {
  */
 export class CiEvalInfrastructureGuard {
   private readonly logger: Logger;
-  private readonly options: Required<Pick<CiEvalInfrastructureGuardOptions, 'checkIntervalMs' | 'useSudo'>> &
+  private readonly options: Required<
+    Pick<
+      CiEvalInfrastructureGuardOptions,
+      'checkIntervalMs' | 'useSudo' | 'publicProbeFailureThreshold'
+    >
+  > &
     CiEvalInfrastructureGuardOptions;
   private timer: ReturnType<typeof setInterval> | null = null;
   private checking = false;
   /** Set once an unrecoverable external takeover is detected; halts all guard actions. */
   private fatal = false;
+  /**
+   * Consecutive failed public-endpoint probes. Reset to 0 on any success. Only when it
+   * reaches `publicProbeFailureThreshold` does the guard attempt a reconnect — this
+   * debounces the quick-tunnel edge's transient single-request flakiness so the guard
+   * doesn't reconnect (and log) every interval against a tunnel that is actually serving
+   * eval traffic fine.
+   */
+  private consecutivePublicFailures = 0;
   /**
    * The public URL currently probed. Seeded from `options.publicEndpointUrl` but MUTABLE:
    * a cloudflared reconnect can hand back a *different* surviving-tunnel hostname, and we
@@ -61,6 +86,7 @@ export class CiEvalInfrastructureGuard {
     this.options = {
       checkIntervalMs: 15_000,
       useSudo: true,
+      publicProbeFailureThreshold: 3,
       ...options,
     };
     this.currentPublicUrl = options.publicEndpointUrl;
@@ -135,11 +161,28 @@ export class CiEvalInfrastructureGuard {
     }
 
     if (await this.probePublicEndpoint()) {
+      this.consecutivePublicFailures = 0;
       return;
     }
 
-    this.logger.warn('CI eval guard: public ngrok endpoint unhealthy — reconnecting tunnel', {
+    // Debounce: a single failed edge round-trip is NOT proof the tunnel is down — quick
+    // tunnels flake on sporadic requests while sustained eval traffic flows fine. Only a
+    // run of consecutive failures (sustained unreachability) warrants a reconnect. Genuine
+    // death (dead pid / unresolvable hostname) is caught by the provider's reuse path the
+    // moment it happens, independent of this probe.
+    this.consecutivePublicFailures += 1;
+    if (this.consecutivePublicFailures < this.options.publicProbeFailureThreshold) {
+      this.logger.debug('CI eval guard: public endpoint probe failed — below reconnect threshold', {
+        publicEndpointUrl: this.currentPublicUrl,
+        consecutiveFailures: this.consecutivePublicFailures,
+        threshold: this.options.publicProbeFailureThreshold,
+      });
+      return;
+    }
+
+    this.logger.warn('CI eval guard: public tunnel endpoint unhealthy — reconnecting tunnel', {
       publicEndpointUrl: this.currentPublicUrl,
+      consecutiveFailures: this.consecutivePublicFailures,
     });
 
     const reconnectResult = await this.options.tunnelService.reconnect();
@@ -168,10 +211,22 @@ export class CiEvalInfrastructureGuard {
     }
 
     const ok = await this.probePublicEndpoint();
-    this.logger.info('CI eval guard: ngrok tunnel recovered', {
-      healthy: ok,
-      publicUrl: this.currentPublicUrl,
-    });
+    if (ok) {
+      this.consecutivePublicFailures = 0;
+      this.logger.info('CI eval guard: public tunnel recovered', {
+        publicUrl: this.currentPublicUrl,
+      });
+    } else {
+      // Reconnect reattached to a live tunnel but the edge probe still fails. Reset the
+      // counter so we debounce again rather than hammering reconnect every interval; if the
+      // tunnel is genuinely serving traffic (as observed with quick tunnels), the next probe
+      // often succeeds. Keep this at debug — a real, sustained outage will re-cross the
+      // threshold and log the warn above.
+      this.consecutivePublicFailures = 0;
+      this.logger.debug('CI eval guard: public tunnel still failing edge probe after reconnect', {
+        publicUrl: this.currentPublicUrl,
+      });
+    }
   }
 
   private async ensureForwardHealthy(): Promise<void> {

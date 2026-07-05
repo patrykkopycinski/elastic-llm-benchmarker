@@ -157,13 +157,20 @@ export const daemonConfigSchema = z.object({
  * - `ngrok`: reserved-domain agent (fragile on free tier — single reserved
  *   domain, sticky cloud-side endpoints cause ERR_NGROK_334 collisions).
  * - `cloudflared`: Cloudflare quick tunnels — ephemeral `*.trycloudflare.com`
- *   URL per run, no account/domain/reservation, so it cannot collide with a
- *   stale endpoint. Preferred for unattended autonomous runs.
+ *   URL per run, no account/domain/reservation. Fragile: the free quick-tunnel
+ *   edge is subject to abuse-throttling (persistent HTTP 404 from the edge even
+ *   when the tunnel registers), so it is unreliable for unattended runs.
+ * - `cloudflared_named`: a persistent, account-owned named Cloudflare tunnel
+ *   with a STABLE hostname (e.g. `benchmarker.example.com`) routed via DNS.
+ *   No per-run URL churn, no quick-tunnel throttling, no ngrok stuck-endpoint
+ *   collisions. The daemon supervises one long-lived `cloudflared tunnel run`
+ *   process and reuses it across restarts. Preferred for 24/7 autonomy.
  * - `cloudrun` / `load_balancer`: future GCP-native options (not implemented).
  */
 export const tunnelProviderSchema = z.enum([
   'ngrok',
   'cloudflared',
+  'cloudflared_named',
   'cloudrun',
   'load_balancer',
 ]);
@@ -194,6 +201,25 @@ export const tunnelConfigSchema = z.object({
   retryAttempts: z.number().int().min(0).default(3),
   /** Delay in milliseconds between retry attempts. Defaults to 5000 (5 sec). */
   retryDelayMs: z.number().int().positive().default(5_000),
+  /**
+   * Name of the pre-created named Cloudflare tunnel to run.
+   * Required when provider is 'cloudflared_named'. Create it once with
+   * `cloudflared tunnel create <name>` and route DNS with
+   * `cloudflared tunnel route dns <name> <hostname>`.
+   */
+  cloudflaredTunnelName: z.string().optional(),
+  /**
+   * Stable public URL served by the named Cloudflare tunnel
+   * (e.g. `https://benchmarker.example.com`). Reported verbatim as the public
+   * endpoint for CI evals. Required when provider is 'cloudflared_named'.
+   */
+  publicHostname: z.string().url().optional(),
+  /**
+   * Path to the cloudflared config file for the named tunnel
+   * (ingress rules + credentials-file). Required when provider is
+   * 'cloudflared_named'.
+   */
+  cloudflaredConfigPath: z.string().optional(),
 });
 
 /**

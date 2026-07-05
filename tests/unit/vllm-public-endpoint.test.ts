@@ -107,7 +107,10 @@ describe('VllmPublicEndpointResolver', () => {
     expect(mockStart).toHaveBeenCalled();
     expect(mockWaitUntilReady).toHaveBeenCalled();
     expect(mockConnect).toHaveBeenCalled();
-    expect(result.endpointUrl).toBe('https://abc123.ngrok-free.app');
+    // endpointUrl is the STABLE local SSH forward (used by the daemon's own smoke test),
+    // not the public tunnel URL — a transient tunnel-edge blip must not fail the local
+    // smoke check. publicEndpointUrl carries the tunnel URL for Buildkite / the CI guard.
+    expect(result.endpointUrl).toBe('http://127.0.0.1:18000');
     expect(result.publicEndpointUrl).toBe('https://abc123.ngrok-free.app');
     expect(result.directUrl).toBe(directUrl);
     expect(result.tunneled).toBe(true);

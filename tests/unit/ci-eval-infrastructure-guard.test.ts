@@ -188,6 +188,8 @@ describe('CiEvalInfrastructureGuard', () => {
       publicEndpointUrl: 'https://old.ngrok-free.app',
       tunnelService: tunnelService as never,
       checkIntervalMs: 60_000,
+      // threshold 1: this test exercises the reconnect mechanism, not the debounce.
+      publicProbeFailureThreshold: 1,
     });
 
     guard.start();
@@ -230,6 +232,8 @@ describe('CiEvalInfrastructureGuard', () => {
       publicEndpointUrl: 'https://wellness-rating-sensor-movers.trycloudflare.com',
       tunnelService: tunnelService as never,
       checkIntervalMs: 60_000,
+      // threshold 1: this test asserts URL adoption + convergence, not the debounce.
+      publicProbeFailureThreshold: 1,
     });
 
     guard.start();
@@ -243,6 +247,86 @@ describe('CiEvalInfrastructureGuard', () => {
       String(c[0]).includes('ambien-underground-ball-pressure'),
     );
     expect(probedNewUrl).toBe(true);
+    guard.stop();
+  });
+
+  it('does not reconnect on transient public-probe failures below the threshold', async () => {
+    const tunnelService = {
+      reconnect: vi.fn().mockResolvedValue({
+        success: true,
+        tunnel: { publicUrl: 'https://replacement.trycloudflare.com' },
+        error: null,
+        reused: true,
+      }),
+    };
+
+    // Local endpoint healthy; the public quick-tunnel edge fails every single-shot probe.
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('flaky-edge')) {
+        return { ok: false } as Response;
+      }
+      return { ok: true } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const guard = new CiEvalInfrastructureGuard({
+      ssh: sshConfig,
+      sshPool,
+      localPort: 18000,
+      deploymentName: 'vllm-model-test',
+      sshForward,
+      publicEndpointUrl: 'https://flaky-edge.trycloudflare.com',
+      tunnelService: tunnelService as never,
+      checkIntervalMs: 60_000,
+      publicProbeFailureThreshold: 3,
+    });
+
+    guard.start();
+    await vi.runOnlyPendingTimersAsync();
+    // One or two failures accrued so far — below the threshold of 3, so no reconnect yet.
+    expect(tunnelService.reconnect).not.toHaveBeenCalled();
+
+    // Sustained failure across enough intervals must eventually cross the threshold.
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(tunnelService.reconnect).toHaveBeenCalled();
+    guard.stop();
+  });
+
+  it('never reconnects when public-probe failures are intermittent (a success resets the run)', async () => {
+    const tunnelService = { reconnect: vi.fn() };
+
+    // The public edge alternates fail/ok — it never fails 3 times in a row, mirroring the
+    // real quick-tunnel flakiness where sustained eval traffic flows fine. The guard must
+    // treat this as healthy and never reconnect.
+    let publicProbes = 0;
+    const fetchMock = vi.fn(async (input: string | URL) => {
+      const url = String(input);
+      if (url.includes('flaky-edge')) {
+        publicProbes += 1;
+        return { ok: publicProbes % 2 === 0 } as Response;
+      }
+      return { ok: true } as Response;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const guard = new CiEvalInfrastructureGuard({
+      ssh: sshConfig,
+      sshPool,
+      localPort: 18000,
+      deploymentName: 'vllm-model-test',
+      sshForward,
+      publicEndpointUrl: 'https://flaky-edge.trycloudflare.com',
+      tunnelService: tunnelService as never,
+      checkIntervalMs: 60_000,
+      publicProbeFailureThreshold: 3,
+    });
+
+    guard.start();
+    await vi.runOnlyPendingTimersAsync();
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(tunnelService.reconnect).not.toHaveBeenCalled();
     guard.stop();
   });
 });
