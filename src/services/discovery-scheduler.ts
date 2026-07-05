@@ -423,9 +423,20 @@ export class DiscoveryScheduler {
 
   private async tryDiscover(): Promise<{ models: ModelInfo[] } | null> {
     try {
+      // Push the Agent Builder baseline floors (context + parameter count)
+      // into discovery so the candidate list fills with qualifying large
+      // models instead of stopping early on small, high-download ones that
+      // the downstream filter would only reject.
+      const filter = this.deps.candidateFilter;
+      const minParamBillions = filter?.getMinParameterCountBillions();
       const result = await this.deps.discoveryService.discover({
         limit: this.deps.config.maxModelsPerRun * 3,
         search: this.deps.config.search,
+        sort: this.deps.config.sort,
+        ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
+        ...(minParamBillions
+          ? { minParameterCount: minParamBillions * 1_000_000_000 }
+          : {}),
       });
       return result;
     } catch (err) {

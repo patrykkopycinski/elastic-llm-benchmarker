@@ -23,4 +23,15 @@ if [[ -n "${NODE_BIN}" ]]; then
   export PATH="${NODE_BIN}:${PATH}"
 fi
 
+# Homebrew bin dirs so tools spawned by bare name (cloudflared, ngrok, …)
+# resolve under launchd's minimal PATH. The user's Homebrew PATH lives in
+# ~/.zshrc, which a `bash -lc` login shell does not source, so without this the
+# tunnel service's `spawn cloudflared` fails with ENOENT and Stage 2 Buildkite
+# evals can never be triggered.
+for brew_bin in /opt/homebrew/bin /usr/local/bin; do
+  if [[ -d "${brew_bin}" ]]; then
+    export PATH="${brew_bin}:${PATH}"
+  fi
+done
+
 exec "${ROOT}/scripts/start-local.sh" "$@"

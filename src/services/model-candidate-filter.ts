@@ -398,6 +398,22 @@ export class ModelCandidateFilter {
   }
 
   /**
+   * Minimum context window (tokens) this filter enforces as a hard requirement.
+   * Exposed so discovery can pre-filter short-context models at the source.
+   */
+  getMinContextWindow(): number {
+    return this.minContextWindow;
+  }
+
+  /**
+   * Minimum parameter count in billions, or `undefined` when unconstrained.
+   * Exposed so discovery can pre-filter sub-floor models at the source.
+   */
+  getMinParameterCountBillions(): number | undefined {
+    return this.minParameterCountBillions;
+  }
+
+  /**
    * Returns the recommended vLLM tool call parser for a model architecture.
    *
    * @param model - The model to get the parser for

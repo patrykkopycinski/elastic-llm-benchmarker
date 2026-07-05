@@ -53,6 +53,6 @@
   <string>__REPO_ROOT__/.smoke-logs/daemon.log</string>
 
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Standard</string>
 </dict>
 </plist>
