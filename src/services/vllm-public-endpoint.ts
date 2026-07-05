@@ -53,13 +53,6 @@ async function ensureSshForwardHealthy(
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (!sshForward.isRunning) {
       sshForward.start();
-    } else if (!(await probeLocalVllmApi(localPort))) {
-      logger.warn('SSH forward alive but local vLLM API unreachable — restarting forward', {
-        attempt,
-        localPort,
-      });
-      sshForward.stop();
-      sshForward.start();
     }
 
     const tcpReady = await sshForward.waitUntilReady();
@@ -68,8 +61,21 @@ async function ensureSshForwardHealthy(
       return true;
     }
 
-    logger.warn('SSH forward not healthy — retrying', { attempt, localPort, tcpReady });
-    sshForward.stop();
+    if (tcpReady) {
+      // TCP forward is healthy but vLLM's /v1/models is not answering yet. During a
+      // pre-warm that runs concurrently with Stage 1 deploy this is the EXPECTED state
+      // (the model is still loading), not a broken forward — so keep the forward up
+      // (tearing it down would just thrash a working tunnel) and log quietly. The
+      // scheduler re-resolves the tunnel after Stage 1 passes, when vLLM is serving.
+      logger.debug('SSH forward TCP-ready but vLLM API not serving yet — waiting', {
+        attempt,
+        localPort,
+      });
+    } else {
+      // The SSH forward itself never came up — this is a genuine problem worth surfacing.
+      logger.warn('SSH forward not healthy — retrying', { attempt, localPort, tcpReady });
+      sshForward.stop();
+    }
     await new Promise((r) => setTimeout(r, 2_000));
   }
   return false;

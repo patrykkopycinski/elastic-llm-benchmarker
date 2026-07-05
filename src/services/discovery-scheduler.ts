@@ -2,7 +2,7 @@ import type { ModelInfo } from '../types/benchmark.js';
 import type { DiscoverySchedulerConfig } from '../types/config.js';
 import type { ModelDiscoveryService } from './model-discovery.js';
 import type { HardwareEstimator } from './hardware-estimator.js';
-import type { HardwareProfileRegistry } from './hardware-profiles.js';
+import type { HardwareProfileRegistry, HardwareProfileDefinition } from './hardware-profiles.js';
 import type { QueueService } from './queue-service.js';
 import type { HFModelConfig } from './hardware-estimator.js';
 import type { ModelCandidateFilter } from './model-candidate-filter.js';
@@ -225,9 +225,54 @@ export class DiscoveryScheduler {
       );
     }
 
+    const scored = await this.scoreModels(discoveryResult.models, profile);
+
+    // Self-healing freshness fallback: when the primary (typically downloads-ranked)
+    // sweep yields no hardware-fitting candidate, the reputable feed is exhausted —
+    // every top model has already been benchmarked and skipped by the freshness
+    // window. Retry once sorted by lastModified to pull in freshly-published
+    // qualifying models, then merge the new ids in. Skipped when the configured sort
+    // is already freshness-based (the second sweep would return the same supply and
+    // just burn an HF request).
+    const primarySort = this.deps.config.sort;
+    if (
+      scored.filter((m) => m.hardwareFit).length === 0 &&
+      primarySort !== 'lastModified' &&
+      primarySort !== 'createdAt'
+    ) {
+      this.logger.info(
+        'Discovery: 0 hardware-fit candidates from primary sort — retrying with freshness sort (lastModified)',
+        { primarySort },
+      );
+      const fresh = await this.tryDiscover('lastModified');
+      if (fresh && fresh.models.length > 0) {
+        const seen = new Set(scored.map((m) => m.id));
+        const freshScored = await this.scoreModels(
+          fresh.models.filter((m) => !seen.has(m.id)),
+          profile,
+        );
+        scored.push(...freshScored);
+      }
+    }
+
+    this.markSupersededByFamily(scored);
+    scored.sort((a, b) => b.totalScore - a.totalScore);
+    return scored;
+  }
+
+  /**
+   * Score a batch of discovered models: compute the trending score, apply the
+   * min-trending gate and the Agent Builder candidate filter, and run a hardware
+   * dry-run fit check. Never throws — a model that errors mid-scoring is skipped,
+   * not fatal to the batch.
+   */
+  private async scoreModels(
+    models: ModelInfo[],
+    profile: HardwareProfileDefinition | undefined,
+  ): Promise<ScoredModel[]> {
     const scored: ScoredModel[] = [];
 
-    for (const model of discoveryResult.models) {
+    for (const model of models) {
       try {
         const config = await this.deps.discoveryService.fetchModelConfig(model.id);
         if (!config) {
@@ -299,8 +344,6 @@ export class DiscoveryScheduler {
       }
     }
 
-    this.markSupersededByFamily(scored);
-    scored.sort((a, b) => b.totalScore - a.totalScore);
     return scored;
   }
 
@@ -421,7 +464,9 @@ export class DiscoveryScheduler {
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
-  private async tryDiscover(): Promise<{ models: ModelInfo[] } | null> {
+  private async tryDiscover(
+    sortOverride?: DiscoverySchedulerConfig['sort'],
+  ): Promise<{ models: ModelInfo[] } | null> {
     try {
       // Push the Agent Builder baseline floors (context + parameter count)
       // into discovery so the candidate list fills with qualifying large
@@ -432,7 +477,7 @@ export class DiscoveryScheduler {
       const result = await this.deps.discoveryService.discover({
         limit: this.deps.config.maxModelsPerRun * 3,
         search: this.deps.config.search,
-        sort: this.deps.config.sort,
+        sort: sortOverride ?? this.deps.config.sort,
         ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
         ...(minParamBillions
           ? { minParameterCount: minParamBillions * 1_000_000_000 }

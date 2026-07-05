@@ -187,7 +187,9 @@ export function buildDeployCommandWithToolCalling(options: {
     `--model ${modelId}`,
     `--tensor-parallel-size ${tensorParallelSize}`,
     `--gpu-memory-utilization ${gpuMemoryUtilization}`,
-    maxModelLen != null ? `--max-model-len ${maxModelLen}` : '--max-model-len auto',
+    maxModelLen !== null && maxModelLen !== undefined
+      ? `--max-model-len ${maxModelLen}`
+      : '--max-model-len auto',
   ].filter(Boolean);
 
   if (params.toolCallParser) {
@@ -447,12 +449,27 @@ export class VllmDeploymentService {
       command: redactShellCommand(dockerCommand),
     });
 
-    const runResult = await this.execSSH(
+    let runResult = await this.execSSH(
       sshConfig,
       dockerCommand,
       this.options.runTimeoutMs,
       model.id,
     );
+
+    // Self-heal on a name conflict. The Step 2.5 `docker rm -f` above can leave the
+    // name squatted when the stale container is in a Dead / removal-in-progress state
+    // or when a prior externally-killed container exited without being removed — the
+    // rm returns non-zero, we ignore it, and `docker run --name` then reports
+    // "Conflict. The container name ... is already in use". A force-remove by exact
+    // name + single retry clears that deterministically instead of failing Stage 1.
+    if (!runResult.success && /already in use|Conflict\b/i.test(runResult.stderr || runResult.stdout)) {
+      this.logger.warn(
+        `Container name '${containerName}' still in use — force-removing and retrying run once`,
+        { stderr: (runResult.stderr || runResult.stdout).slice(0, 200) },
+      );
+      await this.execSSH(sshConfig, `docker rm -f ${containerName}`, this.options.stopTimeoutMs, model.id);
+      runResult = await this.execSSH(sshConfig, dockerCommand, this.options.runTimeoutMs, model.id);
+    }
 
     if (!runResult.success) {
       throw new ContainerError(

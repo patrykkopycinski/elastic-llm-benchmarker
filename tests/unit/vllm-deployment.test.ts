@@ -474,6 +474,66 @@ describe('VllmDeploymentService', () => {
       expect(result.healthCheckResult!.healthy).toBe(true);
     });
 
+    it('self-heals a docker run name conflict by force-removing and retrying once', async () => {
+      const model = createTestModel();
+      let runCalls = 0;
+      const rmByName: string[] = [];
+
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker ps')) {
+          return Promise.resolve(createCommandResult({ stdout: '', success: true }));
+        }
+        if (command.includes('docker pull')) {
+          return Promise.resolve(createCommandResult({ success: true, durationMs: 1000 }));
+        }
+        if (command.includes('docker rm -f')) {
+          rmByName.push(command);
+          return Promise.resolve(createCommandResult({ success: true }));
+        }
+        if (command.includes('docker run')) {
+          runCalls += 1;
+          // First attempt hits a stale container squatting on the exact name.
+          if (runCalls === 1) {
+            return Promise.resolve(
+              createCommandResult({
+                success: false,
+                stderr:
+                  'docker: Error response from daemon: Conflict. The container name "/vllm-model-test" is already in use',
+              }),
+            );
+          }
+          return Promise.resolve(createCommandResult({ stdout: 'healed123\n', success: true }));
+        }
+        if (command.includes('docker inspect')) {
+          return Promise.resolve(createCommandResult({ stdout: 'true', success: true }));
+        }
+        if (command.includes('/health')) {
+          return Promise.resolve(createCommandResult({ stdout: 'OK', success: true }));
+        }
+        if (command.includes('/v1/models')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: JSON.stringify({ data: [{ id: model.id, max_model_len: 128000 }] }),
+              success: true,
+            }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ success: true }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new VllmDeploymentService(pool, 'error');
+
+      const result = await service.deploy(testSSHConfig, model, testHardwareProfile);
+
+      expect(runCalls).toBe(2); // conflict → force-remove → retry
+      expect(result.containerId).toBe('healed123');
+      // A force-remove by exact name ran before the successful retry (Step 2.5
+      // pre-run rm + the conflict-recovery rm), both targeting the vLLM container.
+      expect(rmByName.length).toBeGreaterThanOrEqual(2);
+      expect(rmByName.every((c) => c.includes('vllm-model-'))).toBe(true);
+    });
+
     it('stops existing containers before deploying', async () => {
       const model = createTestModel();
       const commands: string[] = [];
