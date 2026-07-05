@@ -255,6 +255,32 @@ export class DiscoveryScheduler {
       }
     }
 
+    // Size-targeted probe tier: when neither the primary nor freshness sweep
+    // yields a hardware-fit candidate, the empty-search feed (dominated by tiny
+    // models, base checkpoints, GGUF/embedding repos) simply doesn't surface the
+    // 24–70B instruct band at this param floor. Fall back to name-targeted
+    // searches (verified live: `instruct` → Qwen 30–32B instruct, `mistral
+    // small` → Devstral/Mistral-Small 24B) using the primary sort, stopping as
+    // soon as one probe contributes a hardware-fit candidate.
+    const probes = this.deps.config.fallbackSearchProbes ?? [];
+    if (scored.filter((m) => m.hardwareFit).length === 0 && probes.length > 0) {
+      for (const probe of probes) {
+        this.logger.info(
+          'Discovery: 0 hardware-fit candidates — trying size-targeted search probe',
+          { probe, sort: primarySort },
+        );
+        const probeResult = await this.tryDiscover(primarySort, probe);
+        if (!probeResult || probeResult.models.length === 0) continue;
+        const seen = new Set(scored.map((m) => m.id));
+        const probeScored = await this.scoreModels(
+          probeResult.models.filter((m) => !seen.has(m.id)),
+          profile,
+        );
+        scored.push(...probeScored);
+        if (probeScored.some((m) => m.hardwareFit)) break;
+      }
+    }
+
     this.markSupersededByFamily(scored);
     scored.sort((a, b) => b.totalScore - a.totalScore);
     return scored;
@@ -478,6 +504,7 @@ export class DiscoveryScheduler {
 
   private async tryDiscover(
     sortOverride?: DiscoverySchedulerConfig['sort'],
+    searchOverride?: string,
   ): Promise<{ models: ModelInfo[] } | null> {
     try {
       // Push the Agent Builder baseline floors (context + parameter count)
@@ -488,7 +515,7 @@ export class DiscoveryScheduler {
       const minParamBillions = filter?.getMinParameterCountBillions();
       const result = await this.deps.discoveryService.discover({
         limit: this.deps.config.maxModelsPerRun * 3,
-        search: this.deps.config.search,
+        search: searchOverride ?? this.deps.config.search,
         sort: sortOverride ?? this.deps.config.sort,
         ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
         ...(minParamBillions
