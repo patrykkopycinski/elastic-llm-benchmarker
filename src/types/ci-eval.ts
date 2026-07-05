@@ -4,6 +4,14 @@
  */
 export interface CIEvalResult {
   runId: string;
+  /**
+   * The queue entry that owns this eval. Stable across resumes of the same entry
+   * (unlike `runId`, which is regenerated on every `processEntry` call). Resume
+   * completion-skip is scoped by this so re-benchmarking a model does NOT inherit
+   * a *previous* entry's completed suites and silently no-op Stage 2. Absent on
+   * rows written before this field existed.
+   */
+  queueEntryId?: string;
   modelId: string;
   buildkiteBuildUrl: string;
   buildkiteBuildNumber: number;

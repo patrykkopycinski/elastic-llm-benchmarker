@@ -350,6 +350,81 @@ describe('HealthCheckService', () => {
       expect(result.errorClassification!.isFatal).toBe(true);
     });
 
+    it('does NOT fabricate a crash when docker inspect exits non-zero (ambiguous), then recovers', async () => {
+      // Regression: exec() does not throw on non-zero exit. A `docker inspect`
+      // that returns { success:false, stdout:'' } (e.g. "No such container"
+      // during the stop-old/start-new race, or a transient daemon hiccup at
+      // ~1.4s into startup) must NOT be read as Running=false. Previously the
+      // `stdout.trim() === 'true'` check silently returned false → false
+      // container_crash while vLLM was still loading.
+      vi.useFakeTimers();
+      let inspectCalls = 0;
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker inspect')) {
+          inspectCalls += 1;
+          if (inspectCalls === 1) {
+            return Promise.resolve(
+              createCommandResult({
+                success: false,
+                stdout: '',
+                stderr: 'Error: No such container: test-container',
+                exitCode: 1,
+              }),
+            );
+          }
+          return Promise.resolve(createCommandResult({ stdout: 'true', success: true }));
+        }
+        if (command.includes('/health')) {
+          return Promise.resolve(createCommandResult({ stdout: 'OK', success: true }));
+        }
+        if (command.includes('/v1/models')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: JSON.stringify({ data: [{ id: 'test-model', max_model_len: 128000 }] }),
+              success: true,
+            }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ success: true }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new HealthCheckService(pool, 'error');
+
+      const pollPromise = service.poll(testSSHConfig, 'test-container', 'test-model', 1400);
+      await vi.advanceTimersByTimeAsync(5_000); // clear the inspect retry backoff
+      const result = await pollPromise;
+      vi.useRealTimers();
+
+      expect(result.containerRunning).toBe(true);
+      expect(result.healthy).toBe(true);
+      expect(result.errorClassification).toBeNull();
+    });
+
+    it('assumes running (no crash) when docker inspect stays ambiguous across all retries', async () => {
+      vi.useFakeTimers();
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker inspect')) {
+          return Promise.resolve(
+            createCommandResult({ success: false, stdout: '', stderr: 'ssh timeout', exitCode: 1 }),
+          );
+        }
+        // Endpoints not ready yet (still starting).
+        return Promise.resolve(createCommandResult({ success: false }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new HealthCheckService(pool, 'error');
+
+      const pollPromise = service.poll(testSSHConfig, 'test-container', 'test-model', 1400);
+      await vi.advanceTimersByTimeAsync(15_000); // clear all inspect retries
+      const result = await pollPromise;
+      vi.useRealTimers();
+
+      expect(result.containerRunning).toBe(true);
+      expect(result.errorClassification?.category).not.toBe('container_crash');
+    });
+
     it('returns not healthy when container running but endpoints not ready (before 60s)', async () => {
       mockExec.mockImplementation((_config: SSHConfig, command: string) => {
         if (command.includes('docker inspect')) {

@@ -379,6 +379,7 @@ export const INDEX_MAPPINGS: Record<
       properties: {
         '@timestamp': { type: 'date' },
         run_id: { type: 'keyword' },
+        queue_entry_id: { type: 'keyword' },
         model_id: { type: 'keyword' },
         buildkite_build_url: { type: 'keyword' },
         buildkite_build_number: { type: 'integer' },

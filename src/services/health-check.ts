@@ -719,19 +719,36 @@ export class HealthCheckService {
           sshConfig,
           `docker inspect --format='{{.State.Running}}' ${containerName}`,
         );
-        return result.stdout.trim() === 'true';
+        const out = result.stdout.trim();
+        // Only trust an EXPLICIT Running state from a successful inspect.
+        if (result.success && out === 'true') {
+          return true;
+        }
+        if (result.success && out === 'false') {
+          // docker explicitly reports the container has stopped — a real crash.
+          return false;
+        }
+        // Ambiguous: non-zero exit (e.g. "No such container" during the
+        // stop-old/start-new race, a permission/daemon hiccup) or unexpected
+        // stdout. exec() does NOT throw on non-zero exit, so without this the
+        // `out === 'true'` check would silently return false and fabricate a
+        // container_crash while vLLM is still starting. Route into the retry/
+        // assume-running guard instead of declaring a crash.
+        throw new Error(
+          `docker inspect ambiguous (success=${result.success}, stdout="${out}", stderr="${result.stderr.trim()}")`,
+        );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (attempt < MAX_SSH_ATTEMPTS) {
           this.logger.warn(
-            `isContainerRunning: SSH attempt ${attempt}/${MAX_SSH_ATTEMPTS} failed; retrying (container status unknown, NOT declaring crash)`,
+            `isContainerRunning: inspect attempt ${attempt}/${MAX_SSH_ATTEMPTS} inconclusive; retrying (container status unknown, NOT declaring crash)`,
             { containerName, error: msg },
           );
           await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
           continue;
         }
         this.logger.warn(
-          `isContainerRunning: SSH failed after ${MAX_SSH_ATTEMPTS} attempts; assuming container still running to avoid false container_crash`,
+          `isContainerRunning: inspect inconclusive after ${MAX_SSH_ATTEMPTS} attempts; assuming container still running to avoid false container_crash`,
           { containerName, error: msg },
         );
         return true;

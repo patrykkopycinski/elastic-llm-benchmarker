@@ -95,7 +95,12 @@ export async function recoverOrFailActiveEntries(
       continue;
     }
 
-    const ciEvalResults = await resultsStore.getCIEvalResults(entry.modelId, { limit: 30 });
+    const allResults = await resultsStore.getCIEvalResults(entry.modelId, { limit: 30 });
+    // Scope to THIS entry: a stale `running` row from a previous run of the same
+    // model must not make an unrelated entry look recoverable. Rows predating
+    // `queueEntryId` are ignored here (entry is reclaimed to pending — a safe
+    // re-run — rather than adopting a possibly-foreign build).
+    const ciEvalResults = allResults.filter((r) => r.queueEntryId === entry.id);
     const runningEval = ciEvalResults.find((r) => r.status === 'running');
     if (!runningEval) {
       if (await queueService.reclaimEntry(entry.id)) reclaimed++;

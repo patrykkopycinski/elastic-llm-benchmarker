@@ -136,6 +136,7 @@ describe('recoverOrFailActiveEntries', () => {
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
       {
         runId: 'r1',
+        queueEntryId: 'q1',
         modelId: 'Qwen/Qwen2.5-7B-Instruct',
         buildkiteBuildUrl: 'https://example.com/42',
         buildkiteBuildNumber: 42,
@@ -182,6 +183,7 @@ describe('recoverOrFailActiveEntries', () => {
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
       {
         runId: 'r1',
+        queueEntryId: 'q1',
         modelId: 'Qwen/Qwen2.5-7B-Instruct',
         buildkiteBuildUrl: 'https://example.com/42',
         buildkiteBuildNumber: 42,
@@ -229,6 +231,7 @@ describe('recoverOrFailActiveEntries', () => {
     vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
       {
         runId: 'r1',
+        queueEntryId: 'q1',
         modelId: 'Qwen/Qwen2.5-7B-Instruct',
         buildkiteBuildUrl: 'https://example.com/42',
         buildkiteBuildNumber: 42,
@@ -253,6 +256,56 @@ describe('recoverOrFailActiveEntries', () => {
 
     expect(result).toEqual({ recovered: 1, reclaimed: 0 });
     expect(queueService.reclaimEntry).not.toHaveBeenCalled();
+  });
+
+  it('does NOT recover from a running eval that belongs to a different queue entry', async () => {
+    // A prior run of the same model left a `running` CI-eval row keyed to a
+    // DIFFERENT entry. It must not make this fresh entry look recoverable —
+    // otherwise re-benchmarking inherits stale build state and Stage 2 no-ops.
+    vi.mocked(queueService.getActiveEntries).mockResolvedValue([
+      {
+        id: 'q2',
+        modelId: 'Qwen/Qwen2.5-7B-Instruct',
+        source: 'user',
+        priority: 100,
+        status: 'benchmarking',
+        requestedAt: '2026-01-01T00:00:00Z',
+        startedAt: '2026-01-01T00:01:00Z',
+        completedAt: null,
+        errorMessage: null,
+        requestedBy: null,
+        leaseToken: null,
+        heartbeatAt: null,
+      },
+    ]);
+    vi.mocked(resultsStore.getCIEvalResults).mockResolvedValue([
+      {
+        runId: 'r1',
+        queueEntryId: 'q1', // belongs to a prior entry, not q2
+        modelId: 'Qwen/Qwen2.5-7B-Instruct',
+        buildkiteBuildUrl: 'https://example.com/42',
+        buildkiteBuildNumber: 42,
+        pipelineSlug: 'kibana-evals-on-demand-llm-evals',
+        status: 'running',
+        evalSuites: ['security-alert-triage'],
+        startedAt: '2026-01-01T00:02:00Z',
+        completedAt: '2026-01-01T00:02:00Z',
+        retryCount: 0,
+        connectorJson: '{}',
+      },
+    ]);
+
+    const result = await recoverOrFailActiveEntries(
+      queueService,
+      resultsStore,
+      buildkiteTrigger,
+      evalSuites,
+      logger,
+    );
+
+    expect(result).toEqual({ recovered: 0, reclaimed: 1 });
+    expect(queueService.reclaimEntry).toHaveBeenCalledWith('q2');
+    expect(buildkiteTrigger.getBuildState).not.toHaveBeenCalled();
   });
 });
 

@@ -147,6 +147,12 @@ export { getToolCallParserForModelId } from './vllm-model-params.js';
  */
 export function buildDeployCommandWithToolCalling(options: {
   modelId: string;
+  /**
+   * Model architecture (e.g. "llama", "LlamaForCausalLM"). Threaded into the param
+   * resolver so Llama-derived fine-tunes whose id lacks "llama" (e.g. Foundation-Sec)
+   * still get the tool-call flags. Matches the arch-aware `deploy()` path.
+   */
+  architecture?: string | null;
   apiPort?: number;
   dockerImage?: string;
   tensorParallelSize?: number;
@@ -164,7 +170,7 @@ export function buildDeployCommandWithToolCalling(options: {
   const hfToken = options.huggingfaceToken ?? '${HF_TOKEN}';
 
   const containerName = `vllm-${modelId.replace(/[^a-zA-Z0-9.-]/g, '-').slice(0, 40)}`;
-  const params = getVllmParamsForModel(modelId);
+  const params = getVllmParamsForModel(modelId, options.architecture);
 
   const args: string[] = [
     'docker run -d',
@@ -181,7 +187,7 @@ export function buildDeployCommandWithToolCalling(options: {
     `--model ${modelId}`,
     `--tensor-parallel-size ${tensorParallelSize}`,
     `--gpu-memory-utilization ${gpuMemoryUtilization}`,
-    maxModelLen !== null ? `--max-model-len ${maxModelLen}` : '--max-model-len auto',
+    maxModelLen != null ? `--max-model-len ${maxModelLen}` : '--max-model-len auto',
   ].filter(Boolean);
 
   if (params.toolCallParser) {
