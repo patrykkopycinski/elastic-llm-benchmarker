@@ -37,6 +37,7 @@ function createMockConfig(): DiscoverySchedulerConfig {
     autoQueue: true,
     hardwareProfileId: '1xl4',
     skipRecentlyBenchmarkedDays: 30,
+    fallbackSearchProbes: [],
   };
 }
 
@@ -239,6 +240,61 @@ describe('DiscoveryScheduler', () => {
 
       // No second sweep — the freshness feed is already the primary source.
       expect(discover).toHaveBeenCalledTimes(1);
+    });
+
+    it('runs size-targeted search probes when primary + freshness sweeps yield 0 hardware-fit', async () => {
+      const now = new Date('2024-06-01T00:00:00Z');
+      vi.setSystemTime(now);
+
+      // Empty-search sweeps (downloads + lastModified) only surface a non-fitting
+      // model; the `instruct` probe surfaces the fitting one.
+      const discover = vi
+        .fn()
+        .mockImplementation((opts: { sort?: string; search?: string }) =>
+          Promise.resolve(
+            opts.search === 'instruct'
+              ? { models: [createMockModelInfo({ id: 'org/qwen-32b-instruct' })], totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }
+              : { models: [createMockModelInfo({ id: 'org/tiny' })], totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() },
+          ),
+        );
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi.fn().mockImplementation((id: string) =>
+          Promise.resolve({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32, _fits: id === 'org/qwen-32b-instruct' }),
+        ),
+        fetchModelInfo: vi.fn().mockResolvedValue({ downloads: 1000, createdAt: now.toISOString() }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const hardwareEstimator = {
+        estimateGpuMemory: vi.fn(),
+        dryRunCheck: vi
+          .fn()
+          .mockImplementation((config: Record<string, unknown>) => ({
+            fits: config._fits === true,
+            estimatedGb: 18,
+            availableGb: 21.6,
+            reason: config._fits === true ? 'fits' : 'too big',
+          })),
+        selectBestProfiles: vi.fn(),
+      } as unknown as HardwareEstimator;
+
+      const config = createMockConfig(); // sort: 'downloads'
+      config.fallbackSearchProbes = ['instruct', 'mistral small'];
+      const deps = createMockDeps({ discoveryService, hardwareEstimator, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+
+      // downloads sweep + lastModified sweep + first probe ('instruct').
+      expect(discover).toHaveBeenCalledTimes(3);
+      expect(discover).toHaveBeenNthCalledWith(3, expect.objectContaining({ sort: 'downloads', search: 'instruct' }));
+      // Probe stops early once a fitting candidate is found — 'mistral small' not tried.
+      expect(discover).not.toHaveBeenCalledWith(expect.objectContaining({ search: 'mistral small' }));
+      const fit = scored.find((m) => m.id === 'org/qwen-32b-instruct');
+      expect(fit?.hardwareFit).toBe(true);
     });
 
     it('filters models below minTrendingScore', async () => {

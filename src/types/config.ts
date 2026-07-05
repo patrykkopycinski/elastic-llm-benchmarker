@@ -721,6 +721,18 @@ export const discoverySchedulerConfigSchema = z.object({
    * just evaluated or quarantined. 0 disables the freshness filter.
    */
   skipRecentlyBenchmarkedDays: z.number().int().min(0).default(30),
+  /**
+   * Size/instruct-targeted search terms used as a last-resort discovery tier.
+   * The empty-search downloads/lastModified sweeps are dominated by tiny
+   * models, base checkpoints, and GGUF/embedding repos, so at a high param
+   * floor (24B+) they surface 0 hardware-fitting candidates. When both the
+   * primary and freshness sweeps come up empty, each probe is run with the
+   * primary sort (verified live: `instruct` → Qwen 30–32B instruct band,
+   * `mistral small` → Devstral/Mistral-Small 24B). Set to [] to disable.
+   */
+  fallbackSearchProbes: z
+    .array(z.string())
+    .default(['instruct', 'mistral small', 'mixtral']),
 });
 
 /**
