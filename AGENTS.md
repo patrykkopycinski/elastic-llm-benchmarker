@@ -49,7 +49,7 @@ Derived from [elastic/security-team#15545](https://github.com/elastic/security-t
 | `requireInstructVariant` | true | yes | `instruct`, `chat`, or `-it` in model id |
 | VRAM fit + vLLM arch | — | yes | Existing `ModelCandidateFilter` logic |
 
-Config block: `agentBuilderBaseline` in `config/default.json`. Wired on **enqueue** (`runEnqueue`), **discovery** (`DiscoveryScheduler`), via `createAgentBuilderFilter()` in `src/services/agent-builder-baseline.ts`. Post-benchmark `ModelEvaluationEngine` checks **single-tool success rate** only (`minToolCallSuccessRate`), not parallel calls.
+Config block: `agentBuilderBaseline` in `config/default.json`. Wired on **enqueue** (`runEnqueue`), **discovery** (`DiscoveryScheduler`), via `createAgentBuilderFilter()` in `src/services/agent-builder-baseline.ts`. Post-benchmark, **Stage 1 itself** runs the single-tool `ToolCallBenchmarkService` (over an SSH tunnel to the VM's firewalled vLLM port) and gates **Stage 2 eligibility** on the param-count-aware floor via `resolveMinToolCallSuccessRate` (`minToolCallSuccessRate` / `minToolCallSuccessRateTiers`), not parallel calls. A below-floor success rate hard-gates; a null result (benchmark skipped or failed-open on tunnel/infra error) does not gate. (`ModelEvaluationEngine` is a richer scorer that is not on the happy path.)
 
 To sweep smaller models for research, set `minParameterCountBillions: 8` or `agentBuilderBaseline.enabled: false` — never the default for CI eval runs.
 

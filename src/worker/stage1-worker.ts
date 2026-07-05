@@ -4,8 +4,14 @@ import type {
   VMHardwareProfile,
   BenchmarkThresholds,
 } from '../types/config.js';
-import { resolveMaxItlP50Ms } from '../types/config.js';
-import type { BenchmarkResult, ModelInfo } from '../types/benchmark.js';
+import { resolveMaxItlP50Ms, resolveMinToolCallSuccessRate } from '../types/config.js';
+import type { BenchmarkResult, ModelInfo, ToolCallResult } from '../types/benchmark.js';
+import { ToolCallBenchmarkService } from '../services/tool-call-benchmark.js';
+import {
+  startSSHTunnel,
+  waitForTunnel,
+  TUNNEL_BASE_URL,
+} from '../utils/ssh-tunnel.js';
 import { HFCardParser } from '../services/hf-card-parser.js';
 import {
   enrichModelInfoFromHfConfig,
@@ -85,6 +91,13 @@ export interface Stage1WorkerDependencies {
   resultsStore: ElasticsearchResultsStore;
   queueService: QueueService;
   logger?: Logger;
+  /**
+   * Override for the tool-call benchmark runner. Defaults to the real
+   * SSH-tunnel + {@link ToolCallBenchmarkService} implementation
+   * ({@link Stage1WorkerImpl.runToolCallBenchmark}). Injectable so unit tests
+   * can exercise the Stage 2 tool-call gate without spawning a real tunnel.
+   */
+  toolCallBenchmarkRunner?: (modelId: string) => Promise<ToolCallResult | null>;
 }
 
 /**
@@ -104,6 +117,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
   private readonly resultsStore: ElasticsearchResultsStore;
   private readonly queueService: QueueService;
   private readonly logger: Logger;
+  private readonly toolCallBenchmarkRunner: (modelId: string) => Promise<ToolCallResult | null>;
 
   constructor(deps: Stage1WorkerDependencies) {
     this.config = deps.config;
@@ -111,6 +125,8 @@ export class Stage1WorkerImpl implements Stage1Worker {
     this.resultsStore = deps.resultsStore;
     this.queueService = deps.queueService;
     this.logger = deps.logger ?? createLogger(deps.config.logLevel);
+    this.toolCallBenchmarkRunner =
+      deps.toolCallBenchmarkRunner ?? ((modelId) => this.runToolCallBenchmark(modelId));
   }
 
   private async resolveContextWindow(modelId: string, modelInfo: ModelInfo): Promise<number> {
@@ -137,6 +153,48 @@ export class Stage1WorkerImpl implements Stage1Worker {
       configContextWindow: enriched.contextWindow,
     });
     return enriched.contextWindow;
+  }
+
+  /**
+   * Runs the single-tool calling benchmark against the freshly-deployed model.
+   *
+   * The VM's vLLM port (8000) is firewalled externally, so the benchmark
+   * reaches it through a short-lived SSH tunnel. Never throws: any tunnel or
+   * request failure is logged and returned as `null` (fail-open on infra
+   * errors — the caller does not quarantine a good model for a flaky tunnel;
+   * only a real below-floor success rate gates Stage 2 eligibility).
+   */
+  private async runToolCallBenchmark(modelId: string): Promise<ToolCallResult | null> {
+    let tunnel: ReturnType<typeof startSSHTunnel> | null = null;
+    try {
+      tunnel = startSSHTunnel(this.config.ssh, this.logger);
+      const ready = await waitForTunnel();
+      if (!ready) {
+        this.logger.warn('Stage 1: tool-call SSH tunnel not ready within 15s', { modelId });
+        return null;
+      }
+      const benchmark = new ToolCallBenchmarkService({
+        baseUrl: TUNNEL_BASE_URL,
+        model: modelId,
+        maxLatencyMs: this.config.benchmarkThresholds.maxToolCallLatencyMs,
+        logLevel: this.config.logLevel as 'error' | 'warn' | 'info' | 'debug',
+      });
+      const report = await benchmark.runBenchmark();
+      this.logger.info('Stage 1: tool-call benchmark completed', {
+        modelId,
+        successRate: report.toolCallResult.successRate,
+        totalTests: report.toolCallResult.totalTests,
+      });
+      return report.toolCallResult;
+    } catch (err) {
+      this.logger.warn('Stage 1: tool-call benchmark failed (fail-open)', {
+        modelId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    } finally {
+      if (tunnel && !tunnel.killed) tunnel.kill();
+    }
   }
 
   async execute(run: PipelineRun): Promise<Stage1Result> {
@@ -281,6 +339,19 @@ export class Stage1WorkerImpl implements Stage1Worker {
         runsCompleted: benchmarkResult.runs.length,
       });
 
+      // g2. Tool-call benchmark (single-tool calling competence). Only meaningful
+      // for models that advertise tool calling — the Agent Builder baseline
+      // requires it at discovery, so by Stage 1 this is virtually always true.
+      let toolCallResults: ToolCallResult | null = null;
+      if (this.vllmEngine.supportsToolCalling(modelInfo)) {
+        this.logger.info('Stage 1: running tool-call benchmark', { modelId: run.modelId });
+        toolCallResults = await this.toolCallBenchmarkRunner(run.modelId);
+      } else {
+        this.logger.info('Stage 1: skipping tool-call benchmark (model does not advertise tool calling)', {
+          modelId: run.modelId,
+        });
+      }
+
       // h. Store results
       this.logger.info('Stage 1: storing results', { modelId: run.modelId });
       const benchmarkRecord: BenchmarkResult = {
@@ -303,7 +374,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
           hardwareProfileId: this.config.hardwareProfileId ?? null,
         },
         benchmarkMetrics: benchmarkResult.runs.map((r) => r.metrics),
-        toolCallResults: null,
+        toolCallResults,
         passed: benchmarkResult.passed,
         rejectionReasons: benchmarkResult.rejectionReasons,
         tensorParallelSize: deployment.parallelismConfig,
@@ -334,11 +405,28 @@ export class Stage1WorkerImpl implements Stage1Worker {
 
       const stage2Thresholds = this.config.stage2Thresholds;
       const maxItlP50Ms = resolveMaxItlP50Ms(stage2Thresholds, paramBillions);
+
+      // Tool-call gate: Stage 2 is agentic (Kibana security suites), so a model
+      // that advertises tool calling but can't reliably emit valid single-tool
+      // calls must not proceed. A below-floor success rate hard-gates. A null
+      // result (benchmark skipped or failed-open on infra error) does NOT gate —
+      // the perf gates still apply and a flaky tunnel shouldn't quarantine a good
+      // model. Floor is param-count-aware (smaller models get a lower floor that
+      // Agent Builder's malformed-tool-call filter + retry tolerate).
+      const minToolCallSuccessRate = resolveMinToolCallSuccessRate(
+        this.config.benchmarkThresholds,
+        paramBillions,
+      );
+      const toolCallGatePassed =
+        toolCallResults === null ||
+        toolCallResults.successRate >= minToolCallSuccessRate;
+
       const stage2Eligible =
         avgItlP50 < maxItlP50Ms &&
         throughput > stage2Thresholds.minThroughputTps &&
         avgTtft < stage2Thresholds.maxTtftMs &&
-        contextWindow >= stage2Thresholds.minContextWindow;
+        contextWindow >= stage2Thresholds.minContextWindow &&
+        toolCallGatePassed;
 
       this.logger.info('Stage 1: Stage 2 eligibility', {
         modelId: run.modelId,
@@ -348,6 +436,9 @@ export class Stage1WorkerImpl implements Stage1Worker {
         throughput,
         avgTtft,
         contextWindow,
+        toolCallSuccessRate: toolCallResults?.successRate ?? null,
+        minToolCallSuccessRate,
+        toolCallGatePassed,
       });
 
       result.stage2Eligible = stage2Eligible;

@@ -115,6 +115,7 @@ function createMockVllmEngine(): VllmEngine {
     engineType: 'vllm',
     deploy: vi.fn().mockResolvedValue(deployResult),
     stop: vi.fn().mockResolvedValue(true),
+    supportsToolCalling: vi.fn().mockReturnValue(true),
     runBenchmarks: vi.fn().mockResolvedValue({
       passed: true,
       runs: [
@@ -168,6 +169,16 @@ describe('Stage1WorkerImpl', () => {
       vllmEngine: createMockVllmEngine(),
       resultsStore: createMockResultsStore(),
       queueService: createMockQueueService(),
+      // Default to a passing tool-call benchmark so existing perf/eligibility
+      // assertions are unaffected by the Stage 2 tool-call gate. Tests that
+      // exercise the gate override this per-case.
+      toolCallBenchmarkRunner: vi.fn().mockResolvedValue({
+        supportsParallelCalls: false,
+        maxConcurrentCalls: 1,
+        avgToolCallLatencyMs: 50,
+        successRate: 1,
+        totalTests: 6,
+      }),
     };
     worker = new Stage1WorkerImpl(deps);
   });
@@ -443,6 +454,7 @@ describe('Stage1WorkerImpl', () => {
     },
         }),
         stop: vi.fn().mockResolvedValue(true),
+        supportsToolCalling: vi.fn().mockReturnValue(true),
         runBenchmarks: vi.fn().mockRejectedValue(new Error('OOM')),
       } as unknown as VllmEngine;
       worker = new Stage1WorkerImpl(deps);
@@ -493,6 +505,7 @@ describe('Stage1WorkerImpl', () => {
           },
         }),
         stop: vi.fn().mockResolvedValue(true),
+        supportsToolCalling: vi.fn().mockReturnValue(true),
         runBenchmarks: vi.fn().mockResolvedValue({
           passed: false,
           runs: [{ concurrencyLevel: 1, success: true, metrics, rawOutput: 'ok' }],
@@ -506,6 +519,82 @@ describe('Stage1WorkerImpl', () => {
 
       expect(result.status).toBe('failed');
       expect(result.error).toContain('concurrency level(s): 4, 16');
+    });
+  });
+
+  describe('tool-call gate (Stage 2 eligibility)', () => {
+    // Neutralize the perf/context gates (deterministic mock metrics already
+    // clear ITL/throughput/TTFT; minContextWindow 0 removes the live-HF
+    // context dependency) so the tool-call gate is the sole determinant of
+    // stage2Eligible.
+    beforeEach(() => {
+      deps.config = createMockConfig({
+        stage2Thresholds: {
+          maxItlP50Ms: 50,
+          minThroughputTps: 1000,
+          maxTtftMs: 200,
+          minContextWindow: 0,
+        },
+      } as Partial<AppConfig>);
+      worker = new Stage1WorkerImpl(deps);
+    });
+
+    it('marks a model Stage 2 eligible when its tool-call success rate meets the floor', async () => {
+      // Default mocks: perf passes + toolCallBenchmarkRunner returns 100% success.
+      const result = await worker.execute(createPipelineRun());
+
+      expect(result.status).toBe('success');
+      expect(result.stage2Eligible).toBe(true);
+      expect(deps.toolCallBenchmarkRunner).toHaveBeenCalledWith('meta-llama/Llama-3-8B');
+    });
+
+    it('blocks Stage 2 when the tool-call success rate is below the floor', async () => {
+      // 8B model → tier floor 0.9. A 0.5 success rate must gate it out even
+      // though the perf benchmark passed.
+      deps.toolCallBenchmarkRunner = vi.fn().mockResolvedValue({
+        supportsParallelCalls: false,
+        maxConcurrentCalls: 1,
+        avgToolCallLatencyMs: 50,
+        successRate: 0.5,
+        totalTests: 6,
+      });
+      worker = new Stage1WorkerImpl(deps);
+
+      const result = await worker.execute(createPipelineRun());
+
+      // Stage 1 perf still passed (status success), but the model is not
+      // promoted to the agentic Stage 2 suites.
+      expect(result.status).toBe('success');
+      expect(result.stage2Eligible).toBe(false);
+      const saved = vi.mocked(deps.resultsStore.save).mock.calls[0]?.[0];
+      expect(saved?.toolCallResults?.successRate).toBe(0.5);
+    });
+
+    it('fails open (does not gate) when the tool-call benchmark returns null', async () => {
+      // A flaky SSH tunnel / infra error surfaces as null — a good model must
+      // not be quarantined for it; perf gates alone decide eligibility.
+      deps.toolCallBenchmarkRunner = vi.fn().mockResolvedValue(null);
+      worker = new Stage1WorkerImpl(deps);
+
+      const result = await worker.execute(createPipelineRun());
+
+      expect(result.status).toBe('success');
+      expect(result.stage2Eligible).toBe(true);
+      const saved = vi.mocked(deps.resultsStore.save).mock.calls[0]?.[0];
+      expect(saved?.toolCallResults).toBeNull();
+    });
+
+    it('skips the tool-call benchmark for models that do not advertise tool calling', async () => {
+      vi.mocked(deps.vllmEngine.supportsToolCalling).mockReturnValue(false);
+      worker = new Stage1WorkerImpl(deps);
+
+      const result = await worker.execute(createPipelineRun());
+
+      expect(deps.toolCallBenchmarkRunner).not.toHaveBeenCalled();
+      const saved = vi.mocked(deps.resultsStore.save).mock.calls[0]?.[0];
+      expect(saved?.toolCallResults).toBeNull();
+      // No tool-call signal → gate is a no-op, perf decides eligibility.
+      expect(result.stage2Eligible).toBe(true);
     });
   });
 });
