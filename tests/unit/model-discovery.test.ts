@@ -224,6 +224,64 @@ describe('ModelDiscoveryService', () => {
       expect(result.totalRejected).toBe(1);
     });
 
+    it('should reject models below the parameter-count floor', async () => {
+      const tiny = createMockHFModel({
+        id: 'org/tiny-2B-Instruct',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const big = createMockHFModel({
+        id: 'org/big-70B-Instruct',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const configs = new Map([
+        ['org/tiny-2B-Instruct', createMockConfig({ max_position_embeddings: 131072 })],
+        ['org/big-70B-Instruct', createMockConfig({ max_position_embeddings: 131072 })],
+      ]);
+      global.fetch = setupFetchMock({
+        searchResults: [[tiny, big]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({
+        minContextWindow: 128000,
+        minParameterCount: 7_000_000_000,
+      });
+
+      // Only the 70B model survives; the 2B model is rejected at the floor.
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.id).toBe('org/big-70B-Instruct');
+      expect(result.totalRejected).toBe(1);
+    });
+
+    it('should not reject models with unknown parameter count at the floor', async () => {
+      const unknown = createMockHFModel({
+        id: 'org/mystery-model',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const configs = new Map([
+        ['org/mystery-model', createMockConfig({ max_position_embeddings: 131072 })],
+      ]);
+      global.fetch = setupFetchMock({
+        searchResults: [[unknown]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({
+        minContextWindow: 128000,
+        minParameterCount: 7_000_000_000,
+      });
+
+      // No size in the name/tags → unknown count → not rejected at discovery
+      // (the downstream candidate filter warns on it instead).
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.parameterCount).toBeNull();
+    });
+
     it('should reject models with non-open-source license', async () => {
       const mockModel = createMockHFModel({
         id: 'org/proprietary-model',

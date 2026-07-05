@@ -76,6 +76,7 @@ const defaultOptions: Required<ModelDiscoveryOptions> = {
   sort: 'downloads',
   limit: 50,
   minContextWindow: 4096,
+  minParameterCount: 0,
   includeGated: false,
 };
 
@@ -226,6 +227,14 @@ export interface ModelDiscoveryOptions {
   sort?: string;
   limit?: number;
   minContextWindow?: number;
+  /**
+   * Minimum parameter count (absolute, not billions). Models known to be
+   * below this floor are rejected during discovery so the candidate list
+   * fills with qualifying large models instead of stopping early on small,
+   * high-download ones. Unknown parameter counts are not rejected here — the
+   * downstream candidate filter warns on them instead.
+   */
+  minParameterCount?: number;
   includeGated?: boolean;
 }
 
@@ -439,6 +448,18 @@ export class ModelDiscoveryService {
       return null;
     }
 
+    // Step 3.5: Parameter-count floor (Agent Builder baseline). A known count
+    // below the floor is rejected here; an unknown count is left for the
+    // downstream candidate filter to warn on rather than hard-reject.
+    const parameterCount = this.extractParameterCount(rawModel);
+    if (
+      options.minParameterCount > 0 &&
+      parameterCount !== null &&
+      parameterCount < options.minParameterCount
+    ) {
+      return null;
+    }
+
     // Step 4: License check
     const license = this.extractLicense(rawModel);
     if (!OPEN_SOURCE_LICENSES.has(license)) {
@@ -456,7 +477,6 @@ export class ModelDiscoveryService {
 
     // Step 6: Extract metadata
     const quantizations = this.extractQuantizations(rawModel, config);
-    const parameterCount = this.extractParameterCount(rawModel);
     const supportsToolCalling = this.detectToolCallingSupport(rawModel);
 
     const name = id.split('/').pop() ?? id;
