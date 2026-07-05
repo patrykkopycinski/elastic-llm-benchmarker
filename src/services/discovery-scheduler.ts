@@ -77,6 +77,25 @@ export function deriveModelFamily(modelId: string): string {
 }
 
 /**
+ * Extract the numeric generation of a model from its id: `Qwen2.5-*` → 2.5,
+ * `Qwen3-*` → 3, `Llama-3.1-*` → 3.1, `gemma-2-*` → 2, `deepseek-v3` → 3.
+ * Returns null when no leading generation is present (e.g. `Mistral-Small-*`).
+ *
+ * A number immediately followed by a size marker (`8x7b`, `7b`) is a size, not a
+ * generation, and yields null. Used to supersede an older generation by a newer
+ * same-family sibling regardless of noisy quant-repo dates.
+ */
+export function deriveModelGeneration(modelId: string): number | null {
+  const slash = modelId.indexOf('/');
+  const name = (slash >= 0 ? modelId.slice(slash + 1) : modelId).toLowerCase();
+  const m = name.match(/^[a-z]+?[-_]?v?(\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const after = name.charAt(m[0].length);
+  if (after === 'x' || after === 'b') return null; // "8x7b" / "7b" is a size
+  return parseFloat(m[1]!);
+}
+
+/**
  * Dependencies required by DiscoveryScheduler.
  */
 export interface DiscoverySchedulerDependencies {
@@ -292,14 +311,47 @@ export class DiscoveryScheduler {
    * dry-run fit check. Never throws — a model that errors mid-scoring is skipped,
    * not fatal to the batch.
    */
+  /**
+   * Compile the configured `excludeModelPatterns` into case-insensitive
+   * matchers. An invalid pattern is logged and dropped rather than aborting the
+   * whole sweep.
+   */
+  private compileExcludePatterns(): RegExp[] {
+    const patterns = this.deps.config.excludeModelPatterns ?? [];
+    const compiled: RegExp[] = [];
+    for (const pattern of patterns) {
+      try {
+        compiled.push(new RegExp(pattern, 'i'));
+      } catch (err) {
+        this.logger.warn(`Discovery: invalid excludeModelPatterns entry "${pattern}", ignoring`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return compiled;
+  }
+
   private async scoreModels(
     models: ModelInfo[],
     profile: HardwareProfileDefinition | undefined,
   ): Promise<ScoredModel[]> {
     const scored: ScoredModel[] = [];
+    const excludeMatchers = this.compileExcludePatterns();
 
     for (const model of models) {
       try {
+        // Hard recency backstop: skip outdated generations by id pattern before
+        // spending any HF request. Family supersession can't catch a stale
+        // generation that surfaces alone (no newer sibling in the batch), so an
+        // operator-tuned denylist enforces "focus on the most recent generation".
+        const excludedBy = excludeMatchers.find((re) => re.test(model.id));
+        if (excludedBy) {
+          this.logger.debug(
+            `Skipping ${model.id}: matches excludeModelPatterns (${excludedBy.source}) — outdated generation`,
+          );
+          continue;
+        }
+
         const config = await this.deps.discoveryService.fetchModelConfig(model.id);
         if (!config) {
           this.logger.debug(`Skipping ${model.id}: config.json fetch failed`);
@@ -390,12 +442,26 @@ export class DiscoveryScheduler {
     for (const group of byFamily.values()) {
       if (group.length < 2) continue;
       for (const model of group) {
+        const modelGen = deriveModelGeneration(model.id);
         const modelMs = model.createdAt ? Date.parse(model.createdAt) : NaN;
-        if (Number.isNaN(modelMs)) continue;
         const hasNewerFittingSibling = group.some((other) => {
           if (other === model || !other.hardwareFit) return false;
+          const otherGen = deriveModelGeneration(other.id);
+          if (modelGen !== null && otherGen !== null) {
+            // Both generations known: a strictly-newer generation supersedes; a
+            // same-or-older generation never does. This deliberately ignores
+            // createdAt so a freshly-uploaded quant of an OLD generation (recent
+            // date, low gen) can't supersede the newer base generation.
+            return otherGen > modelGen;
+          }
+          // Generation unknown on one side (e.g. Mistral-Small): fall back to the
+          // date-gap heuristic — a sibling ≥30 days newer supersedes.
           const otherMs = other.createdAt ? Date.parse(other.createdAt) : NaN;
-          return !Number.isNaN(otherMs) && otherMs - modelMs >= SUPERSEDE_MIN_AGE_GAP_MS;
+          return (
+            !Number.isNaN(modelMs) &&
+            !Number.isNaN(otherMs) &&
+            otherMs - modelMs >= SUPERSEDE_MIN_AGE_GAP_MS
+          );
         });
         if (hasNewerFittingSibling) {
           model.superseded = true;

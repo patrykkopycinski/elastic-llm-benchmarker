@@ -733,6 +733,20 @@ export const discoverySchedulerConfigSchema = z.object({
   fallbackSearchProbes: z
     .array(z.string())
     .default(['instruct', 'mistral small', 'mixtral']),
+  /**
+   * Case-insensitive regex patterns matched against the model id. A model whose
+   * id matches ANY pattern is hard-skipped during scoring — never scored,
+   * queued, or benchmarked. This is the recency backstop for outdated
+   * generations that surface alone (e.g. a freshly-published `Qwen2.5-*-AWQ`
+   * quant repo whose base is a superseded generation): family supersession is
+   * batch-local and can't catch a stale generation when no newer sibling is in
+   * the same sweep, so this denylist enforces "focus on the most recent
+   * generation" deterministically. Set to [] to disable. Operators extend it as
+   * new generations land (e.g. add `qwen3` once Qwen4/Qwen3.6 is the target).
+   */
+  excludeModelPatterns: z
+    .array(z.string())
+    .default(['qwen2', 'qwen1', 'llama-2', 'llama2', 'codellama']),
 });
 
 /**

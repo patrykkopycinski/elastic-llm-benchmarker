@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { DiscoveryScheduler, deriveModelFamily } from '../../src/services/discovery-scheduler.js';
+import {
+  DiscoveryScheduler,
+  deriveModelFamily,
+  deriveModelGeneration,
+} from '../../src/services/discovery-scheduler.js';
 import type { ScoredModel } from '../../src/services/discovery-scheduler.js';
 import { createLogger } from '../../src/utils/logger.js';
 
@@ -38,6 +42,7 @@ function createMockConfig(): DiscoverySchedulerConfig {
     hardwareProfileId: '1xl4',
     skipRecentlyBenchmarkedDays: 30,
     fallbackSearchProbes: [],
+    excludeModelPatterns: [],
   };
 }
 
@@ -762,6 +767,125 @@ describe('DiscoveryScheduler', () => {
 
       const scored = await scheduler.discoverAndScore();
       expect(scored.every((m) => !m.superseded)).toBe(true);
+    });
+
+    it('supersedes an older generation by version even when its quant repo date is newer', async () => {
+      // The Qwen2.5-*-AWQ case: the quant repo was created AFTER the Qwen3 base,
+      // so date-only supersession would fail. Version-aware supersession fires
+      // regardless: gen 3 > gen 2.5.
+      const now = new Date('2026-07-06T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'Qwen/Qwen2.5-32B-Instruct-AWQ' }),
+        createMockModelInfo({ id: 'Qwen/Qwen3-32B-Instruct' }),
+      ];
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi.fn().mockImplementation((id: string) =>
+          Promise.resolve({
+            downloads: id.includes('2.5') ? 500000 : 8000,
+            // Quant of the OLD gen created LATER than the newer base generation.
+            createdAt: id.includes('2.5') ? '2026-05-01T00:00:00Z' : '2025-05-01T00:00:00Z',
+          }),
+        ),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const deps = createMockDeps({ discoveryService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      const stale = scored.find((m) => m.id === 'Qwen/Qwen2.5-32B-Instruct-AWQ')!;
+      const latest = scored.find((m) => m.id === 'Qwen/Qwen3-32B-Instruct')!;
+      expect(stale.superseded).toBe(true);
+      expect(latest.superseded).toBe(false);
+    });
+  });
+
+  describe('excludeModelPatterns', () => {
+    it('hard-skips a model whose id matches a denylist pattern, without an HF fetch', async () => {
+      const now = new Date('2026-07-06T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'Qwen/Qwen2.5-32B-Instruct-AWQ' }),
+        createMockModelInfo({ id: 'Qwen/Qwen3-32B-Instruct' }),
+      ];
+      const fetchModelConfig = vi
+        .fn()
+        .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 });
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig,
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 8000, createdAt: '2026-06-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = { ...createMockConfig(), excludeModelPatterns: ['qwen2'] };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      const ids = scored.map((m) => m.id);
+      expect(ids).toContain('Qwen/Qwen3-32B-Instruct');
+      expect(ids).not.toContain('Qwen/Qwen2.5-32B-Instruct-AWQ');
+      // Excluded before any HF request — config fetched only for the kept model.
+      expect(fetchModelConfig).not.toHaveBeenCalledWith('Qwen/Qwen2.5-32B-Instruct-AWQ');
+    });
+
+    it('ignores an invalid regex pattern instead of aborting the sweep', async () => {
+      const now = new Date('2026-07-06T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [createMockModelInfo({ id: 'Qwen/Qwen3-32B-Instruct' })];
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 8000, createdAt: '2026-06-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = { ...createMockConfig(), excludeModelPatterns: ['(unclosed'] };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(scored.map((m) => m.id)).toContain('Qwen/Qwen3-32B-Instruct');
+    });
+  });
+
+  describe('deriveModelGeneration', () => {
+    it('extracts the generation number from common family ids', () => {
+      expect(deriveModelGeneration('Qwen/Qwen2.5-32B-Instruct-AWQ')).toBe(2.5);
+      expect(deriveModelGeneration('Qwen/Qwen3-32B-Instruct')).toBe(3);
+      expect(deriveModelGeneration('meta-llama/Llama-3.1-8B-Instruct')).toBe(3.1);
+      expect(deriveModelGeneration('google/gemma-2-9b-it')).toBe(2);
+      expect(deriveModelGeneration('deepseek-ai/deepseek-v3')).toBe(3);
+    });
+
+    it('returns null for size-leading numbers and generation-less names', () => {
+      // "8x7b" is an expert-count × size, not a generation.
+      expect(deriveModelGeneration('mistralai/Mixtral-8x7B-Instruct-v0.1')).toBeNull();
+      expect(deriveModelGeneration('mistralai/Mistral-Small-24B-Instruct')).toBeNull();
     });
   });
 });
