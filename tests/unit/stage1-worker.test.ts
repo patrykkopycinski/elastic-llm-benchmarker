@@ -177,6 +177,7 @@ describe('Stage1WorkerImpl', () => {
         maxConcurrentCalls: 1,
         avgToolCallLatencyMs: 50,
         successRate: 1,
+        singleToolSuccessRate: 1,
         totalTests: 6,
       }),
     };
@@ -548,14 +549,15 @@ describe('Stage1WorkerImpl', () => {
       expect(deps.toolCallBenchmarkRunner).toHaveBeenCalledWith('meta-llama/Llama-3-8B');
     });
 
-    it('blocks Stage 2 when the tool-call success rate is below the floor', async () => {
-      // 8B model → tier floor 0.9. A 0.5 success rate must gate it out even
-      // though the perf benchmark passed.
+    it('blocks Stage 2 when the single-tool success rate is below the floor', async () => {
+      // 8B model → tier floor 0.9. A 0.5 single-tool success rate must gate it
+      // out even though the perf benchmark passed.
       deps.toolCallBenchmarkRunner = vi.fn().mockResolvedValue({
         supportsParallelCalls: false,
         maxConcurrentCalls: 1,
         avgToolCallLatencyMs: 50,
         successRate: 0.5,
+        singleToolSuccessRate: 0.5,
         totalTests: 6,
       });
       worker = new Stage1WorkerImpl(deps);
@@ -567,7 +569,48 @@ describe('Stage1WorkerImpl', () => {
       expect(result.status).toBe('success');
       expect(result.stage2Eligible).toBe(false);
       const saved = vi.mocked(deps.resultsStore.save).mock.calls[0]?.[0];
-      expect(saved?.toolCallResults?.successRate).toBe(0.5);
+      expect(saved?.toolCallResults?.singleToolSuccessRate).toBe(0.5);
+    });
+
+    it('promotes a model that single-tool-calls perfectly but fails parallel scenarios', async () => {
+      // The Qwen3-30B-A3B case: overall successRate 0.2 (1/5, only the single-tool
+      // scenario passed, all 4 parallel scenarios failed) but singleToolSuccessRate
+      // 1.0. Agent Builder issues single-tool calls only, so parallel competence
+      // must NOT gate — the model belongs in Stage 2.
+      deps.toolCallBenchmarkRunner = vi.fn().mockResolvedValue({
+        supportsParallelCalls: false,
+        maxConcurrentCalls: 1,
+        avgToolCallLatencyMs: 50,
+        successRate: 0.2,
+        singleToolSuccessRate: 1,
+        totalTests: 30,
+      });
+      worker = new Stage1WorkerImpl(deps);
+
+      const result = await worker.execute(createPipelineRun());
+
+      expect(result.status).toBe('success');
+      expect(result.stage2Eligible).toBe(true);
+      const saved = vi.mocked(deps.resultsStore.save).mock.calls[0]?.[0];
+      expect(saved?.toolCallResults?.successRate).toBe(0.2);
+      expect(saved?.toolCallResults?.singleToolSuccessRate).toBe(1);
+    });
+
+    it('falls back to overall successRate when singleToolSuccessRate is absent (older results)', async () => {
+      // Results produced before singleToolSuccessRate existed still gate on the
+      // all-scenarios rate — a 0.5 rate on an 8B model (floor 0.9) blocks.
+      deps.toolCallBenchmarkRunner = vi.fn().mockResolvedValue({
+        supportsParallelCalls: false,
+        maxConcurrentCalls: 1,
+        avgToolCallLatencyMs: 50,
+        successRate: 0.5,
+        totalTests: 6,
+      });
+      worker = new Stage1WorkerImpl(deps);
+
+      const result = await worker.execute(createPipelineRun());
+
+      expect(result.stage2Eligible).toBe(false);
     });
 
     it('fails open (does not gate) when the tool-call benchmark returns null', async () => {

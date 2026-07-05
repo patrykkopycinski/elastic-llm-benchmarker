@@ -500,11 +500,17 @@ export class ToolCallBenchmarkService {
     const bestMode = autoMode.successRate >= requiredMode.successRate ? autoMode : requiredMode;
     const combinedTotalTests = autoMode.totalTests + requiredMode.totalTests;
 
+    const bestSingleToolSuccessRate = Math.max(
+      autoMode.singleToolSuccessRate ?? 0,
+      requiredMode.singleToolSuccessRate ?? 0,
+    );
+
     const toolCallResult: ToolCallResult = {
       supportsParallelCalls: autoMode.supportsParallelCalls || requiredMode.supportsParallelCalls,
       maxConcurrentCalls: Math.max(autoMode.maxConcurrentCalls, requiredMode.maxConcurrentCalls),
       avgToolCallLatencyMs: bestMode.avgToolCallLatencyMs,
       successRate: bestSuccessRate,
+      singleToolSuccessRate: bestSingleToolSuccessRate,
       totalTests: combinedTotalTests,
       modeResults: [autoMode, requiredMode],
     };
@@ -525,6 +531,7 @@ export class ToolCallBenchmarkService {
       passed,
       autoSuccessRate: (autoMode.successRate * 100).toFixed(2) + '%',
       requiredSuccessRate: (requiredMode.successRate * 100).toFixed(2) + '%',
+      bestSingleToolSuccessRate: (bestSingleToolSuccessRate * 100).toFixed(2) + '%',
       autoParallel: autoMode.supportsParallelCalls,
       requiredParallel: requiredMode.supportsParallelCalls,
       totalTests: combinedTotalTests,
@@ -551,6 +558,17 @@ export class ToolCallBenchmarkService {
     );
     const successRate = totalTests > 0 ? successfulTests.length / totalTests : 0;
 
+    // Single-tool success rate: scenarios that request exactly one call. This is
+    // what the Stage 2 gate uses — parallel competence is informational only
+    // (Agent Builder issues single-tool calls). Isolating it prevents a model
+    // that single-tool-calls perfectly but can't do parallel from being gated out.
+    const singleToolTests = results.filter((r) => r.requestedCalls === 1);
+    const singleToolSuccesses = singleToolTests.filter(
+      (r) => r.allCallsReturned && r.allCallsValid && r.error === null,
+    );
+    const singleToolSuccessRate =
+      singleToolTests.length > 0 ? singleToolSuccesses.length / singleToolTests.length : 0;
+
     const latencies = results.filter((r) => r.error === null).map((r) => r.latencyMs);
     const avgLatencyMs =
       latencies.length > 0 ? latencies.reduce((sum, l) => sum + l, 0) / latencies.length : 0;
@@ -566,6 +584,7 @@ export class ToolCallBenchmarkService {
       maxConcurrentCalls,
       avgToolCallLatencyMs: Math.round(avgLatencyMs * 100) / 100,
       successRate: Math.round(successRate * 10000) / 10000,
+      singleToolSuccessRate: Math.round(singleToolSuccessRate * 10000) / 10000,
       totalTests,
     };
 

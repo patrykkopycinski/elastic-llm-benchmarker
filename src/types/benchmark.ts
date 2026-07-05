@@ -50,8 +50,15 @@ export interface ToolCallModeResult {
   maxConcurrentCalls: number;
   /** Average tool call latency in milliseconds */
   avgToolCallLatencyMs: number;
-  /** Tool call success rate (0-1) */
+  /** Tool call success rate across ALL scenarios, single + parallel (0-1) */
   successRate: number;
+  /**
+   * Success rate over single-tool scenarios only (`requestedCalls === 1`).
+   * This is the metric the Stage 2 eligibility gate uses: Agent Builder issues
+   * single-tool calls only, so parallel-call competence is informational and
+   * must not gate. May be absent on results produced before this field existed.
+   */
+  singleToolSuccessRate?: number;
   /** Total number of tool call tests executed */
   totalTests: number;
 }
@@ -68,8 +75,15 @@ export interface ToolCallResult {
   maxConcurrentCalls: number;
   /** Average tool call latency in milliseconds */
   avgToolCallLatencyMs: number;
-  /** Tool call success rate (0-1, best across modes) */
+  /** Tool call success rate across ALL scenarios, single + parallel (0-1, best across modes) */
   successRate: number;
+  /**
+   * Success rate over single-tool scenarios only (`requestedCalls === 1`), best
+   * across modes. This is what the Stage 2 eligibility gate keys off — Agent
+   * Builder uses single-tool calls only, so parallel-call competence must not
+   * gate. May be absent on results produced before this field existed.
+   */
+  singleToolSuccessRate?: number;
   /** Total number of tool call tests executed (sum across modes) */
   totalTests: number;
   /** Per-mode breakdown (auto vs required). May be absent for older results. */
