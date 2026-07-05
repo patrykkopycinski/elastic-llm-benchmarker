@@ -44,14 +44,14 @@ Derived from [elastic/security-team#15545](https://github.com/elastic/security-t
 | Criterion | Default | Hard? | Notes |
 |-----------|---------|-------|-------|
 | `minContextWindow` | 128_000 | yes | Long-context security evals |
-| `minParameterCountBillions` | 7 | yes | Excludes sub-agentic models (e.g. Qwen2.5-1.5B) |
+| `minParameterCountBillions` | 24 | yes | Sub-24B open-weight models fail agentic tool-calling for security in our matrix runs (split-signal: skill loaded, prescribed tools skipped). 24B keeps Mistral-Small-24B (European coverage) + Qwen3-30B-A3B; excludes the 8–14B tier. Sweet spot for 2×A100-80GB is 24–70B. |
 | `requireToolCalling` | true | yes | Known vLLM parser (hermes/mistral/llama3_json) |
 | `requireInstructVariant` | true | yes | `instruct`, `chat`, or `-it` in model id |
 | VRAM fit + vLLM arch | — | yes | Existing `ModelCandidateFilter` logic |
 
 Config block: `agentBuilderBaseline` in `config/default.json`. Wired on **enqueue** (`runEnqueue`), **discovery** (`DiscoveryScheduler`), via `createAgentBuilderFilter()` in `src/services/agent-builder-baseline.ts`. Post-benchmark `ModelEvaluationEngine` checks **single-tool success rate** only (`minToolCallSuccessRate`), not parallel calls.
 
-To sweep smaller models for research, set `minParameterCountBillions: 4` or `agentBuilderBaseline.enabled: false` — never the default for CI eval runs.
+To sweep smaller models for research, set `minParameterCountBillions: 8` or `agentBuilderBaseline.enabled: false` — never the default for CI eval runs.
 
 ## Directory Layout
 

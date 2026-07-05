@@ -587,10 +587,14 @@ export const agentBuilderBaselineSchema = z.object({
   /** Minimum context window (tokens). Agent Builder security evals need long context. */
   minContextWindow: z.number().int().positive().default(128_000),
   /**
-   * Minimum parameter count in billions. Excludes sub-agentic models (e.g. 1.5B).
-   * 7B default: pragmatic floor for Agent Builder; override to 4 for broader sweeps.
+   * Minimum parameter count in billions. Excludes sub-agentic models.
+   * 24B default: below ~24B, open-weight models fail agentic tool-calling for
+   * security in our matrix runs (the split-signal failure — skill loaded, tools
+   * skipped). 24B keeps strong tool-callers like Mistral-Small-24B (European
+   * coverage) and Qwen3-30B-A3B while excluding the 8–14B tier. Override to 8 for
+   * broader research sweeps — never the default for CI eval runs.
    */
-  minParameterCountBillions: z.number().positive().default(7),
+  minParameterCountBillions: z.number().positive().default(24),
   /**
    * Require single-tool calling support via a known vLLM parser family.
    * Does NOT require parallel/multi-tool calling.
