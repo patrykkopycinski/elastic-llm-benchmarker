@@ -445,6 +445,18 @@ export class DiscoveryScheduler {
           continue;
         }
 
+        if (!model.hardwareFit) {
+          // Enqueuing a model that doesn't fit the VM's VRAM just burns a Stage 1
+          // deploy attempt that vLLM will OOM on. The freshness-fallback sweep can
+          // surface non-fitting fresh models, so filter them here rather than let
+          // the scheduler dequeue and fail them.
+          this.logger.debug(
+            `Skipping ${model.id}: does not fit the target hardware profile`,
+          );
+          skipped++;
+          continue;
+        }
+
         const priority = scoredModels.length - index;
         await this.deps.queueService.enqueue(model.id, 'discovery', priority, undefined, {
           trendingScore: model.trendingScore,

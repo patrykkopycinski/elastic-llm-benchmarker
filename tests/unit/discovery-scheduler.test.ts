@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { DiscoveryScheduler, deriveModelFamily } from '../../src/services/discovery-scheduler.js';
+import type { ScoredModel } from '../../src/services/discovery-scheduler.js';
 import { createLogger } from '../../src/utils/logger.js';
 
 import type { ModelDiscoveryService } from '../../src/services/model-discovery.js';
@@ -357,6 +358,35 @@ describe('DiscoveryScheduler', () => {
       expect(result.queued).toBe(0);
       expect(result.skipped).toBe(1);
       expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('skips models that do not fit the target hardware', async () => {
+      const enqueue = vi.fn().mockResolvedValue(undefined);
+      const discoveryService = {
+        isEvaluated: vi.fn().mockReturnValue(false),
+      } as unknown as ModelDiscoveryService;
+      const queueService = { enqueue } as unknown as QueueService;
+      const deps = createMockDeps({ discoveryService, queueService });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const makeScored = (id: string, hardwareFit: boolean): ScoredModel => ({
+        ...createMockModelInfo({ id }),
+        trendingScore: 10,
+        hardwareFit,
+        totalScore: hardwareFit ? 50 : 10,
+        createdAt: '2026-01-01T00:00:00Z',
+        family: id,
+        superseded: false,
+      });
+
+      const stats = await scheduler.autoQueue([
+        makeScored('org/fits', true),
+        makeScored('org/too-big', false),
+      ]);
+
+      expect(stats.queued).toBe(1);
+      expect(stats.skipped).toBe(1);
+      expect(enqueue.mock.calls.map((c) => c[0])).toEqual(['org/fits']);
     });
 
     it('skips already-evaluated models', async () => {
