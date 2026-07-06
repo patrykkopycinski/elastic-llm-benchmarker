@@ -220,6 +220,26 @@ export const tunnelConfigSchema = z.object({
    * 'cloudflared_named'.
    */
   cloudflaredConfigPath: z.string().optional(),
+  /**
+   * Reserved static IPv4 address (or DNS hostname) fronting the GCP HTTPS
+   * Load Balancer that terminates TLS and forwards to the GPU VM's vLLM port.
+   * Used by the 'load_balancer' provider (Tier-2 Buildkite weekly evals).
+   * The IP is provisioned once by Terraform and is stable across VM reboots.
+   */
+  loadBalancerIp: z.string().optional(),
+  /**
+   * Stable public HTTPS URL served by the GCP HTTPS Load Balancer
+   * (e.g. `https://vllm-benchmarker.example.com`). Reported verbatim as the
+   * public endpoint for Tier-2 Buildkite weekly evals.
+   */
+  loadBalancerUrl: z.string().url().optional(),
+  /**
+   * Static API key that clients (Buildkite weekly job) must send as
+   * `Authorization: Bearer <key>` to reach vLLM through the LB. Also passed
+   * to vLLM via `--api-key` so the LB→VM hop is authenticated end-to-end.
+   * Injected at runtime from Secret Manager; never committed.
+   */
+  loadBalancerApiKey: z.string().optional(),
 });
 
 /**
@@ -755,6 +775,74 @@ export const discoverySchedulerConfigSchema = z.object({
 });
 
 /**
+ * Tier-1 local validation eval configuration (in-VPC, no Buildkite).
+ *
+ * When `evalTier === 'local'`, Stage 2 revives `stage2-worker.ts` and
+ * `eval-suite-runner.ts` to run kbn-evals against a self-hosted Kibana
+ * instance that reaches vLLM over the private VPC. This is the fast initial
+ * validation gate before a model is promoted to the Tier-2 weekly Buildkite
+ * matrix. All values default-safe; only override for non-standard topology.
+ */
+export const stage2LocalConfigSchema = z.object({
+  /** Kibana base URL reachable from the controller VM (inside the VPC). */
+  kibanaUrl: z.string().url().optional(),
+  /**
+   * Private vLLM base URL the Kibana instance connects to for inference.
+   * Typically `http://<gpu-vm-internal-ip>:8000/v1`. Must NOT traverse the
+   * public LB — this is the in-VPC fast path.
+   */
+  vllmPrivateBaseUrl: z.string().url().optional(),
+  /** Kibana API key for the eval connector (injected from Secret Manager). */
+  kibanaApiKey: z.string().optional(),
+  /** Eval suites to run for Tier-1 validation. Defaults to the security trio. */
+  evalSuites: z
+    .array(z.string())
+    .default([
+      'security-alert-triage',
+      'security-alerts-rag-regression',
+      'security-esql-generation-regression',
+    ]),
+  /** Per-suite timeout (ms). Defaults to 1h — kbn-evals are long. */
+  suiteTimeoutMs: z.number().int().positive().default(3_600_000),
+});
+
+/**
+ * Which evaluation tier Stage 2 uses for qualification.
+ * - `'local'` — Tier-1: in-VPC kbn-evals (fast validation, revived machinery).
+ * - `'buildkite-weekly'` — Tier-2: full weekly matrix on Buildkite via the
+ *   GCP HTTPS LB endpoint (authoritative, slow).
+ * When omitted, the daemon falls back to the legacy behavior (Buildkite
+ * on-demand when `buildkite.enabled`, otherwise local Stage 2).
+ */
+export const evalTierSchema = z.enum(['local', 'buildkite-weekly']).optional();
+
+/**
+ * GCP runtime metadata for autonomous deployment.
+ *
+ * Pure metadata — the daemon does not provision these resources (Terraform
+ * does). The values let the daemon emit correct labels, resolve the GPU VM
+ * internal IP, and report deployment context in health/recommendation docs.
+ */
+export const gcpRuntimeConfigSchema = z.object({
+  /** GCP project ID hosting the controller + GPU VMs. */
+  projectId: z.string().optional(),
+  /** GCP zone, e.g. `us-central1-a`. */
+  zone: z.string().default('us-central1-a'),
+  /** Controller VM instance name (the VM running this daemon). */
+  controllerInstanceName: z.string().optional(),
+  /** GPU VM instance name (the always-on inference VM). */
+  gpuInstanceName: z.string().optional(),
+  /** GPU VM internal IP (private VPC). Resolved from metadata if absent. */
+  gpuInternalIp: z.string().optional(),
+  /**
+   * When true, the daemon resolves `ssh.host` and `gcpRuntime.gpuInternalIp`
+   * from the GCE metadata server at boot (requires the controller VM to run
+   * in GCP). Defaults to false for portability.
+   */
+  resolveFromMetadata: z.boolean().default(false),
+});
+
+/**
  * Application configuration schema
  */
 export const appConfigSchema = z.object({
@@ -788,6 +876,12 @@ export const appConfigSchema = z.object({
   stage2Thresholds: stage2ThresholdsSchema.default({}),
   /** Whether to enable the Stage 2 eval pipeline. */
   enableStage2: z.boolean().default(false),
+  /** Tier-1 local validation eval configuration (in-VPC kbn-evals). */
+  stage2Local: stage2LocalConfigSchema.default({}),
+  /** Which eval tier Stage 2 uses ('local' | 'buildkite-weekly'). */
+  evalTier: evalTierSchema,
+  /** GCP runtime metadata for autonomous deployment. */
+  gcp: gcpRuntimeConfigSchema.default({}),
   /** Golden cluster configuration for centralized tracking. */
   goldenCluster: goldenClusterConfigSchema.default({}),
   /** EDOT collector configuration for OpenTelemetry trace collection. */
@@ -914,6 +1008,9 @@ export type DaemonConfig = z.infer<typeof daemonConfigSchema>;
 export type ScheduleWindow = z.infer<typeof scheduleWindowSchema>;
 export type TunnelConfig = z.infer<typeof tunnelConfigSchema>;
 export type TunnelProvider = z.infer<typeof tunnelProviderSchema>;
+export type Stage2LocalConfig = z.infer<typeof stage2LocalConfigSchema>;
+export type EvalTier = z.infer<typeof evalTierSchema>;
+export type GcpRuntimeConfig = z.infer<typeof gcpRuntimeConfigSchema>;
 export type EngineConfig = z.infer<typeof engineConfigSchema>;
 export type EngineTypeConfig = z.infer<typeof engineTypeSchema>;
 export type KibanaConnectorConfig = z.infer<typeof kibanaConnectorConfigSchema>;

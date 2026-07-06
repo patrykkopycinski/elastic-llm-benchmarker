@@ -256,6 +256,51 @@ function buildEnvConfig(): Record<string, unknown> {
     kibanaRepo['branch'] = process.env['KIBANA_REPO_BRANCH'];
   if (Object.keys(kibanaRepo).length > 0) env['kibanaRepo'] = kibanaRepo;
 
+  // Stage 2 local validation eval (Tier-1, in-VPC) from env vars
+  const stage2Local: Record<string, unknown> = {};
+  if (process.env['STAGE2_LOCAL_KIBANA_URL'] !== undefined)
+    stage2Local['kibanaUrl'] = process.env['STAGE2_LOCAL_KIBANA_URL'];
+  if (process.env['STAGE2_LOCAL_VLLM_PRIVATE_BASE_URL'] !== undefined)
+    stage2Local['vllmPrivateBaseUrl'] = process.env['STAGE2_LOCAL_VLLM_PRIVATE_BASE_URL'];
+  if (process.env['STAGE2_LOCAL_KIBANA_API_KEY'] !== undefined)
+    stage2Local['kibanaApiKey'] = process.env['STAGE2_LOCAL_KIBANA_API_KEY'];
+  if (process.env['STAGE2_LOCAL_EVAL_SUITES'] !== undefined)
+    stage2Local['evalSuites'] = process.env['STAGE2_LOCAL_EVAL_SUITES']
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  if (Object.keys(stage2Local).length > 0) env['stage2Local'] = stage2Local;
+
+  // Eval tier selection ('local' | 'buildkite-weekly')
+  if (process.env['EVAL_TIER'] !== undefined) env['evalTier'] = process.env['EVAL_TIER'];
+
+  // GCP runtime metadata from env vars
+  const gcp: Record<string, unknown> = {};
+  if (process.env['GCP_PROJECT_ID'] !== undefined) gcp['projectId'] = process.env['GCP_PROJECT_ID'];
+  if (process.env['GCP_ZONE'] !== undefined) gcp['zone'] = process.env['GCP_ZONE'];
+  if (process.env['GCP_CONTROLLER_INSTANCE_NAME'] !== undefined)
+    gcp['controllerInstanceName'] = process.env['GCP_CONTROLLER_INSTANCE_NAME'];
+  if (process.env['GCP_GPU_INSTANCE_NAME'] !== undefined)
+    gcp['gpuInstanceName'] = process.env['GCP_GPU_INSTANCE_NAME'];
+  if (process.env['GCP_GPU_INTERNAL_IP'] !== undefined)
+    gcp['gpuInternalIp'] = process.env['GCP_GPU_INTERNAL_IP'];
+  if (process.env['GCP_RESOLVE_FROM_METADATA'] !== undefined)
+    gcp['resolveFromMetadata'] = process.env['GCP_RESOLVE_FROM_METADATA'] === 'true';
+  if (Object.keys(gcp).length > 0) env['gcp'] = gcp;
+
+  // Load balancer tunnel fields (Tier-2 Buildkite weekly) from env vars
+  const tunnelExtra: Record<string, unknown> = {};
+  if (process.env['LOAD_BALANCER_IP'] !== undefined)
+    tunnelExtra['loadBalancerIp'] = process.env['LOAD_BALANCER_IP'];
+  if (process.env['LOAD_BALANCER_URL'] !== undefined)
+    tunnelExtra['loadBalancerUrl'] = process.env['LOAD_BALANCER_URL'];
+  if (process.env['LOAD_BALANCER_API_KEY'] !== undefined)
+    tunnelExtra['loadBalancerApiKey'] = process.env['LOAD_BALANCER_API_KEY'];
+  if (Object.keys(tunnelExtra).length > 0) {
+    const existingTunnel = (env['tunnel'] as Record<string, unknown> | undefined) ?? {};
+    env['tunnel'] = { ...existingTunnel, ...tunnelExtra };
+  }
+
   // Buildkite CI eval configuration from env vars
   const buildkite: Record<string, unknown> = {};
   if (process.env['BUILDKITE_API_TOKEN'] !== undefined)

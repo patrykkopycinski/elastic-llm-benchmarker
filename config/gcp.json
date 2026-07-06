@@ -1,0 +1,97 @@
+{
+  "$schema": "../src/types/config.ts",
+  "_comment": "GCP autonomous runtime config. All secrets (ES_API_KEY, HF_TOKEN, SSH keys, BUILDKITE_API_TOKEN) are injected at runtime via GCP Secret Manager → env vars. This file contains ONLY placeholders and non-sensitive defaults.",
+  "elasticsearch": {
+    "url": "${ELASTICSEARCH_URL}"
+  },
+  "ssh": {
+    "host": "${GPU_VM_INTERNAL_IP}",
+    "port": 22,
+    "username": "${SSH_USERNAME}",
+    "privateKeyPath": "/run/secrets/gpu_vm_ssh_key",
+    "useSudo": true
+  },
+  "huggingfaceToken": "",
+  "benchmarkThresholds": {
+    "minContextWindow": 128000,
+    "maxITLMs": 20,
+    "maxToolCallLatencyMs": 1000,
+    "minToolCallSuccessRate": 1.0,
+    "concurrencyLevels": [1, 4, 16],
+    "healthCheckTimeoutSeconds": 1800
+  },
+  "hardwareProfileId": "2xa100-80gb",
+  "vmHardwareProfile": {
+    "gpuType": "nvidia-a100-80gb",
+    "gpuCount": 2,
+    "ramGb": 340,
+    "cpuCores": 24,
+    "diskGb": 1000,
+    "machineType": "a2-ultragpu-2g"
+  },
+  "engine": {
+    "type": "vllm",
+    "vllmGpuMemoryUtilization": 0.95,
+    "maxModelLen": 65536
+  },
+  "logLevel": "info",
+  "resultsDir": "./results",
+  "daemon": {
+    "enabled": true,
+    "sleepIntervalMs": 60000,
+    "maxConsecutiveErrors": 10,
+    "maxCycles": 0,
+    "recursionLimit": 25,
+    "stateFilePath": "./data/daemon-state.json",
+    "pauseWindows": [],
+    "errorBackoffMultiplier": 1.5,
+    "maxSleepIntervalMs": 300000
+  },
+  "enableStage2": true,
+  "discoveryScheduler": {
+    "enabled": true,
+    "intervalMinutes": 60
+  },
+  "buildkite": {
+    "enabled": false,
+    "orgSlug": "elastic",
+    "onDemandPipelineSlug": "kibana-evals-on-demand-llm-evals",
+    "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
+    "pollIntervalMs": 30000,
+    "pollTimeoutMs": 10800000,
+    "retryOnFailure": true,
+    "defaultEvalSuites": [
+      "security-alert-triage",
+      "security-alerts-rag-regression",
+      "security-esql-generation-regression"
+    ],
+    "kibanaBranch": "main",
+    "triggerFullEval": false,
+    "detachPoll": true
+  },
+  "agentBuilderBaseline": {
+    "enabled": true,
+    "minContextWindow": 128000,
+    "minParameterCountBillions": 7,
+    "requireToolCalling": true,
+    "requireInstructVariant": true
+  },
+  "kibanaRepo": {
+    "url": "https://github.com/elastic/kibana.git",
+    "branch": "main",
+    "autoPull": true,
+    "clonePath": "/app/kibana-repo"
+  },
+  "kibanaConnector": {
+    "enabled": false,
+    "connectorNamePrefix": "vllm-",
+    "requestTimeoutMs": 30000
+  },
+  "smokeTest": {
+    "healthTimeoutMs": 10000,
+    "inferenceTimeoutMs": 30000,
+    "toolCallingTimeoutMs": 60000,
+    "maxRetries": 2,
+    "depth": "full"
+  }
+}
