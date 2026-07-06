@@ -1004,26 +1004,109 @@ class CloudRunProvider implements TunnelProvider_Impl {
 }
 
 /**
- * Placeholder for future GCP Load Balancer tunnel provider.
- * Will support native GCP Load Balancer integration for production use.
+ * GCP HTTPS Load Balancer provider for Tier-2 Buildkite weekly evals.
+ *
+ * Unlike the ephemeral tunnel providers (ngrok/cloudflared), the GCP LB is a
+ * static, always-on endpoint provisioned once by Terraform with a reserved IP.
+ * There is no process to spawn or supervise — the provider validates that the
+ * configured URL is reachable and returns it. `disconnect()` is a no-op
+ * because the LB persists across daemon restarts by design.
+ *
+ * Requires `tunnel.loadBalancerUrl` in config. When `loadBalancerApiKey` is
+ * set, the provider sends it as `Authorization: Bearer <key>` in the readiness
+ * probe so the LB (which authenticates via vLLM `--api-key`) accepts it.
  */
 class LoadBalancerProvider implements TunnelProvider_Impl {
-  async checkExisting(_localPort: number): Promise<TunnelInfo | null> {
-    throw new TunnelProviderNotAvailableError(
-      'load_balancer',
-      'GCP Load Balancer provider is not yet implemented. Use ngrok for now.',
-    );
+  private readonly logger;
+  private readonly publicUrl: string;
+  private readonly apiKey: string | undefined;
+
+  constructor(config: TunnelConfig, logLevel: string) {
+    this.logger = createLogger(logLevel);
+    if (!config.loadBalancerUrl) {
+      throw new TunnelProviderNotAvailableError(
+        'load_balancer',
+        'tunnel.loadBalancerUrl is required for the load_balancer provider. ' +
+          'Provision it via Terraform (deploy/gcp/) and set the URL in config.',
+      );
+    }
+    this.publicUrl = config.loadBalancerUrl;
+    this.apiKey = config.loadBalancerApiKey;
   }
 
-  async create(_localPort: number): Promise<TunnelInfo> {
-    throw new TunnelProviderNotAvailableError(
-      'load_balancer',
-      'GCP Load Balancer provider is not yet implemented. Use ngrok for now.',
-    );
+  async checkExisting(localPort: number): Promise<TunnelInfo | null> {
+    // The LB is always-on; "existing" = the URL is currently reachable.
+    const reachable = await this.isReachable();
+    if (!reachable) {
+      return null;
+    }
+    return {
+      publicUrl: this.publicUrl,
+      provider: 'load_balancer',
+      localPort,
+      establishedAt: new Date().toISOString(),
+      tunnelId: hostFromUrl(this.publicUrl),
+      region: null,
+    };
+  }
+
+  async create(localPort: number): Promise<TunnelInfo> {
+    await waitForLocalBackend(localPort);
+
+    const reachable = await this.isReachable();
+    if (!reachable) {
+      throw new TunnelError(
+        `GCP Load Balancer endpoint ${this.publicUrl} is not reachable. ` +
+          'Verify the LB backend service, URL map, and GPU VM health.',
+        'load_balancer',
+      );
+    }
+    this.logger.info('GCP Load Balancer endpoint verified', {
+      publicUrl: this.publicUrl,
+      localPort,
+    });
+    return {
+      publicUrl: this.publicUrl,
+      provider: 'load_balancer',
+      localPort,
+      establishedAt: new Date().toISOString(),
+      tunnelId: hostFromUrl(this.publicUrl),
+      region: null,
+    };
   }
 
   async disconnect(): Promise<void> {
-    // No-op for unimplemented provider
+    // No-op: the LB is a static GCP resource, not a process we own.
+    this.logger.debug('LoadBalancerProvider.disconnect() — no-op (LB is always-on)');
+  }
+
+  /**
+   * Probes `/v1/models` through the LB to confirm end-to-end reachability.
+   * Sends the API key when configured so the authenticated backend accepts it.
+   */
+  private async isReachable(): Promise<boolean> {
+    try {
+      const headers: Record<string, string> = {};
+      if (this.apiKey) {
+        headers['Authorization'] = `Bearer ${this.apiKey}`;
+      }
+      const res = await fetch(`${this.publicUrl}/v1/models`, {
+        headers,
+        signal: AbortSignal.timeout(5_000),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** Extracts the hostname from a URL for use as a stable tunnelId. */
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
   }
 }
 
@@ -1090,7 +1173,7 @@ export class TunnelService {
       case 'cloudrun':
         return new CloudRunProvider();
       case 'load_balancer':
-        return new LoadBalancerProvider();
+        return new LoadBalancerProvider(this.config, logLevel);
       default:
         throw new TunnelError(
           `Unknown tunnel provider: ${this.config.provider as string}`,
@@ -1247,7 +1330,11 @@ export class TunnelService {
       localPort: this.config.localPort,
     });
     this.currentTunnel = null;
-    if (this.config.provider === 'cloudflared' || this.config.provider === 'cloudflared_named') {
+    if (
+      this.config.provider === 'cloudflared' ||
+      this.config.provider === 'cloudflared_named' ||
+      this.config.provider === 'load_balancer'
+    ) {
       // Reuse-first: the tunnel URL is injected into in-flight CI builds, so it must NOT
       // be rotated while the tunnel process is still alive (a transient public-endpoint
       // blip must not orphan a running eval). connect()'s checkExisting() reattaches to

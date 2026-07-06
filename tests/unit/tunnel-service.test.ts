@@ -392,17 +392,28 @@ describe('TunnelService', () => {
   });
 
   describe('load_balancer provider', () => {
-    it('throws TunnelProviderNotAvailableError when trying to connect', async () => {
+    it('throws TunnelProviderNotAvailableError when loadBalancerUrl is missing', () => {
       const config = createDefaultTunnelConfig({
         enabled: true,
         provider: 'load_balancer',
         retryAttempts: 0,
       });
+      expect(() => new TunnelService({ config, logLevel: 'error' })).toThrow(
+        TunnelProviderNotAvailableError,
+      );
+    });
+
+    it('fails connect when the endpoint is unreachable', async () => {
+      const config = createDefaultTunnelConfig({
+        enabled: true,
+        provider: 'load_balancer',
+        retryAttempts: 0,
+        loadBalancerUrl: 'https://vllm-bench-marker.example.com',
+      });
       const service = new TunnelService({ config, logLevel: 'error' });
 
       const result = await service.connect();
       expect(result.success).toBe(false);
-      expect(result.error).toContain('not yet implemented');
     });
   });
 
