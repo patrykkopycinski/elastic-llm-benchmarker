@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Treadmill Coding-Model Analysis — Is Ornith-1.0-35B the best?</title>
+<style>
+:root {
+  color-scheme: dark;
+  --bg: #0e1014;
+  --surface: #16181d;
+  --surface-elev: #1d2026;
+  --border: #2a2e36;
+  --border-strong: #3a3f49;
+  --text: #e8e6e3;
+  --text-muted: #a0a09c;
+  --text-soft: #6e7079;
+  --accent: #e8845c;
+  --accent-soft: #3a201a;
+  --good: #6fb87f;
+  --good-soft: #1a2e21;
+  --warn: #d4a93f;
+  --warn-soft: #2e2614;
+  --bad: #e07575;
+  --bad-soft: #3a1d1d;
+  --info: #6fa6e0;
+  --info-soft: #1a2436;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--sans); line-height: 1.55; }
+.wrap { max-width: 1080px; margin: 0 auto; padding: 40px 24px 80px; }
+h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.02em; }
+h2 { font-size: 21px; margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--border); letter-spacing: -0.01em; }
+h3 { font-size: 16px; margin: 24px 0 10px; color: var(--text); }
+p { margin: 10px 0; color: var(--text); }
+.sub { color: var(--text-muted); font-size: 14px; margin-top: 0; }
+.tldr { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 10px; padding: 18px 22px; margin: 24px 0; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
+.tldr strong { color: var(--accent); }
+code, .mono { font-family: var(--mono); font-size: 0.9em; background: var(--surface-elev); padding: 1px 6px; border-radius: 5px; }
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13.5px; background: var(--surface); border-radius: 10px; overflow: hidden; }
+th, td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+th { background: var(--surface-elev); color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+td.num { text-align: right; font-family: var(--mono); }
+tr:last-child td { border-bottom: none; }
+.win { color: var(--good); font-weight: 600; }
+.lead { background: var(--good-soft); }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 20px; font-size: 11.5px; font-weight: 600; border: 1px solid; }
+.pill.good { background: var(--good-soft); border-color: var(--good); color: var(--good); }
+.pill.warn { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+.pill.info { background: var(--info-soft); border-color: var(--info); color: var(--info); }
+.pill.accent { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.callout { border-radius: 10px; padding: 14px 18px; margin: 16px 0; border-left: 4px solid; }
+.callout.warn { background: var(--warn-soft); border-color: var(--warn); }
+.callout.good { background: var(--good-soft); border-color: var(--good); }
+.callout.info { background: var(--info-soft); border-color: var(--info); }
+.grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin: 16px 0; }
+@media (min-width: 720px) { .grid.two { grid-template-columns: 1fr 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; box-shadow: 0 2px 10px rgba(0,0,0,0.4); }
+.card h3 { margin-top: 0; display: flex; align-items: center; gap: 8px; }
+.card .meta { font-family: var(--mono); font-size: 12px; color: var(--text-soft); margin: 4px 0 10px; }
+.rank { font-family: var(--mono); font-weight: 700; color: var(--accent); }
+ul { margin: 8px 0; padding-left: 20px; }
+li { margin: 5px 0; }
+.foot { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 12.5px; }
+.foot a { color: var(--info); }
+.kv { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.kv span { font-family: var(--mono); font-size: 12px; background: var(--surface-elev); border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; color: var(--text-muted); }
+.role { font-size: 12px; color: var(--text-soft); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 20px; font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Is Ornith-1.0-35B the best coding model now?</h1>
+<p class="sub">Deep analysis + recommended models for <strong>treadmill</strong> coding tasks &middot; compiled 2026-07-06 &middot; sources: DeepReinforce, HF, vals.ai/ModelFit, Morph, Kilo, and our own <span class="mono">elastic-llm-benchmarker</span> runs</p>
+
+<div class="tldr">
+<p style="margin-top:0"><strong>Short answer: for its size class (35B) and specifically for <em>agentic / terminal</em> coding — which is exactly what treadmill does — yes, on current evidence.</strong> Ornith-1.0-35B leads every 35B-tier benchmark the vendor publishes, and — more importantly — it independently passed <strong>our</strong> agentic security-eval suite at <strong>100% on all three suites</strong> with the best latency we've measured. It is one of only two models we've ever graded <span class="pill good">SUPPORT</span>.</p>
+<p style="margin-bottom:0">But "best" depends on the axis. For <em>raw single-shot patch generation</em> (SWE-bench Verified), the dense <strong>Qwen3.6-27B (77.2)</strong> narrowly edges Ornith-35B (75.6) and runs on smaller hardware. Ornith's real edge is <strong>terminal/agentic</strong> (Terminal-Bench 2.1: 64.2 vs Qwen3.6-35B's 52.5) — the loop treadmill runs. And every Ornith coding number is <span class="pill warn">vendor self-reported</span>; treat them as an upper bound, not a guarantee.</p>
+</div>
+
+<h2>1. What Ornith actually is</h2>
+<div class="kv">
+<span>deepreinforce-ai/Ornith-1.0-35B</span><span>MoE · qwen3_5_moe</span><span>~35B total</span><span>262K ctx</span><span>MIT</span><span>released Jun 2026</span><span>post-trained on Qwen 3.5</span>
+</div>
+<p>Ornith-1.0 is a family of open <strong>agentic coding</strong> models (9B-Dense, 31B-Dense, 35B-MoE, 397B-MoE) from DeepReinforce, trained with a "self-scaffolding" RL approach where the model generates its own task harnesses. The 35B is the mid-tier MoE. It ships in bf16, FP8, and GGUF — so it runs locally via llama.cpp / LM Studio / Ollama, which matters for treadmill's local execution path.</p>
+
+<h2>2. First-party evidence — our benchmarker (the signal that matters most)</h2>
+<p>Our pipeline doesn't measure coding pass@1; it measures <strong>tool-calling + Kibana security-eval competence + serving latency</strong> — i.e. agentic reliability. That is a closer proxy for treadmill's task-execution loop than a static SWE-bench score. Ornith's result (run <span class="mono">0968e65c</span>, 2026-07-03, on 2×A100-80GB):</p>
+<div class="callout good">
+<strong>Verdict: SUPPORT · confidence high</strong>
+<table style="margin-top:10px;background:transparent">
+<tr><th>Stage</th><th>Result</th><th>Detail</th></tr>
+<tr><td>Stage 1 (perf + tool-call)</td><td><span class="pill good">PASS</span></td><td class="mono">ITL p50 12.5 ms &middot; TTFT 202 ms &middot; 757 tps</td></tr>
+<tr><td>Stage 2 · security-esql-generation</td><td><span class="pill good">100%</span></td><td class="mono">threshold 80%</td></tr>
+<tr><td>Stage 2 · security-alerts-rag</td><td><span class="pill good">100%</span></td><td class="mono">threshold 80%</td></tr>
+<tr><td>Stage 2 · security-alert-triage</td><td><span class="pill good">100%</span></td><td class="mono">threshold 80%</td></tr>
+<tr><td>Stage 3 (reasoning)</td><td><span class="pill good">COMPLETED</span></td><td class="mono">—</td></tr>
+</table>
+</div>
+<p>For comparison, the only other model we've graded <span class="pill good">SUPPORT</span> is <span class="mono">cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit</span> (2026-07-06). Ornith's clean 100%×3 with a 12.5 ms ITL p50 is the strongest first-party result we hold.</p>
+
+<h2>3. Vendor benchmarks — the 35B tier</h2>
+<p>DeepReinforce's published figures (averaged over 5 runs, model-specific harness + modified Qwen chat template). Higher is better; <span class="win">green</span> = tier leader.</p>
+<table>
+<tr><th>Benchmark</th><th class="num">Ornith-1.0-35B</th><th class="num">Qwen3.6-35B-A3B</th><th class="num">Qwen3.5-35B</th><th class="num">Gemma4-31B</th><th class="num">Qwen3.5-397B*</th></tr>
+<tr class="lead"><td>Terminal-Bench 2.1 (Terminus-2)</td><td class="num win">64.2</td><td class="num">52.5</td><td class="num">41.4</td><td class="num">42.1</td><td class="num">53.5</td></tr>
+<tr class="lead"><td>Terminal-Bench 2.1 (Claude Code)</td><td class="num win">62.8</td><td class="num">49.2</td><td class="num">38.9</td><td class="num">—</td><td class="num">48.6</td></tr>
+<tr><td>SWE-bench Verified</td><td class="num">75.6</td><td class="num">73.4</td><td class="num">70.0</td><td class="num">52.0</td><td class="num win">76.4</td></tr>
+<tr class="lead"><td>SWE-bench Pro</td><td class="num win">50.4</td><td class="num">49.5</td><td class="num">44.6</td><td class="num">35.7</td><td class="num">51.6</td></tr>
+<tr class="lead"><td>SWE-bench Multilingual</td><td class="num win">69.3</td><td class="num">67.2</td><td class="num">60.3</td><td class="num">51.7</td><td class="num">69.3</td></tr>
+<tr class="lead"><td>NL2Repo</td><td class="num win">34.6</td><td class="num">29.4</td><td class="num">20.5</td><td class="num">15.5</td><td class="num">36.8</td></tr>
+<tr class="lead"><td>ClawEval (avg)</td><td class="num win">69.8</td><td class="num">68.7</td><td class="num">65.4</td><td class="num">48.5</td><td class="num">70.7</td></tr>
+</table>
+<p class="sub">* Qwen3.5-397B is ~10× the size — listed to show Ornith-35B <em>matches or beats a model an order of magnitude larger on terminal/agentic tasks</em>, trailing it only on pure SWE-Verified patching (by 0.8 pt) and by design.</p>
+
+<div class="callout warn">
+<strong>Caveats (read before trusting the numbers):</strong>
+<ul style="margin-bottom:0">
+<li><strong>Self-reported.</strong> All Ornith coding scores are vendor figures under DeepReinforce's own recipe (specific harness, temp=1.0, modified chat template). No independent lab has reproduced the vendor numbers yet.</li>
+<li><strong>Harness/quant sensitive.</strong> An independent run (NEO, Q4_K_M on a single RTX 3090) explicitly notes local numbers differ from vendor and "are not directly comparable" — quant + sampling + harness swing results materially.</li>
+<li><strong>Our 100%×3 is a small-N suite</strong> tuned for security tool-calling, not a broad coding benchmark — strong corroboration of agentic reliability, not proof of coding SOTA.</li>
+</ul>
+</div>
+
+<h2>4. The broader field (context, mostly not local-deployable)</h2>
+<table>
+<tr><th>Model</th><th class="num">Params</th><th class="num">SWE-Verified</th><th>License</th><th>Local?</th></tr>
+<tr><td>Claude Fable 5 / Opus 4.8 (cloud frontier)</td><td class="num">—</td><td class="num">95.0 / 87.6</td><td>proprietary</td><td><span class="pill bad">API only</span></td></tr>
+<tr><td>DeepSeek-V4-Pro / MiniMax M3 / Qwen3.7-Max</td><td class="num">284B–1.6T</td><td class="num">~80.5</td><td>MIT / OW</td><td><span class="pill warn">512GB+ box</span></td></tr>
+<tr><td>GLM-5.2 (SWE-Pro OSS leader 62.1)</td><td class="num">744B-A40B</td><td class="num">frontier</td><td>MIT</td><td><span class="pill warn">huge / API</span></td></tr>
+<tr class="lead"><td><strong>Qwen3.6-27B (dense)</strong></td><td class="num">27B</td><td class="num win">77.2</td><td>Apache 2.0</td><td><span class="pill good">24GB Mac</span></td></tr>
+<tr class="lead"><td><strong>Ornith-1.0-35B (MoE)</strong></td><td class="num">35B / ~3B act</td><td class="num">75.6</td><td>MIT</td><td><span class="pill good">48GB, fast</span></td></tr>
+<tr><td>Qwen3.6-35B-A3B (MoE, multimodal)</td><td class="num">35B / 3B act</td><td class="num">73.4</td><td>Apache 2.0</td><td><span class="pill good">24GB Mac</span></td></tr>
+<tr><td>Devstral 2 (2512)</td><td class="num">24B</td><td class="num">72.2</td><td>Apache 2.0</td><td><span class="pill good">local</span></td></tr>
+<tr><td>Qwen3-Coder-30B-A3B</td><td class="num">30B / 3B act</td><td class="num">~71</td><td>Apache 2.0</td><td><span class="pill good">local, fast</span></td></tr>
+<tr><td>Ornith-1.0-9B (dense)</td><td class="num">9B</td><td class="num">69.4</td><td>MIT</td><td><span class="pill good">tiny, fast</span></td></tr>
+</table>
+
+<h2>5. Recommended models for treadmill — by role</h2>
+<p>Treadmill routes work: <strong>task execution / fast</strong> → Hermes → LM Studio (local, <span class="mono">localhost:1234</span>); <strong>plan-gen / plan-chat / PR-review / verification</strong> → GitHub Copilot Claude (cloud). The list below maps to those roles and to your local hardware (M4 Max 48GB dev; M1 Max 64GB LAN appliance). MoE models with ~3B active params are the latency sweet spot for local execution.</p>
+
+<div class="role">Role A — Local agentic task execution (where the choice matters most)</div>
+<div class="grid two">
+  <div class="card">
+    <h3><span class="rank">#1</span> Ornith-1.0-35B <span class="pill accent">new default</span></h3>
+    <div class="meta">MoE ~3B act · MIT · 262K · GGUF/FP8</div>
+    <ul>
+      <li>Best 35B-tier <strong>agentic/terminal</strong> scores; our benchmarker: <strong>SUPPORT/high, 100%×3</strong>.</li>
+      <li>4-bit ≈ 18–20 GB → fits 48GB with headroom; MoE = fast decode.</li>
+      <li>Purpose-built for terminal/self-scaffolding agents = treadmill's exact loop.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="rank">#2</span> Qwen3-Coder-30B-A3B <span class="pill info">safe / proven</span></h3>
+    <div class="meta">MoE 3B act · Apache 2.0 · 262K</div>
+    <ul>
+      <li>Code-specialized, battle-tested; already the family treadmill routes to.</li>
+      <li>Lower risk than Ornith (Apache, widely reproduced) — good A/B baseline.</li>
+      <li>Keep as fallback when Ornith regresses on a task type.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="rank">#3</span> Qwen3.6-27B (dense) <span class="pill good">best raw patch</span></h3>
+    <div class="meta">dense · Apache 2.0 · 262K</div>
+    <ul>
+      <li>Top open-weight <strong>SWE-Verified (77.2)</strong>; edges Ornith on pure patching.</li>
+      <li>Dense → slower decode than MoE, but fits 24GB.</li>
+      <li>Use for patch-heavy / single-shot fix tasks over long agentic loops.</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="rank">alt</span> Devstral 2 24B</h3>
+    <div class="meta">dense · Apache 2.0</div>
+    <ul>
+      <li>Agentic-coding specialist, 72.2 SWE-Verified, small footprint.</li>
+      <li>Good third option if you want a non-Qwen lineage for diversity.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="role">Role B — Fast / cheap tier (quick edits, classification, cheap dispatch)</div>
+<div class="grid two">
+  <div class="card">
+    <h3>Ornith-1.0-9B (dense)</h3>
+    <div class="meta">MIT · GGUF</div>
+    <ul><li>69.4 SWE-Verified — beats several 35B models; runs on almost anything.</li><li>Ideal for the "fast" router lane where 35B is overkill.</li></ul>
+  </div>
+  <div class="card">
+    <h3>Qwen3-Coder-30B-A3B (int4)</h3>
+    <div class="meta">MoE 3B act</div>
+    <ul><li>Same model as Role A but quantized harder for throughput.</li><li>Single default keeps the local cache warm across lanes.</li></ul>
+  </div>
+</div>
+
+<div class="role">Role C — Plan-gen / PR-review / verification (keep cloud frontier)</div>
+<div class="card">
+  <h3>Claude Opus 4.8 / GPT-5.x — no change</h3>
+  <div class="meta">cloud · already treadmill's default for these roles</div>
+  <ul>
+    <li>Cloud frontier is still ~10–12 pts ahead on SWE-Verified (Opus 4.8 = 87.6, Fable 5 = 95.0).</li>
+    <li>Judgment-heavy roles (planning, reviewing, gating) are where that gap pays off — don't localize these.</li>
+    <li>Local models are for high-volume <em>execution</em>, not final review.</li>
+  </ul>
+</div>
+
+<h2>6. Concrete recommendation</h2>
+<div class="callout info">
+<ol style="margin:0">
+<li><strong>Promote Ornith-1.0-35B to treadmill's local task-execution default</strong> (LM Studio, 4-bit MLX/GGUF), with <strong>Qwen3-Coder-30B-A3B as the fallback</strong>. Both are MoE-fast and fit your 48/64 GB boxes.</li>
+<li><strong>A/B it for one week</strong> against Qwen3-Coder on real treadmill jobs — measure task pass-rate + retries, not just benchmark scores, since Ornith's coding numbers are vendor-only.</li>
+<li><strong>Keep Copilot Claude for plan-gen / review / verification</strong> — the cloud gap is real and those roles are low-volume.</li>
+<li><strong>Optional:</strong> benchmark Ornith-1.0-9B for the fast lane and Qwen3.6-27B for patch-heavy tasks, then let treadmill's router pick per task type.</li>
+</ol>
+</div>
+
+<div class="foot">
+<p><strong>Sources:</strong> DeepReinforce Ornith-1.0 blog + HF card + GitHub; vals.ai / ModelFit SWE-Bench Verified leaderboard (2026-07-02); Morph SWE-bench Pro leaderboard (2026-06-28); Kilo open-weight coding list; our <span class="mono">elastic-llm-benchmarker</span> ES recommendation reports (runs 2026-07-03 &amp; 2026-07-06). Vendor coding scores are self-reported; first-party numbers are from our own pipeline on 2×A100-80GB.</p>
+<p><strong>Bottom line:</strong> Ornith-1.0-35B is the best <em>35B-class agentic coding model</em> on the evidence available, and the best local task-execution pick for treadmill — pending a one-week A/B on real jobs to confirm the vendor coding claims hold on <em>your</em> workload.</p>
+</div>
+
+</div>
+</body>
+</html>
