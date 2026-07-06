@@ -8,6 +8,7 @@ import type { HFModelConfig } from './hardware-estimator.js';
 import type { ModelCandidateFilter } from './model-candidate-filter.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
+import { compileModelExcludeMatchers, findMatchingExcludePattern } from '../utils/model-exclude.js';
 
 /**
  * A model candidate enriched with trending and hardware-fit scores.
@@ -317,18 +318,11 @@ export class DiscoveryScheduler {
    * whole sweep.
    */
   private compileExcludePatterns(): RegExp[] {
-    const patterns = this.deps.config.excludeModelPatterns ?? [];
-    const compiled: RegExp[] = [];
-    for (const pattern of patterns) {
-      try {
-        compiled.push(new RegExp(pattern, 'i'));
-      } catch (err) {
-        this.logger.warn(`Discovery: invalid excludeModelPatterns entry "${pattern}", ignoring`, {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-    return compiled;
+    return compileModelExcludeMatchers(this.deps.config.excludeModelPatterns, (pattern, err) =>
+      this.logger.warn(`Discovery: invalid excludeModelPatterns entry "${pattern}", ignoring`, {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
   }
 
   private async scoreModels(
@@ -344,7 +338,7 @@ export class DiscoveryScheduler {
         // spending any HF request. Family supersession can't catch a stale
         // generation that surfaces alone (no newer sibling in the batch), so an
         // operator-tuned denylist enforces "focus on the most recent generation".
-        const excludedBy = excludeMatchers.find((re) => re.test(model.id));
+        const excludedBy = findMatchingExcludePattern(model.id, excludeMatchers);
         if (excludedBy) {
           this.logger.debug(
             `Skipping ${model.id}: matches excludeModelPatterns (${excludedBy.source}) — outdated generation`,

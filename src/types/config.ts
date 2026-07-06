@@ -742,11 +742,16 @@ export const discoverySchedulerConfigSchema = z.object({
    * batch-local and can't catch a stale generation when no newer sibling is in
    * the same sweep, so this denylist enforces "focus on the most recent
    * generation" deterministically. Set to [] to disable. Operators extend it as
-   * new generations land (e.g. add `qwen3` once Qwen4/Qwen3.6 is the target).
+   * new generations land.
+   *
+   * Note the trailing dash in `qwen3-`: it matches gen-3.0 editions
+   * (`qwen3-30b`, `qwen3-next-80b`, `qwen3-coder-*`) but NOT `qwen3.6-*` (the
+   * dot, not a dash, follows `qwen3`). Qwen3.6 (Apr 2026) is the current target
+   * generation, so all of Qwen3.0 is retired here while 3.6+ stays eligible.
    */
   excludeModelPatterns: z
     .array(z.string())
-    .default(['qwen2', 'qwen1', 'llama-2', 'llama2', 'codellama']),
+    .default(['qwen2', 'qwen1', 'qwen3-', 'llama-2', 'llama2', 'codellama']),
 });
 
 /**

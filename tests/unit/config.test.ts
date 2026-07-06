@@ -165,6 +165,10 @@ describe('loadConfig', () => {
       delete process.env['SSH_USERNAME'];
       delete process.env['SSH_PASSWORD'];
       delete process.env['SSH_PRIVATE_KEY_PATH'];
+      // This case asserts file-value fallback for logLevel, so any ambient
+      // LOG_LEVEL (e.g. leaked from an operator shell that sourced .env) must be
+      // cleared or it would override the file's 'debug' and flake the test.
+      delete process.env['LOG_LEVEL'];
 
       const config = loadConfig(undefined, { skipDotenv: true, configPath });
 

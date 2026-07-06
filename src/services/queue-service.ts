@@ -468,6 +468,23 @@ export class QueueService {
   }
 
   /**
+   * Retire an in-flight (or pending) entry as `cancelled`, fenced by the
+   * caller's lease token. Unlike {@link fail}, a cancel is NOT an evaluation:
+   * the model never ran and incurred no CI-eval/EIS cost, so `cancelled` entries
+   * are excluded from the daily cost cap ({@link countTerminalSince}) and from
+   * discovery de-dup ({@link findRecentTerminalModelIds}). Used by the
+   * scheduler's recency guard to retire denylisted (outdated-generation) models
+   * without spending daily budget on a model that was never benchmarked.
+   */
+  async cancelActive(
+    id: string,
+    reason: string,
+    leaseToken: string,
+  ): Promise<{ applied: boolean; reason?: TerminalWriteReason }> {
+    return this.writeTerminalFenced(id, 'cancelled', reason, leaseToken);
+  }
+
+  /**
    * Fenced terminal write — the root-cause fix for the spurious-`failed` bug.
    *
    * Reads the current doc, then:

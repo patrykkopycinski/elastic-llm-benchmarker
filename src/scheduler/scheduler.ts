@@ -20,6 +20,7 @@ import type { Stage2Result } from './pipeline-state.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
 import { classifyFailure } from '../utils/failure-classifier.js';
+import { compileModelExcludeMatchers, findMatchingExcludePattern } from '../utils/model-exclude.js';
 import { VllmPublicEndpointResolver } from '../services/vllm-public-endpoint.js';
 import { CiEvalInfrastructureGuard } from '../services/ci-eval-infrastructure-guard.js';
 import { resolveCompletedEvalSuites } from '../services/ci-eval-resume.js';
@@ -235,6 +236,49 @@ export class Scheduler {
     return reached;
   }
 
+  /**
+   * Recency backstop for the queue. If `entry` targets a model matching
+   * `discoveryScheduler.excludeModelPatterns` AND was not force-enqueued, mark
+   * it `failed` (fenced by `leaseToken`) and return true so the caller skips it.
+   *
+   * Discovery already refuses to queue denylisted models, so this only fires for
+   * (a) a leftover entry queued before its pattern was added and (b) an in-flight
+   * entry a restart would otherwise resume. Force-enqueued entries are the
+   * operator's explicit override and are always honored.
+   */
+  private async retireIfRecencyExcluded(
+    entry: QueueEntry,
+    leaseToken: string | null,
+  ): Promise<boolean> {
+    if (entry.metadata?.force === true) return false;
+    const matchers = compileModelExcludeMatchers(this.config?.discoveryScheduler?.excludeModelPatterns);
+    const matched = findMatchingExcludePattern(entry.modelId, matchers);
+    if (!matched) return false;
+
+    this.logger.warn(
+      'Scheduler: retiring queue entry — model matches excludeModelPatterns (outdated generation); enqueue with --force to override',
+      { queueEntryId: entry.id, modelId: entry.modelId, pattern: matched.source, status: entry.status },
+    );
+    const reason = `Skipped: matches excludeModelPatterns (${matched.source}) — outdated generation`;
+    // Retire as `cancelled` (not `failed`): a denylist skip never ran and
+    // incurred no CI-eval/EIS cost, so it must not consume daily cost-cap budget
+    // or block re-discovery. `cancelled` is excluded from both.
+    if (leaseToken) {
+      const res = await this.queueService.cancelActive(entry.id, reason, leaseToken);
+      if (!res.applied) {
+        this.logger.warn('Scheduler: recency-excluded entry not retired cleanly', {
+          queueEntryId: entry.id,
+          reason: res.reason,
+        });
+      }
+    } else {
+      // No lease held (unexpected post claim/adopt): fall back to an unfenced
+      // admin status write so the entry still leaves the active set.
+      await this.queueService.updateStatus(entry.id, 'cancelled');
+    }
+    return true;
+  }
+
   private async poll(): Promise<void> {
     if (this.shuttingDown) return;
     await this.heartbeatActiveEntries();
@@ -262,6 +306,14 @@ export class Scheduler {
         // keeps the entry fresh (prevents a concurrent reclaim to `pending`).
         const adoptedToken = (await this.queueService.adoptEntry(inFlight.id)) ?? inFlight.leaseToken;
         if (adoptedToken) this.entryLeases.set(inFlight.id, adoptedToken);
+        // Recency backstop: never resume a Stage-1/CI-eval run for a model the
+        // operator has since denylisted. Discovery cannot un-queue an already
+        // in-flight entry, so a restart would otherwise redeploy an outdated
+        // model. `--force`-enqueued entries are honored.
+        if (await this.retireIfRecencyExcluded(inFlight, adoptedToken ?? null)) {
+          this.entryLeases.delete(inFlight.id);
+          return;
+        }
         this.activeRuns++;
         this.entryInProcess.add(inFlight.id);
         this.processEntry(inFlight, { resume: true }).finally(() => {
@@ -288,6 +340,13 @@ export class Scheduler {
       if (!entry) return;
 
       if (entry.leaseToken) this.entryLeases.set(entry.id, entry.leaseToken);
+      // Recency backstop: retire a leftover pending entry whose model was
+      // denylisted after it was queued (discovery already refuses to enqueue
+      // such models). `--force`-enqueued entries are honored.
+      if (await this.retireIfRecencyExcluded(entry, entry.leaseToken)) {
+        this.entryLeases.delete(entry.id);
+        return;
+      }
       this.activeRuns++;
       this.entryInProcess.add(entry.id);
 

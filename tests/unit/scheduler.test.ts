@@ -101,6 +101,7 @@ describe('Scheduler', () => {
       claim: vi.fn().mockResolvedValue(null),
       complete: vi.fn().mockResolvedValue({ applied: true }),
       fail: vi.fn().mockResolvedValue({ applied: true }),
+      cancelActive: vi.fn().mockResolvedValue({ applied: true }),
       heartbeat: vi.fn().mockResolvedValue(true),
       adoptEntry: vi.fn().mockResolvedValue('adopted-token'),
       countTerminalSince: vi.fn().mockResolvedValue(0),
@@ -293,6 +294,104 @@ describe('Scheduler', () => {
       await scheduler.stop();
 
       expect(dequeueMock).toHaveBeenCalled();
+      expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('recency exclude guard', () => {
+    const configWithExclude = () =>
+      ({
+        logLevel: 'error',
+        costCaps: { enabled: false, maxModelsPerDay: 20 },
+        retry: { enabled: true, maxInfraRetries: 2, maxResourceFitRetries: 1 },
+        discoveryScheduler: { excludeModelPatterns: ['qwen2', 'llama-2'] },
+      }) as never;
+
+    const qwen25Entry: QueueEntry = {
+      ...baseEntry,
+      id: 'entry-qwen25',
+      modelId: 'Qwen/Qwen2.5-32B-Instruct-AWQ',
+      leaseToken: 'lease-q',
+    };
+
+    it('retires a leftover pending entry whose model is denylisted (no Stage 1)', async () => {
+      dequeueMock.mockResolvedValueOnce(qwen25Entry);
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        configWithExclude(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(stage1Worker.execute).not.toHaveBeenCalled();
+      // Retired as `cancelled` (not `failed`) so it never counts toward the
+      // daily cost cap or blocks re-discovery — a denylist skip is not an eval.
+      expect(queueService.cancelActive).toHaveBeenCalledWith(
+        qwen25Entry.id,
+        expect.stringContaining('excludeModelPatterns'),
+        'lease-q',
+      );
+    });
+
+    it('retires an in-flight denylisted entry on resume instead of redeploying', async () => {
+      getCurrentMock.mockResolvedValue({ ...qwen25Entry, status: 'benchmarking' });
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        configWithExclude(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(stage1Worker.execute).not.toHaveBeenCalled();
+      // Fenced by the ADOPTED lease token (adoptEntry mock returns 'adopted-token').
+      expect(queueService.cancelActive).toHaveBeenCalledWith(
+        qwen25Entry.id,
+        expect.stringContaining('excludeModelPatterns'),
+        'adopted-token',
+      );
+    });
+
+    it('honors --force: a denylisted but force-enqueued entry still runs', async () => {
+      dequeueMock.mockResolvedValueOnce({ ...qwen25Entry, metadata: { force: true } });
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+        configWithExclude(),
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retire when no excludeModelPatterns are configured', async () => {
+      // Base scheduler from beforeEach has no config → guard is a no-op.
+      dequeueMock.mockResolvedValueOnce(qwen25Entry);
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
       expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
     });
   });
