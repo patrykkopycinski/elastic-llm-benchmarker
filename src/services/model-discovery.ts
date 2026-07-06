@@ -67,6 +67,11 @@ const DEFAULT_TOOL_CALLING_WHITELIST = new Set([
   'qwen2_moe',
   'qwen3',
   'qwen3_moe',
+  // qwen3_5 / qwen3_5_moe = the Qwen3.6 generation (multimodal image-text-to-text
+  // but text/tool-calling capable — Ornith-1.0 is post-trained on it). Included so
+  // discovery re-surfaces the current-gen models auto, not only via manual enqueue.
+  'qwen3_5',
+  'qwen3_5_moe',
   'mistral',
   'mixtral',
 ]);
@@ -90,6 +95,8 @@ const COMPATIBLE_ARCHITECTURES = new Set([
   'qwen2_moe',
   'qwen3',
   'qwen3_moe',
+  'qwen3_5',
+  'qwen3_5_moe',
   'gemma',
   'gemma2',
   'phi',

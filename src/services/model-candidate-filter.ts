@@ -123,6 +123,12 @@ const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
   qwen: 'hermes',
   qwen2: 'hermes',
   qwen2_moe: 'hermes',
+  qwen3: 'hermes',
+  qwen3_moe: 'hermes',
+  // Qwen3.6 generation (multimodal-capable; text/tool-calling served fine by
+  // vLLM — verified with Ornith-1.0-35B qwen3_5_moe SUPPORT run).
+  qwen3_5: 'hermes',
+  qwen3_5_moe: 'hermes',
   // Mistral-native tool calling
   mistral: 'mistral',
   mixtral: 'mistral',
@@ -141,6 +147,10 @@ const VLLM_SUPPORTED_ARCHITECTURES = new Set([
   'qwen',
   'qwen2',
   'qwen2_moe',
+  'qwen3',
+  'qwen3_moe',
+  'qwen3_5',
+  'qwen3_5_moe',
   'gemma',
   'gemma2',
   'phi',
