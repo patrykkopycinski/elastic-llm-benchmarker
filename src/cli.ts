@@ -34,6 +34,10 @@ import { Scheduler } from './scheduler/scheduler.js';
 import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate, Stage3WorkerImpl } from './worker/index.js';
 import { KibanaRepoService } from './services/kibana-repo-service.js';
 import { EvalSuiteRunner } from './services/eval-suite-runner.js';
+import {
+  resolveEvalTierFromConfig,
+  shouldUseLocalStage2,
+} from './services/eval-tier-selector.js';
 import { Lockfile } from './utils/lockfile.js';
 import { GpuVmLeaseService } from './services/gpu-vm-lease.js';
 import { SSHClientPool } from './services/ssh-client.js';
@@ -1657,9 +1661,21 @@ if (_binaryName === 'benchmarker-queue') {
 
       // ciEvalsEnabled computed above for startup recovery
 
-      // Optionally create Stage 2 worker (local Kibana clone path — skipped when CI evals are enabled)
+      // Resolve the eval tier: local-only (Tier-1 in-VPC), Buildkite weekly
+      // (Tier-2), or local-then-weekly (Tier-1 gates Tier-2). When
+      // evalTier === 'local', the local stage2-worker runs even if CI evals
+      // are configured — this is the GCP autonomous default.
+      const evalTier = resolveEvalTierFromConfig(
+        config,
+        ciEvalsEnabled && (enableStage2 || config.enableStage2),
+      );
+      const useLocalStage2 = shouldUseLocalStage2(evalTier);
+
+      // Optionally create Stage 2 worker (local Kibana clone path).
+      // Instantiated when the resolved tier calls for local evals, regardless
+      // of whether Buildkite CI evals are also wired.
       const stage2Worker =
-        (enableStage2 || config.enableStage2) && !ciEvalsEnabled
+        (enableStage2 || config.enableStage2) && useLocalStage2
           ? new Stage2WorkerImpl({
               config,
               gate: new Stage2Gate(config),
@@ -1671,9 +1687,11 @@ if (_binaryName === 'benchmarker-queue') {
           : undefined;
 
       if (stage2Worker) {
-        logger.info('Stage 2 local eval pipeline enabled');
-      } else if ((enableStage2 || config.enableStage2) && ciEvalsEnabled) {
-        logger.info('Stage 2 uses Buildkite Kibana CI evals (local eval-suite-runner disabled)');
+        logger.info('Stage 2 local eval pipeline enabled', { evalTier });
+      } else if (evalTier === 'buildkiteWeekly') {
+        logger.info('Stage 2 uses Buildkite Kibana CI evals only (local eval-suite-runner disabled)', { evalTier });
+      } else if ((enableStage2 || config.enableStage2) && evalTier === 'none') {
+        logger.info('Stage 2 disabled (no eval tier resolved)', { evalTier });
       }
 
       // Optionally create Stage 3 worker

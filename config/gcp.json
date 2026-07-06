@@ -48,6 +48,7 @@
     "maxSleepIntervalMs": 300000
   },
   "enableStage2": true,
+  "evalTier": "local",
   "discoveryScheduler": {
     "enabled": true,
     "intervalMinutes": 60
