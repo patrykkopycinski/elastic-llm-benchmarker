@@ -1,0 +1,23 @@
+# ─── Example terraform.tfvars ─────────────────────────────────────────────────
+# Copy to terraform.tfvars and fill in real values. terraform.tfvars is gitignored.
+# Never commit real credentials — use `terraform import` or `gcloud secrets` for rotation.
+
+project_id             = "your-gcp-project-id"
+region                 = "us-central1"
+zone                   = "us-central1-a"
+gpu_machine_type       = "a2-ultragpu-2g"
+gpu_count              = 2
+controller_machine_type = "e2-small"
+
+# SSH public key for controller→GPU VM SSH access
+ssh_public_key_path = "~/.ssh/id_ed25519.pub"
+
+# Domain for the HTTPS LB (A-record must point to the reserved IP output)
+dns_domain = "vllm-benchmarker.example.com"
+
+# Secrets — injected via Secret Manager at runtime
+vllm_api_key        = "your-vllm-api-key"
+es_api_key          = "your-elastic-serverless-api-key"
+es_url              = "https://your-cluster.es.us-central1.gcp.elastic-cloud.com:443"
+hf_token            = "hf_your-huggingface-token"
+buildkite_api_token = "bkua_your-buildkite-api-token"

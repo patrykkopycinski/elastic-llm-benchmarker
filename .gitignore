@@ -4,6 +4,17 @@ node_modules/
 # Build output
 dist/
 
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+!*.tfstate.template
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+deploy/gcp/.terraform.tfstate.lock.info
+
 # Environment variables
 .env
 .env.local
