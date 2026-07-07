@@ -469,6 +469,19 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     message: string,
     env: Record<string, string>,
   ): Promise<BuildkiteBuildResponse> {
+    // Local-first guardrail: Buildkite triggers are reserved for sanctioned promotion
+    // runs off `main` only. Iteration/verification must happen via the local Stage-2
+    // path (kbn-evals / run-local-matrix-suite.sh) instead of feature-branch CI builds.
+    // Use `config/promote-weekly.json` (kibanaBranch: main) for an actual promotion.
+    if (this.config.kibanaBranch && this.config.kibanaBranch !== 'main') {
+      throw new Error(
+        `Refusing to trigger Buildkite pipeline "${pipelineSlug}" against branch ` +
+          `"${this.config.kibanaBranch}". Buildkite is opt-in and reserved for promotion ` +
+          `runs off main only — use the local Stage-2 path (config/local.json, ` +
+          `run-local-matrix-suite.sh) for iteration and verification instead.`,
+      );
+    }
+
     const url = `${this.apiBase}/pipelines/${pipelineSlug}/builds`;
     const body = JSON.stringify({
       commit: 'HEAD',

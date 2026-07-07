@@ -173,6 +173,24 @@ The CLI has two binaries that share the same entry point (`src/cli.ts`):
 | `HUGGINGFACE_TOKEN` | For discovery | HuggingFace API token |
 | `BUILDKITE_API_TOKEN` | For CI evals | Buildkite REST API token |
 | `ANTHROPIC_API_KEY` | For Stage 3 | LLM reasoning API key |
+
+## Local-first eval iteration (default)
+
+`config/local.json` is local-first by default: `evalTier: "local"`, `enableStage2: true`, `buildkite.enabled: false`. Stage 2 runs `@kbn/evals` suites directly against a local/self-hosted Kibana instance, which can point at **EIS, LiteLLM, or vLLM** endpoints depending on how you've wired `stage2Local` / `kibanaConnector` — whichever is available in your local setup. No Buildkite build is triggered for day-to-day iteration or verification, including verification of changes to the weekly suites.
+
+`buildkite-eval-trigger.ts` also enforces this at the code level: any attempt to POST a Buildkite build when `buildkite.kibanaBranch !== "main"` throws instead of silently triggering CI against a work-in-progress branch. This guard is independent from `kibanaRepo.branch` / `buildkite.kibanaBranch` used for local Stage-2 checkouts (see below) — it only fires on the actual Buildkite-trigger code path.
+
+**Temporary branch note:** `config/local.json`'s `kibanaRepo.branch` and `buildkite.kibanaBranch` are currently pinned to `fix/weekly-evals-matrix` ([elastic/kibana#274606](https://github.com/elastic/kibana/pull/274606)) so local Stage-2 runs pick up in-flight eval/matrix fixes. **Revert both back to `main` once that PR merges.** `config/default.json` already defaults to `main` and is unaffected.
+
+### Promoting to Buildkite (opt-in only)
+
+Buildkite (`kibana-evals-on-demand-llm-evals` / `kibana-evals-weekly-llm-evals`) is reserved for a sanctioned promotion run once local verification has passed — never for iteration. To run one:
+
+```bash
+npx tsx src/cli.ts start --config config/promote-weekly.json --ci-evals
+```
+
+`config/promote-weekly.json` sets `evalTier: "buildkite-weekly"`, `buildkite.enabled: true`, and `kibanaBranch: "main"` explicitly. Don't loosen the `main`-branch requirement here — that's what the `buildkite-eval-trigger.ts` guard enforces.
 | `ES_GOLDEN_API_KEY` | For forwarding | Golden cluster API key |
 
 ## Elasticsearch Indices

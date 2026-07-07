@@ -6,6 +6,7 @@ Production deployment and operations guide for elastic-llm-benchmarker.
 
 - [Prerequisites](#prerequisites)
 - [Initial Setup](#initial-setup)
+- [Local-First Eval Iteration](#local-first-eval-iteration)
 - [Starting the Service](#starting-the-service)
 - [Stopping the Service](#stopping-the-service)
 - [Health Monitoring](#health-monitoring)
@@ -94,9 +95,9 @@ npx tsx src/cli.ts health-check --config config/local.json --format json
 
 Expected output: all checks pass with `"ok": true`.
 
-### 5. (Optional) Set up Buildkite CI evals
+### 5. (Optional, opt-in only) Set up Buildkite CI evals
 
-Add to your config:
+Buildkite is **not** part of the default iteration loop — see [Local-First Eval Iteration](#local-first-eval-iteration) below. Only set this up if you're preparing a sanctioned promotion run:
 
 ```jsonc
 {
@@ -107,10 +108,44 @@ Add to your config:
     "onDemandPipelineSlug": "kibana-evals-on-demand",
     "weeklyPipelineSlug": "kibana-evals-weekly-llm-evals",
     "retryOnFailure": true,
-    "triggerFullEval": false
+    "triggerFullEval": false,
+    "kibanaBranch": "main"
   }
 }
 ```
+
+`kibanaBranch` must be `"main"` — `buildkite-eval-trigger.ts` throws before POSTing a build otherwise. Prefer using `config/promote-weekly.json` as-is rather than hand-rolling this block.
+
+---
+
+## Local-First Eval Iteration
+
+**Default posture: everything runs locally. Buildkite is opt-in, promotion-only.**
+
+Day-to-day EDD and benchmarker iteration — including verifying fixes to the weekly eval suites — should run against a local or self-hosted Kibana instance pointed at local **EIS, LiteLLM, or vLLM** endpoints. This is `config/local.json`'s default (`evalTier: "local"`, `enableStage2: true`, `buildkite.enabled: false`):
+
+```bash
+# Local Stage-2 iteration (no Buildkite involved)
+npx tsx src/cli.ts start --config config/local.json --stage2
+```
+
+If you're iterating on the matrix/weekly suites specifically from the `agent-builder-skill-dev-cursor-plugin` side, use its local runner instead of triggering Buildkite:
+
+```bash
+./scripts/run-local-matrix-suite.sh run-critical
+```
+
+**Why:** `kibana-evals-on-demand-llm-evals` and `kibana-evals-weekly-llm-evals` are costly shared CI resources. Triggering them per-iteration (especially from feature/WIP branches) wastes CI capacity and slows feedback loops versus a local run. The weekly Buildkite pipeline is no longer auto-triggered for development purposes — only for the sanctioned promotion step below.
+
+**Temporary branch pin:** `config/local.json` currently points `kibanaRepo.branch` / `buildkite.kibanaBranch` at `fix/weekly-evals-matrix` ([elastic/kibana#274606](https://github.com/elastic/kibana/pull/274606)) so local runs pick up in-flight matrix fixes. Revert both to `main` once that PR merges. `config/default.json` is unaffected and already defaults to `main`.
+
+**Promoting to Buildkite:** once local verification passes, run the explicit opt-in promotion config — never the default:
+
+```bash
+npx tsx src/cli.ts start --config config/promote-weekly.json --ci-evals
+```
+
+`buildkite-eval-trigger.ts` enforces `kibanaBranch === "main"` for any actual Buildkite POST, independent of whichever branch `config/local.json` uses for local Stage-2 checkouts — so a misconfigured local branch can never accidentally leak into a real CI trigger.
 
 ---
 

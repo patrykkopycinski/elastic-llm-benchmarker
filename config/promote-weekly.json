@@ -1,0 +1,13 @@
+{
+  "$schema": "../src/types/config.ts",
+  "_comment": "Opt-in only. Use `--config config/promote-weekly.json` to run a sanctioned Buildkite promotion build. Never use this for iteration/verification — use config/local.json + run-local-matrix-suite.sh for that.",
+  "evalTier": "buildkite-weekly",
+  "enableStage2": false,
+  "buildkite": {
+    "enabled": true,
+    "kibanaBranch": "main"
+  },
+  "kibanaRepo": {
+    "branch": "main"
+  }
+}

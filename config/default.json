@@ -80,7 +80,7 @@
       "security-alerts-rag-regression",
       "security-esql-generation-regression"
     ],
-    "kibanaBranch": "fix/weekly-evals-matrix",
+    "kibanaBranch": "main",
     "triggerFullEval": false,
     "detachPoll": true
   },
