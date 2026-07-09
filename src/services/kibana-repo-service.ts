@@ -99,7 +99,11 @@ export class KibanaRepoService {
         return;
       }
 
-      await execFilePromise('git', ['fetch', 'origin', branch], {
+      // --depth 1 matches the initial clone() above. Without it, fetching a
+      // branch on an already-shallow repo forces git to negotiate full
+      // ancestry with the remote instead of staying shallow — turning a
+      // ~5s fetch into a 120s+ timeout on large repos like kibana.
+      await execFilePromise('git', ['fetch', 'origin', branch, '--depth', '1'], {
         cwd: repoPath,
         timeout: 120_000,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },

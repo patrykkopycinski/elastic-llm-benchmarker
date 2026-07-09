@@ -141,7 +141,7 @@ describe('KibanaRepoService', () => {
         (call) => call[0] === 'git' && call[1]?.[0] !== 'rev-parse',
       );
       expect(gitCalls).toHaveLength(3);
-      expect(gitCalls[0]?.[1]).toEqual(['fetch', 'origin', 'main']);
+      expect(gitCalls[0]?.[1]).toEqual(['fetch', 'origin', 'main', '--depth', '1']);
       expect(gitCalls[1]?.[1]).toEqual(['checkout', 'main']);
       expect(gitCalls[2]?.[1]).toEqual(['pull', '--ff-only', 'origin', 'main']);
     });
