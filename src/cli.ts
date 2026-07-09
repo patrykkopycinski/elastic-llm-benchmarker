@@ -32,8 +32,10 @@ import { ResultsStore } from './services/results-store.js';
 import { QueueService } from './services/queue-service.js';
 import { Scheduler } from './scheduler/scheduler.js';
 import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate, Stage3WorkerImpl } from './worker/index.js';
+import { createBatchStage2Worker } from './worker/batch-stage2-worker.js';
 import { KibanaRepoService } from './services/kibana-repo-service.js';
 import { EvalSuiteRunner } from './services/eval-suite-runner.js';
+import { LocalBatchEvalRunner } from './services/local-batch-eval-runner.js';
 import {
   resolveEvalTierFromConfig,
   shouldUseLocalStage2,
@@ -1674,16 +1676,26 @@ if (_binaryName === 'benchmarker-queue') {
       // Optionally create Stage 2 worker (local Kibana clone path).
       // Instantiated when the resolved tier calls for local evals, regardless
       // of whether Buildkite CI evals are also wired.
+      //
+      // When stage2Local.useBatchRunner is enabled, delegate to the skill-dev
+      // plugin's run-security-evals-batch.sh instead of the single-suite
+      // eval-suite-runner. The batch runner boots parallel Scout stacks with
+      // the merged evals_security_all config and two-stage EIS connector boot.
       const stage2Worker =
         (enableStage2 || config.enableStage2) && useLocalStage2
-          ? new Stage2WorkerImpl({
-              config,
-              gate: new Stage2Gate(config),
-              repoService: new KibanaRepoService({ config, logger }),
-              evalRunner: new EvalSuiteRunner({ esStore: resultsStore, logger }),
-              resultsStore,
-              logger,
-            })
+          ? config.stage2Local.useBatchRunner
+            ? (() => {
+                const batchRunner = new LocalBatchEvalRunner(config.stage2Local, logger);
+                return createBatchStage2Worker({ config, gate: new Stage2Gate(config), batchRunner, resultsStore, logger });
+              })()
+            : new Stage2WorkerImpl({
+                config,
+                gate: new Stage2Gate(config),
+                repoService: new KibanaRepoService({ config, logger }),
+                evalRunner: new EvalSuiteRunner({ esStore: resultsStore, logger }),
+                resultsStore,
+                logger,
+              })
           : undefined;
 
       if (stage2Worker) {

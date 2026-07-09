@@ -804,6 +804,28 @@ export const stage2LocalConfigSchema = z.object({
     ]),
   /** Per-suite timeout (ms). Defaults to 1h — kbn-evals are long. */
   suiteTimeoutMs: z.number().int().positive().default(3_600_000),
+  /**
+   * When true, Stage 2 delegates to `run-security-evals-batch.sh` from the
+   * skill-dev plugin instead of running suites one-by-one via
+   * `node scripts/evals.js run`. The batch runner boots parallel Scout stacks
+   * with the merged `evals_security_all` config set, two-stage EIS connector
+   * boot, and per-worker ES isolation — far faster and more stable than the
+   * single-stack single-suite path for the full security suite set.
+   *
+   * Requires `skillDevPluginDir` to point at a checkout of the
+   * agent-builder-skill-dev plugin.
+   */
+  useBatchRunner: z.boolean().default(false),
+  /**
+   * Path to the skill-dev plugin checkout (contains scripts/run-security-evals-batch.sh).
+   * Only used when `useBatchRunner` is true.
+   */
+  skillDevPluginDir: z.string().optional(),
+  /**
+   * Number of parallel workers for the batch runner. Each worker boots its own
+   * isolated Scout+ES stack. Only used when `useBatchRunner` is true.
+   */
+  batchWorkers: z.number().int().positive().default(2),
 });
 
 /**
