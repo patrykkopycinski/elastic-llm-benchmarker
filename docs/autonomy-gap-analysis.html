@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>elastic-llm-benchmarker — 24/7 Autonomy Gap Analysis</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0e1014;
+    --surface: #16181d;
+    --surface-elev: #1d2026;
+    --border: #2a2e36;
+    --border-strong: #3a3f49;
+    --text: #e8e6e3;
+    --text-muted: #a0a09c;
+    --text-soft: #6e7079;
+    --accent: #e8845c;
+    --accent-soft: #3a201a;
+    --good: #6fb87f;
+    --good-soft: #1a2e21;
+    --warn: #d4a93f;
+    --warn-soft: #2e2614;
+    --bad: #e07575;
+    --bad-soft: #3a1d1d;
+    --info: #6fa6e0;
+    --info-soft: #1a2436;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    line-height: 1.6;
+    font-size: 15px;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 48px 32px 96px; }
+  header { border-bottom: 1px solid var(--border); padding-bottom: 28px; margin-bottom: 40px; }
+  h1 { font-size: 30px; margin: 0 0 8px; letter-spacing: -0.5px; }
+  .subtitle { color: var(--text-muted); font-size: 16px; margin: 0; }
+  .meta { color: var(--text-soft); font-size: 13px; margin-top: 14px; font-family: var(--mono); }
+  h2 {
+    font-size: 21px; margin: 48px 0 18px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border); letter-spacing: -0.3px;
+  }
+  h3 { font-size: 16px; margin: 28px 0 10px; color: var(--text); }
+  p { margin: 0 0 14px; color: var(--text); }
+  code {
+    font-family: var(--mono); font-size: 0.86em;
+    background: var(--surface-elev); padding: 2px 6px; border-radius: 4px;
+    color: #d9c9a8; border: 1px solid var(--border);
+  }
+  a { color: var(--info); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 24px 0; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 18px 20px;
+  }
+  .card .num { font-size: 30px; font-weight: 700; letter-spacing: -1px; }
+  .card .lbl { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+  .card.good .num { color: var(--good); }
+  .card.warn .num { color: var(--warn); }
+  .card.bad .num { color: var(--bad); }
+  .card.info .num { color: var(--info); }
+  table { width: 100%; border-collapse: collapse; margin: 18px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  tbody tr:hover { background: var(--surface); }
+  td.mono, code { font-family: var(--mono); }
+  .pill {
+    display: inline-block; padding: 2px 10px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+  }
+  .pill.done { background: var(--good-soft); color: var(--good); border: 1px solid var(--good); }
+  .pill.partial { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+  .pill.missing { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+  .pill.p0 { background: var(--bad-soft); color: var(--bad); border: 1px solid var(--bad); }
+  .pill.p1 { background: var(--warn-soft); color: var(--warn); border: 1px solid var(--warn); }
+  .pill.p2 { background: var(--info-soft); color: var(--info); border: 1px solid var(--info); }
+  .callout {
+    border-left: 4px solid var(--accent); background: var(--accent-soft);
+    padding: 14px 18px; border-radius: 0 8px 8px 0; margin: 20px 0;
+  }
+  .callout.good { border-left-color: var(--good); background: var(--good-soft); }
+  .callout.bad { border-left-color: var(--bad); background: var(--bad-soft); }
+  .callout.info { border-left-color: var(--info); background: var(--info-soft); }
+  .callout strong { color: var(--text); }
+  .gap {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 22px 24px; margin: 18px 0;
+  }
+  .gap-head { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; flex-wrap: wrap; }
+  .gap-head h3 { margin: 0; }
+  .gap .fix {
+    background: var(--surface-elev); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 16px; margin-top: 12px; font-size: 14px;
+  }
+  .gap .fix .fixlbl { color: var(--good); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+  ul { margin: 8px 0 14px; padding-left: 22px; }
+  li { margin: 4px 0; }
+  .muted { color: var(--text-soft); font-size: 13px; }
+  footer { margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--text-soft); font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>24/7 Autonomy Gap Analysis</h1>
+  <p class="subtitle">What stands between <code>elastic-llm-benchmarker</code> and unattended, self-sustaining model benchmarking.</p>
+  <p class="meta">Generated 2026-07-04 · scope: discovery → queue → benchmark → CI-eval → Stage&nbsp;3 → forward</p>
+</header>
+
+<section>
+  <h2>Executive summary</h2>
+  <p>
+    The pipeline runs correctly end-to-end today, but it is <strong>operator-driven</strong>, not autonomous.
+    A human enqueues models, watches the daemon, and restarts it after crashes. This session closed the two
+    hardest correctness gaps (queue state-machine races and stale model selection). Three operational gaps
+    remain before the daemon can run for weeks unattended: <strong>process supervision</strong>,
+    <strong>discovery-on-by-default</strong>, and <strong>cost/lifecycle guardrails</strong>.
+  </p>
+  <div class="cards">
+    <div class="card good"><div class="num">2</div><div class="lbl">Correctness gaps closed this session</div></div>
+    <div class="card bad"><div class="num">3</div><div class="lbl">P0 blockers for unattended operation</div></div>
+    <div class="card warn"><div class="num">4</div><div class="lbl">P1 hardening items</div></div>
+    <div class="card info"><div class="num">1</div><div class="lbl">Model on VM at a time (by design)</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Closed this session</h2>
+  <div class="callout good">
+    <strong>Queue state machine hardened.</strong> Per-entry <code>lease_token</code> + <code>heartbeat_at</code>
+    fencing on <code>updateStatus()</code>, a stale-entry reclaimer (<code>reclaimStaleEntries()</code>) that
+    resets orphaned <code>deploying</code>/<code>benchmarking</code> entries to <code>pending</code> instead of
+    failing them, and <code>adoptEntry()</code> for clean resume. VM-lease acquisition now runs
+    <em>before</em> any queue cleanup in <code>src/cli.ts</code>, so a second daemon is refused before it can
+    corrupt live entries. This eliminates the spurious-<code>failed</code> race that stranded
+    <code>Qwen2.5-Coder-32B</code> and <code>Qwen3-Coder-30B</code>.
+  </div>
+  <div class="callout good">
+    <strong>Recency enforced in discovery.</strong> <code>deriveModelFamily()</code> +
+    <code>markSupersededByFamily()</code> in <code>src/services/discovery-scheduler.ts</code> flag older
+    same-family generations as <code>superseded</code> when a newer hardware-fitting sibling exists (≥30-day
+    gap), and <code>autoQueue()</code> skips them. Year-old models like <code>Qwen2.5-Coder-32B</code> will no
+    longer be auto-queued over a live <code>Qwen3</code> generation.
+  </div>
+</section>
+
+<section>
+  <h2>Gap matrix</h2>
+  <table>
+    <thead>
+      <tr><th>Capability</th><th>Status</th><th>Priority</th><th>Current state (file)</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Process supervision / auto-restart</td><td><span class="pill missing">Missing</span></td><td><span class="pill p0">P0</span></td><td class="mono">scripts/start-local.sh (exec, no launchd)</td></tr>
+      <tr><td>Discovery loop on by default</td><td><span class="pill missing">Missing</span></td><td><span class="pill p0">P0</span></td><td class="mono">config/local.json discoveryScheduler.enabled: false</td></tr>
+      <tr><td>Cost / daily budget cap</td><td><span class="pill missing">Missing</span></td><td><span class="pill p0">P0</span></td><td class="mono">no budget config; only per-run maxDuration</td></tr>
+      <tr><td>VM never-stop invariant</td><td><span class="pill partial">Partial</span></td><td><span class="pill p1">P1</span></td><td class="mono">rule authored; no runtime guard</td></tr>
+      <tr><td>Failure alerting (Slack/email)</td><td><span class="pill missing">Missing</span></td><td><span class="pill p1">P1</span></td><td class="mono">errors → benchmarker-errors index only</td></tr>
+      <tr><td>Queue durability / lease fencing</td><td><span class="pill done">Done</span></td><td><span class="pill p1">P1</span></td><td class="mono">queue-service.ts (this session)</td></tr>
+      <tr><td>Heartbeat liveness on active entry</td><td><span class="pill done">Done</span></td><td><span class="pill p1">P1</span></td><td class="mono">scheduler.ts heartbeatActiveEntries()</td></tr>
+      <tr><td>Discovery recency/supersession</td><td><span class="pill done">Done</span></td><td><span class="pill p2">P2</span></td><td class="mono">discovery-scheduler.ts (this session)</td></tr>
+      <tr><td>DLQ / retry-with-backoff on transient fails</td><td><span class="pill partial">Partial</span></td><td><span class="pill p2">P2</span></td><td class="mono">reclaim resets to pending; no attempt cap</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section>
+  <h2>P0 blockers — required for unattended operation</h2>
+
+  <div class="gap">
+    <div class="gap-head"><h3>1. Process supervision &amp; auto-restart</h3><span class="pill p0">P0</span><span class="pill missing">Missing</span></div>
+    <p>
+      <code>scripts/start-local.sh</code> ends in <code>exec "${CLI}" start …</code> — the daemon runs in the
+      foreground of whatever shell launched it. If it crashes (OOM, unhandled rejection, ES 5xx storm), nothing
+      restarts it. The VM keeps burning GPU-hours with no benchmark running. There is no launchd plist for the
+      benchmarker (unlike <code>patryks-treadmill</code>, which has one).
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Ship <code>com.elastic-llm-benchmarker.plist</code> (launchd, <code>KeepAlive=true</code>,
+      <code>ThrottleInterval</code>) analogous to treadmill's. Wrap the exec in a <code>run-daemon.sh</code>
+      that tail-truncates the log on boot. Add <code>treadmill install</code>-style
+      <code>./scripts/install-daemon.sh</code>. Driver: <code>scripts/install-daemon.sh</code> (new).
+      Acceptance: <code>kill -9 $(cat .smoke-logs/daemon.pid)</code> → daemon back within
+      <code>ThrottleInterval</code>, lease re-acquired, active entry reclaimed to <code>pending</code>.
+    </div>
+  </div>
+
+  <div class="gap">
+    <div class="gap-head"><h3>2. Discovery loop on by default</h3><span class="pill p0">P0</span><span class="pill missing">Missing</span></div>
+    <p>
+      <code>discoveryScheduler.enabled: false</code> in <code>config/local.json</code>. The daemon only benchmarks
+      what a human enqueues. "Keep benchmarking promising models" is impossible while discovery is off — the
+      recency/supersession logic shipped this session never runs. Current settings (when enabled):
+      <code>intervalMinutes: 1440</code>, <code>maxModelsPerRun: 1</code>, <code>minTrendingScore: 30</code>,
+      <code>autoQueue: true</code>.
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Flip <code>discoveryScheduler.enabled: true</code> in <code>config/local.json</code>. Validate one cycle
+      auto-queues a fresh, non-superseded, hardware-fit candidate that passes the Agent Builder baseline.
+      Keep <code>maxModelsPerRun: 1</code> and <code>maxConcurrentRuns: 1</code> (one model on the VM — user
+      invariant). Acceptance: <code>node dist/cli.js discovery-run --once</code> enqueues exactly one
+      <code>pending</code> entry and logs skipped superseded siblings.
+    </div>
+  </div>
+
+  <div class="gap">
+    <div class="gap-head"><h3>3. Cost / daily budget cap</h3><span class="pill p0">P0</span><span class="pill missing">Missing</span></div>
+    <p>
+      There is no spend ceiling. A hung deploy or a runaway retry loop on an always-on VM accrues GPU cost with
+      no automatic brake. The only bound today is a per-run max-duration in the worker — nothing caps
+      <em>cumulative</em> daily spend or number of runs. Because the VM must never be stopped, the guardrail has
+      to be <em>queue-side</em> (stop dequeuing), not VM-side.
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Add <code>budget: { maxRunsPerDay, maxRunHours, pauseQueueWhenExceeded }</code> to config. In the scheduler
+      poll, before <code>dequeue()</code>, sum completed+active runs in the trailing 24h window from
+      <code>benchmarker-results</code>; if over cap, skip dequeue and log a <code>budget_paused</code> event
+      (do <strong>not</strong> touch the VM). Acceptance: with <code>maxRunsPerDay: 2</code> and 2 completed
+      today, the 3rd <code>pending</code> entry stays <code>pending</code> and a <code>budget_paused</code> row
+      lands in <code>benchmarker-errors</code>.
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>P1 hardening</h2>
+
+  <div class="gap">
+    <div class="gap-head"><h3>4. VM never-stop runtime guard</h3><span class="pill p1">P1</span><span class="pill partial">Partial</span></div>
+    <p>
+      The invariant ("stopping the VM loses it permanently") is now an authored rule, but nothing in code
+      prevents an accidental stop path. If any future teardown code calls a stop/terminate on the VM provider,
+      the rule won't save it.
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Grep for any provider stop/terminate call; assert none exist on the happy path. Add a
+      <code>vmLifecycle: { allowStop: false }</code> config gate that any teardown helper must check and refuse.
+      Acceptance: a unit test asserts the SSH/VM service exposes no reachable stop call while
+      <code>allowStop: false</code>.
+    </div>
+  </div>
+
+  <div class="gap">
+    <div class="gap-head"><h3>5. Failure alerting</h3><span class="pill p1">P1</span><span class="pill missing">Missing</span></div>
+    <p>
+      Errors land in the <code>benchmarker-errors</code> index but nothing pages a human. A stuck Buildkite poll,
+      a repeated deploy failure, or a budget pause is invisible until someone opens the dashboard.
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Add a lightweight Slack webhook forwarder for <code>severity: critical</code> error docs (repeated deploy
+      failure, lease-lost, budget-paused, discovery-empty-N-cycles). Reuse the existing tunnel/notify plumbing.
+      Acceptance: forcing a deploy failure posts one Slack message with the model id + error.
+    </div>
+  </div>
+
+  <div class="gap">
+    <div class="gap-head"><h3>6. Retry cap / dead-letter on repeat failure</h3><span class="pill p2">P2</span><span class="pill partial">Partial</span></div>
+    <p>
+      <code>reclaimStaleEntries()</code> resets orphaned entries to <code>pending</code> — correct for a single
+      crash, but an entry that fails <em>deterministically</em> (bad arch, VRAM overflow) will loop forever:
+      dequeue → fail → reclaim → dequeue. There is no attempt counter.
+    </p>
+    <div class="fix">
+      <div class="fixlbl">Fix sketch</div>
+      Add <code>attempts</code> to the queue entry; increment on each dequeue; when <code>attempts &gt;
+      maxAttempts</code> (e.g. 3), move to a terminal <code>dead_letter</code> status (distinct from transient
+      <code>failed</code>) so reclaim/dequeue skip it. Acceptance: a model that fails deploy 3× lands
+      <code>dead_letter</code> and is never re-dequeued.
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Recommended rollout order</h2>
+  <ol>
+    <li><strong>P0-1 supervision</strong> — without auto-restart, everything else is moot the first time the daemon dies.</li>
+    <li><strong>P0-3 budget cap</strong> — before turning discovery on, cap spend so an always-on VM + auto-queue can't run away.</li>
+    <li><strong>P0-2 discovery on</strong> — flip the switch once supervision + budget are in place; this is what makes it "keep benchmarking".</li>
+    <li><strong>P1-5 alerting</strong> — so unattended failures reach a human within minutes.</li>
+    <li><strong>P2-6 retry cap</strong> + <strong>P1-4 VM guard</strong> — polish for long-run stability.</li>
+  </ol>
+  <div class="callout info">
+    <strong>One-model invariant preserved throughout.</strong> Every guardrail is queue-side
+    (<code>maxConcurrentRuns: 1</code>, dequeue gating). Nothing here stops or terminates the VM — the budget
+    brake pauses <em>dequeuing</em>, not the machine.
+  </div>
+</section>
+
+<footer>
+  <p>elastic-llm-benchmarker · autonomy gap analysis · citations reference the working tree at generation time.</p>
+</footer>
+</div>
+</body>
+</html>

@@ -84,3 +84,13 @@ data/*.db
 # Rendered launchd plist (contains absolute operator home path); only the .template is tracked
 deploy/*.plist
 !deploy/*.plist.template
+
+# Local Kibana clone used for Stage 2 local evals (re-cloned per-machine, never synced)
+.kibana-cache/
+
+# Playwright MCP debug snapshots + smoke-test scratch state (transient, per-machine)
+.playwright-mcp/
+.smoke-logs/
+
+# Ad-hoc screenshots dropped at repo root during manual UI verification
+/*.png

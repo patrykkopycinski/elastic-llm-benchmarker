@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Elastic LLM Benchmarker — How It Works</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1014;
+      --surface: #16181d;
+      --surface-elev: #1d2026;
+      --border: #2a2e36;
+      --border-strong: #3a3f49;
+      --text: #e8e6e3;
+      --text-muted: #a0a09c;
+      --text-soft: #6e7079;
+      --accent: #e8845c;
+      --accent-soft: #3a201a;
+      --good: #6fb87f;
+      --good-soft: #1a2e21;
+      --warn: #d4a93f;
+      --warn-soft: #2e2614;
+      --bad: #e07575;
+      --bad-soft: #3a1d1d;
+      --info: #6fa6e0;
+      --info-soft: #1a2436;
+      --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      font-size: 16px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      padding: 2.5rem 2rem 2rem;
+    }
+    header h1 { margin: 0 0 0.5rem; font-size: 1.85rem; font-weight: 650; }
+    header p { margin: 0; color: var(--text-muted); max-width: 52rem; }
+
+    main { max-width: 960px; margin: 0 auto; padding: 2rem; }
+
+    h2 {
+      margin: 2.5rem 0 1rem;
+      font-size: 1.35rem;
+      padding-bottom: 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    h3 { margin: 1.75rem 0 0.75rem; font-size: 1.05rem; color: var(--accent); }
+    p { margin: 0.75rem 0; }
+    ul, ol { margin: 0.75rem 0; padding-left: 1.4rem; }
+    li { margin: 0.35rem 0; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem 1.4rem;
+      margin: 1.25rem 0;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.45);
+    }
+
+    .callout {
+      border-left: 4px solid var(--accent);
+      background: var(--accent-soft);
+      padding: 0.9rem 1.1rem;
+      border-radius: 0 8px 8px 0;
+      margin: 1rem 0;
+    }
+    .callout.good { border-color: var(--good); background: var(--good-soft); }
+    .callout.warn { border-color: var(--warn); background: var(--warn-soft); }
+    .callout.info { border-color: var(--info); background: var(--info-soft); }
+
+    code, .mono { font-family: var(--mono); font-size: 0.88em; }
+    code {
+      background: var(--surface-elev);
+      padding: 0.12em 0.4em;
+      border-radius: 4px;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+      margin: 1rem 0;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--border);
+    }
+    th { background: var(--surface-elev); color: var(--text-muted); font-weight: 600; }
+    tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+
+    .step-grid {
+      display: grid;
+      gap: 1rem;
+      margin: 1.25rem 0;
+    }
+    @media (min-width: 700px) {
+      .step-grid { grid-template-columns: 1fr 1fr; }
+    }
+
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+      box-shadow: 0 3px 16px rgba(0,0,0,0.35);
+    }
+    .step-num {
+      display: inline-block;
+      font-family: var(--mono);
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--accent-soft);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
+    }
+    .step h4 { margin: 0 0 0.4rem; font-size: 1rem; }
+    .step p { margin: 0; font-size: 0.92rem; color: var(--text-muted); }
+
+    .mermaid-wrap {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 1.25rem;
+      margin: 1.25rem 0;
+      overflow-x: auto;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.45);
+    }
+
+    .verdict-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.75rem 0; }
+    .pill {
+      font-size: 0.82rem;
+      font-weight: 600;
+      padding: 0.25rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+    }
+    .pill.support { background: var(--good-soft); color: var(--good); border-color: var(--good); }
+    .pill.investigate { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+    .pill.reject { background: var(--bad-soft); color: var(--bad); border-color: var(--bad); }
+
+    footer {
+      margin-top: 3rem;
+      padding: 1.5rem 2rem 2.5rem;
+      border-top: 1px solid var(--border);
+      color: var(--text-soft);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+
+    a { color: var(--info); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Elastic LLM Benchmarker</h1>
+    <p>
+      An autonomous qualification pipeline for open-source LLMs targeting Elastic Agent Builder.
+      It deploys models on a GPU VM via vLLM, measures performance, runs Kibana eval suites,
+      reasons over traces, and produces a structured recommendation report — all orchestrated
+      by a TypeScript daemon with Elasticsearch as the single source of truth.
+    </p>
+  </header>
+
+  <main>
+    <section id="overview">
+      <h2>1. What problem does it solve?</h2>
+      <p>
+        Product teams need empirical evidence before officially supporting a model in the
+        Elastic Inference Service (EIS). Manually deploying, benchmarking, and evaluating
+        each HuggingFace candidate takes days. The benchmarker automates that loop:
+      </p>
+      <ul>
+        <li><strong>Discover</strong> promising models (optional HuggingFace polling)</li>
+        <li><strong>Queue</strong> candidates that pass the Agent Builder baseline gate</li>
+        <li><strong>Stage 1</strong> — deploy + <code>vllm bench serve</code> performance gate</li>
+        <li><strong>Stage 2</strong> — Kibana <code>@kbn/evals</code> quality suites (local or Buildkite CI)</li>
+        <li><strong>Stage 3</strong> — LLM reasoning over metrics + OTel traces</li>
+        <li><strong>Report</strong> — immutable <code>support</code> / <code>investigate</code> / <code>reject</code> verdict</li>
+      </ul>
+    </section>
+
+    <section id="architecture">
+      <h2>2. System architecture</h2>
+      <p>
+        The daemon (<code>benchmarker-queue start</code>) runs a 30s (configurable) polling loop.
+        All state — queue, results, traces, CI builds — lives in Elastic Serverless / local ES.
+        The GPU VM is reached only through <code>SSHClientPool</code>; Buildkite agents reach
+        the model through an ngrok tunnel.
+      </p>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart TB
+  subgraph Operator["Operator laptop / CI"]
+    CLI["CLI: benchmarker-queue"]
+    API["REST API :3200"]
+  end
+
+  subgraph ES["Elasticsearch (source of truth)"]
+    Q["benchmarker-queue"]
+    R["benchmarker-results"]
+    S2["benchmarker-stage2"]
+    CI["benchmarker-ci-evals"]
+    RR["recommendation-reports"]
+  end
+
+  subgraph Scheduler["Scheduler daemon"]
+    POLL["Poll loop"]
+    S1W["Stage 1 Worker"]
+    S2W["Stage 2 Worker (local)"]
+    S3W["Stage 3 Worker"]
+    CIEV["CI Evals pipeline"]
+  end
+
+  subgraph GPU["GPU VM (SSH)"]
+    VLLM["vLLM Docker container"]
+    BENCH["vllm bench serve"]
+  end
+
+  subgraph External["External services"]
+    HF["HuggingFace API"]
+    BK["Buildkite on-demand pipeline"]
+    EIS["EIS / Anthropic (Stage 3)"]
+  end
+
+  CLI --> POLL
+  API --> Q
+  POLL --> Q
+  POLL --> S1W
+  S1W --> HF
+  S1W --> VLLM
+  S1W --> BENCH
+  S1W --> R
+  POLL --> CIEV
+  CIEV --> BK
+  POLL --> S2W
+  S2W --> RR
+  POLL --> S3W
+  S3W --> EIS
+  S3W --> RR
+  CIEV --> CI
+  S1W --> Q
+        </pre>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Component</th><th>Role</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>QueueService</code></td><td>Four methods only: <code>enqueue</code>, <code>claim</code>, <code>complete</code>, <code>fail</code></td></tr>
+          <tr><td><code>Scheduler</code></td><td>Claims queue entries, chains Stage 1 → CI/Stage 2 → Stage 3 → report</td></tr>
+          <tr><td><code>SSHClientPool</code></td><td>Black-box SSH to GPU VM — deploy, benchmark, health checks</td></tr>
+          <tr><td><code>ElasticsearchResultsStore</code></td><td>All persistence: benchmarks, evals, reasoning, reports, DLQ</td></tr>
+          <tr><td><code>VllmPublicEndpointResolver</code></td><td>SSH port-forward for smoke tests + ngrok for Buildkite</td></tr>
+          <tr><td><code>BuildkiteEvalTrigger</code></td><td>Triggers on-demand Kibana eval builds, polls until complete</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section id="entry">
+      <h2>3. How models enter the pipeline</h2>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart LR
+  A["HuggingFace discovery\n(optional scheduler)"] --> B["Agent Builder\nbaseline gate"]
+  C["Manual enqueue\nCLI / API"] --> B
+  B -->|pass| D["benchmarker-queue\n(pending)"]
+  B -->|fail| E["Rejected at enqueue\nwith reasons"]
+  D --> F["Scheduler claims\nentry"]
+        </pre>
+      </div>
+
+      <h3>Agent Builder baseline gate</h3>
+      <p>
+        Before a model is queued, <code>evaluateAgentBuilderBaseline()</code> checks requirements
+        derived from <a href="https://github.com/elastic/security-team/issues/15545">elastic/security-team#15545</a>:
+      </p>
+      <ul>
+        <li>≥ 7B parameters (instruct variant)</li>
+        <li>≥ 128K context window (enriched from HF <code>config.json</code>, including rope scaling)</li>
+        <li>Tool-calling support (single-tool via vLLM — not parallel/multi-tool)</li>
+        <li>Hardware fit for the configured VM profile (e.g. 2× A100-80GB)</li>
+      </ul>
+    </section>
+
+    <section id="stage1">
+      <h2>4. Stage 1 — Performance gate</h2>
+      <p>
+        Stage 1 runs entirely on the GPU VM over SSH. If benchmarks fail thresholds,
+        the pipeline stops here with a <span class="pill reject">reject</span> verdict — no expensive evals.
+      </p>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+sequenceDiagram
+  participant Sch as Scheduler
+  participant S1 as Stage 1 Worker
+  participant HF as HuggingFace
+  participant SSH as SSHClientPool
+  participant VM as GPU VM / vLLM
+  participant ES as Elasticsearch
+
+  Sch->>S1: execute(run)
+  S1->>ES: updateStatus(deploying)
+  S1->>HF: parse HF card + config.json
+  S1->>SSH: deploy model (Docker vllm-openai:latest)
+  SSH->>VM: docker run --gpus all ...
+  VM-->>SSH: health check /v1/models
+  S1->>ES: updateStatus(benchmarking)
+  S1->>SSH: vllm bench serve (conc 1, 4, 16)
+  SSH->>VM: benchmark container
+  VM-->>S1: ITL, TTFT, throughput metrics
+  S1->>ES: save benchmarker-results
+  S1-->>Sch: Stage1Result + stage2Eligible flag
+        </pre>
+      </div>
+
+      <div class="step-grid">
+        <div class="step">
+          <span class="step-num">S1.1</span>
+          <h4>Parse HuggingFace card</h4>
+          <p>Architecture, param count, context window, tool-calling hints. Context is enriched from <code>config.json</code> (rope scaling → 131K for Qwen2.5).</p>
+        </div>
+        <div class="step">
+          <span class="step-num">S1.2</span>
+          <h4>Deploy vLLM</h4>
+          <p>Latest <code>vllm/vllm-openai:latest</code>, tensor-parallel across all GPUs, <code>--max-model-len auto</code>, Hermes tool parser when supported.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">S1.3</span>
+          <h4>Health check</h4>
+          <p>Polls <code>/v1/models</code> until ready (up to 20 min). Classifies container logs on failure (OOM, disk, etc.).</p>
+        </div>
+        <div class="step">
+          <span class="step-num">S1.4</span>
+          <h4>Benchmark suite</h4>
+          <p><code>vllm bench serve</code> at concurrency 1, 4, 16. Measures ITL p50, TTFT, throughput (tok/s), p99 latency.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">S1.5</span>
+          <h4>Threshold gate</h4>
+          <p>Compares against <code>benchmarkThresholds</code> and <code>stage2Thresholds</code>: max ITL, min throughput, min context window.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">S1.6</span>
+          <h4>Persist + eligibility</h4>
+          <p>Writes to <code>benchmarker-results</code>. Sets <code>stage2Eligible</code> — Stage 2 only runs if this is true.</p>
+        </div>
+      </div>
+
+      <div class="callout good">
+        <strong>Deployment stays warm.</strong> After Stage 1, the vLLM container remains running.
+        The scheduler owns teardown — Stage 2 / CI evals reuse the same endpoint.
+      </div>
+    </section>
+
+    <section id="stage2-paths">
+      <h2>5. Stage 2 — Quality evals (two paths)</h2>
+      <p>Stage 2 measures Agent Builder readiness via Kibana eval suites. The daemon supports two modes:</p>
+
+      <table>
+        <thead>
+          <tr><th>Mode</th><th>When</th><th>What runs</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Buildkite CI</strong> (production)</td>
+            <td><code>--ci-evals</code> + Buildkite token</td>
+            <td>Smoke test → on-demand Buildkite pipeline → <code>@kbn/evals</code> in Elastic CI</td>
+          </tr>
+          <tr>
+            <td><strong>Local clone</strong> (dev)</td>
+            <td><code>--stage2</code> without CI evals</td>
+            <td>Clone Kibana → bootstrap → <code>EvalSuiteRunner</code> against local endpoint</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout info">
+        When CI evals are enabled, the local Stage 2 worker is <em>disabled</em> — Buildkite results
+        are mapped to the same <code>Stage2Result</code> shape via <code>mapBuildkiteResultToStage2()</code>.
+      </div>
+    </section>
+
+    <section id="ci-evals">
+      <h2>6. CI evals path (smoke → tunnel → Buildkite)</h2>
+      <p>
+        This is the path used for Agent Builder qualification against real Kibana CI infrastructure.
+      </p>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart TB
+  subgraph Stage1Done["After Stage 1 pass"]
+    DEP["vLLM still running\non GPU VM :8000"]
+  end
+
+  subgraph Tunnel["Endpoint exposure"]
+    SSHF["SSH port forward\nlocalhost:18000 → VM:8000"]
+    NG["ngrok public URL\n(for Buildkite agents)"]
+    DEP --> SSHF
+    SSHF --> NG
+  end
+
+  subgraph Smoke["Model smoke test"]
+    H["Health /v1/models"]
+    I["Inference: 2+2=4"]
+    T["Tool calling tier"]
+    SSHF --> H --> I --> T
+  end
+
+  subgraph BK["Buildkite"]
+    TR["Trigger on-demand build"]
+    KD["Build Kibana distribution"]
+    EV["LLM Evals: On-demand"]
+    NG --> TR
+    TR --> KD --> EV
+  end
+
+  subgraph Deferred["detachPoll=true"]
+    WAIT["Scheduler blocks next model"]
+    POLL["Background poll until pass/fail"]
+    TEAR["Teardown tunnel + vLLM"]
+    EV --> POLL
+    POLL --> TEAR
+  end
+
+  Smoke -->|pass| TR
+  Smoke -->|fail| ABORT["Abort pipeline"]
+        </pre>
+      </div>
+
+      <div class="step-grid">
+        <div class="step">
+          <span class="step-num">CI.1</span>
+          <h4>SSH port forward</h4>
+          <p><code>VllmPublicEndpointResolver</code> always forwards VM port 8000 to laptop localhost — smoke tests never hit the firewalled public VM IP.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">CI.2</span>
+          <h4>ngrok tunnel</h4>
+          <p>When <code>TUNNEL_ENABLED=true</code>, exposes localhost to a public HTTPS URL. Buildkite agents in Elastic CI need this to call your vLLM connector.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">CI.3</span>
+          <h4>Three-tier smoke test</h4>
+          <p>Health → simple inference → tool-call validation. Fails fast before triggering a 30–60 min Buildkite build.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">CI.4</span>
+          <h4>Connector payload</h4>
+          <p>Builds OpenAI-compatible connector JSON pointing at the ngrok URL. Passed as Buildkite env vars to the on-demand pipeline.</p>
+        </div>
+        <div class="step">
+          <span class="step-num">CI.5</span>
+          <h4>On-demand Buildkite build</h4>
+          <p>Pipeline: upload → pre-build → Kibana dist → LLM evals. Suites from <code>buildkite.defaultEvalSuites</code> (e.g. <code>security-alert-triage</code>).</p>
+        </div>
+        <div class="step">
+          <span class="step-num">CI.6</span>
+          <h4>Detached poll</h4>
+          <p>With <code>detachPoll: true</code>, poll runs in background while tunnel + model stay up. Scheduler waits before dequeuing the next model.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="stage3">
+      <h2>7. Stage 3 — LLM reasoning</h2>
+      <p>
+        After Stage 2 completes (sync or detached poll), Stage 3 uses Elastic Inference Service
+        (e.g. <code>eis/anthropic-claude-4.6-opus</code>) to analyze the full run.
+      </p>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart LR
+  IN["Inputs"] --> PB["ReasoningPromptBuilder"]
+  PB --> LLM["EIS LLM client"]
+  LLM --> OUT["JSON suggestions"]
+  IN --- M1["Stage 1 metrics"]
+  IN --- M2["Stage 2 suite scores"]
+  IN --- M3["OTel trace summary\n(ES or local JSONL)"]
+  OUT --> ES["benchmarker-reasoning"]
+  OUT --> NEXT["Fed back to\nnext Stage 1 deploy"]
+        </pre>
+      </div>
+
+      <ul>
+        <li>Queries traces via <code>TraceQueryBuilder</code> (ES|QL against OTel indices — PascalCase fields)</li>
+        <li>Builds a structured prompt with vLLM config, benchmark metrics, eval scores</li>
+        <li>Returns categorized suggestions: <code>config</code>, <code>quantization</code>, <code>hardware</code>, <code>other</code></li>
+        <li>Stage 1 reads prior suggestions on re-runs and may apply vLLM deployment overrides</li>
+      </ul>
+
+      <div class="callout warn">
+        Stage 3 failures are <strong>non-fatal</strong> — the pipeline still completes and produces a report.
+      </div>
+    </section>
+
+    <section id="report">
+      <h2>8. Recommendation report</h2>
+      <p>
+        <code>buildRecommendationReport()</code> synthesizes all stages into an immutable document
+        stored in <code>recommendation-reports</code>.
+      </p>
+
+      <div class="verdict-pills">
+        <span class="pill support">support</span>
+        <span class="pill investigate">investigate</span>
+        <span class="pill reject">reject</span>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Verdict</th><th>Condition</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="pill support">support</span></td><td>Stage 1 passed AND all configured eval suites pass thresholds</td></tr>
+          <tr><td><span class="pill investigate">investigate</span></td><td>Stage 1 passed but evals failed or near-threshold / ambiguous</td></tr>
+          <tr><td><span class="pill reject">reject</span></td><td>Stage 1 failed, smoke failed, or model incompatible (no tool calling)</td></tr>
+        </tbody>
+      </table>
+
+      <p>Optional Slack webhook notification fires on completion when configured.</p>
+    </section>
+
+    <section id="full-flow">
+      <h2>9. End-to-end happy path</h2>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Op as Operator
+  participant Sch as Scheduler
+  participant S1 as Stage 1
+  participant Tun as Tunnel
+  participant Smk as Smoke test
+  participant BK as Buildkite
+  participant S3 as Stage 3
+  participant ES as Elasticsearch
+
+  Op->>ES: enqueue(modelId)
+  Sch->>ES: claim pending entry
+  Sch->>S1: deploy + benchmark
+  S1->>ES: benchmarker-results
+  Sch->>Tun: SSH forward + ngrok
+  Sch->>Smk: health / inference / tools
+  Smk-->>Sch: pass
+  Sch->>BK: trigger on-demand eval
+  BK-->>Sch: build running (detached poll)
+  Note over Sch,BK: vLLM + tunnel stay up
+  BK-->>Sch: build passed + artifacts
+  Sch->>ES: benchmarker-ci-evals + stage2
+  Sch->>S3: reasoning over traces
+  S3->>ES: benchmarker-reasoning
+  Sch->>ES: recommendation-report
+  Sch->>Tun: teardown tunnel + stop vLLM
+  Sch->>ES: queue entry completed
+        </pre>
+      </div>
+    </section>
+
+    <section id="data">
+      <h2>10. Data stored in Elasticsearch</h2>
+      <table>
+        <thead>
+          <tr><th>Index</th><th>Contents</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>benchmarker-queue</code></td><td>Pending / active / completed queue entries</td></tr>
+          <tr><td><code>benchmarker-results</code></td><td>Stage 1 vLLM benchmark metrics per model run</td></tr>
+          <tr><td><code>benchmarker-stage2</code></td><td>Eval suite scores (local or mapped from Buildkite)</td></tr>
+          <tr><td><code>benchmarker-ci-evals</code></td><td>Buildkite build URLs, status, artifacts</td></tr>
+          <tr><td><code>benchmarker-reasoning</code></td><td>Stage 3 LLM suggestions</td></tr>
+          <tr><td><code>recommendation-reports</code></td><td>Final verdict documents</td></tr>
+          <tr><td><code>benchmarker-errors</code></td><td>DLQ / structured error log</td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <strong>Golden cluster is write-only.</strong> Only kbn/evals OTel traces are forwarded to the
+        shared cluster via the Buildkite eval pipeline — not benchmark results or reports.
+      </div>
+    </section>
+
+    <section id="config">
+      <h2>11. Configuration layers</h2>
+      <p>Config merges in priority order (highest wins):</p>
+
+      <div class="mermaid-wrap">
+        <pre class="mermaid">
+flowchart BT
+  D["Schema defaults\n(Zod)"]
+  F["JSON config file\nconfig/local.json"]
+  E["Environment variables\n.env"]
+  O["CLI flag overrides"]
+  O --> E --> F --> D
+        </pre>
+      </div>
+
+      <p>Key operator files:</p>
+      <ul>
+        <li><code>config/local.json</code> — VM, ES URL, Buildkite suites, tunnel, thresholds (gitignored)</li>
+        <li><code>.env</code> — secrets: HF token, ngrok, EIS key, SSH, Buildkite token</li>
+        <li><code>scripts/start-local.sh</code> — sources .env, starts daemon with absolute config path</li>
+      </ul>
+    </section>
+
+    <section id="ops">
+      <h2>12. Operating the daemon</h2>
+
+      <div class="card">
+        <h3 style="margin-top:0;color:var(--text)">Quick start</h3>
+        <pre><code># Prerequisites: Node 20+, ES, GPU VM SSH, Buildkite token
+cp config/smoke-full.json config/local.json   # edit SSH + VM
+cp .env.example .env                          # add secrets
+npm install && npm run build
+./scripts/start-local.sh --daemonize \
+  --clear-pending --enqueue-after-clear 'Qwen/Qwen2.5-7B-Instruct'
+
+# Monitor
+tail -f .smoke-logs/daemon.log
+benchmarker-queue reasoning --config config/local.json --model &lt;modelId&gt;</code></pre>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>CLI flag</th><th>Effect</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>--stage2</code></td><td>Enable Stage 2 (local path if no CI evals)</td></tr>
+          <tr><td><code>--stage3</code></td><td>Enable Stage 3 reasoning (requires EIS key)</td></tr>
+          <tr><td><code>--ci-evals</code></td><td>Smoke + Buildkite on-demand evals as Stage 2</td></tr>
+          <tr><td><code>--full-eval</code></td><td>Also trigger weekly eval after on-demand passes</td></tr>
+          <tr><td><code>--discovery</code></td><td>Enable HuggingFace auto-discovery scheduler</td></tr>
+          <tr><td><code>--daemonize</code></td><td>Background process with log at <code>.smoke-logs/daemon.log</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <footer>
+    Generated for elastic-llm-benchmarker ·
+    <a href="https://github.com/patrykkopycinski/elastic-llm-benchmarker">Repository</a> ·
+    See also <code>AGENTS.md</code> and <code>context/foundation/prd.md</code>
+  </footer>
+
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        background: '#16181d',
+        primaryColor: '#1d2026',
+        primaryTextColor: '#e8e6e3',
+        primaryBorderColor: '#3a3f49',
+        lineColor: '#a0a09c',
+        secondaryColor: '#1d2026',
+        tertiaryColor: '#0e1014',
+        mainBkg: '#1d2026',
+        edgeLabelBackground: '#16181d',
+        titleColor: '#e8e6e3',
+      },
+      flowchart: { htmlLabels: true, curve: 'basis' },
+      sequence: { mirrorActors: false },
+    });
+  </script>
+</body>
+</html>
