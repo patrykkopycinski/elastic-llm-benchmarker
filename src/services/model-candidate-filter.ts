@@ -135,6 +135,10 @@ const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
   // Llama 3 JSON-based tool calling
   llama: 'llama3_json',
   codellama: 'llama3_json',
+  // GLM-4.5/4.6 (Zhipu/Z.ai) — requires --tool-call-parser glm45 --reasoning-parser glm45
+  glm4_moe: 'glm45',
+  // Kimi K2 (Moonshot AI) — DeepseekV3ForCausalLM arch, model_type kimi_k2
+  kimi_k2: 'kimi_k2',
 };
 
 /**
@@ -165,6 +169,8 @@ const VLLM_SUPPORTED_ARCHITECTURES = new Set([
   'yi',
   'baichuan',
   'chatglm',
+  'glm4_moe',
+  'kimi_k2',
   'falcon',
   'mpt',
   'bloom',

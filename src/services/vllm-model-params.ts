@@ -243,6 +243,20 @@ export function getVllmParamsForModel(
     return { toolCallParser: 'kimi_k2', chatTemplate: null, extraArgs: [], family: 'Kimi K2', unslothTemplateKey: null };
   }
 
+  // ─── GLM-4.5 / 4.6 (Zhipu/Z.ai, glm4_moe architecture) ─────────────────────
+  // vLLM requires both --tool-call-parser glm45 and --reasoning-parser glm45 —
+  // GLM-4.5/4.6 are hybrid reasoning models (thinking + non-thinking modes).
+  // See: https://vllm.ai/blog/2025-08-19-glm45-vllm
+  if (id.includes('glm-4.5') || id.includes('glm4.5') || id.includes('glm-4.6') || id.includes('glm4.6') || arch.includes('glm4_moe')) {
+    return {
+      toolCallParser: 'glm45',
+      chatTemplate: null,
+      extraArgs: ['--reasoning-parser glm45'],
+      family: 'GLM-4.5',
+      unslothTemplateKey: null,
+    };
+  }
+
   // ─── Gemma (Unsloth: gemma-3, gemma2, gemma) ───────────────────────────────
   if (id.includes('gemma-3') || id.includes('gemma3')) {
     return {
