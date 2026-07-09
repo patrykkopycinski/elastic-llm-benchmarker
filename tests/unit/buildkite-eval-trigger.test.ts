@@ -12,7 +12,8 @@ describe('BuildkiteEvalTriggerImpl', () => {
     weeklyPipelineSlug: 'kibana-evals-weekly-llm-evals',
     pollIntervalMs: 10,
     pollTimeoutMs: 100,
-    kibanaBranch: 'fix/weekly-evals-matrix',
+    // Buildkite triggers are guard-restricted to promotion runs off main only.
+    kibanaBranch: 'main',
     adoptRunningBuild: true,
     waitForPipelineIdle: true,
     pipelineIdlePollMs: 10,
@@ -358,7 +359,7 @@ describe('BuildkiteEvalTriggerImpl', () => {
     expect(body.env.EVAL_PROJECT).toBe('vllm-qwen-qwen2.5-1.5b-instruct');
     expect(body.env.EVALUATION_CONNECTOR_ID).toBe('vllm-qwen-qwen2.5-1.5b-instruct');
     expect(body.env.EVAL_MODEL_GROUPS).toBe('Qwen/Qwen2.5-1.5B-Instruct');
-    expect(body.env.KIBANA_BRANCH).toBe('fix/weekly-evals-matrix');
+    expect(body.env.KIBANA_BRANCH).toBe('main');
     expect(body.message).toContain('Benchmarker:');
     expect(body.message).toContain('weekly matrix eval');
   });
