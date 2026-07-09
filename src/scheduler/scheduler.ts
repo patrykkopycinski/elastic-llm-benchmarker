@@ -519,9 +519,53 @@ export class Scheduler {
         });
       }
 
-      // CI Evals pipeline (weekly matrix Buildkite build)
+      // Local Stage 2 gate (`local` / `localThenWeekly` tiers): run the local
+      // eval-suite-runner first. Its own Stage2Gate already re-checks the
+      // Stage 1 thresholds, so a model that failed stage2Eligible above comes
+      // back `skipped` here rather than needing a second external check.
+      // When Buildkite is also wired (`localThenWeekly`), a passing local gate
+      // is the signal to spend the slower/costlier weekly matrix on this
+      // model; a failing/skipped gate short-circuits and the weekly matrix is
+      // never triggered — that's the whole point of the gate.
+      const localStage2Worker = this.stage2Worker;
+      const hasLocalGate = Boolean(localStage2Worker);
+      let localGatePassed = true;
+      if (localStage2Worker && run.benchmarkResult) {
+        const stage2Result = await localStage2Worker.execute(run, run.benchmarkResult);
+        run.stage2Result = stage2Result;
+
+        if (this.resultsStore) {
+          await this.resultsStore.saveStage2Result(stage2Result);
+        }
+
+        if (stage2Result.status === 'error') {
+          await this.failEntry(entry, stage2Result.reason ?? 'Stage 2 eval error', leaseToken);
+          return;
+        }
+
+        localGatePassed = stage2Result.status === 'success';
+        if (!localGatePassed) {
+          this.logger.info(
+            'Scheduler: local Stage 2 gate did not pass — skipping weekly matrix promotion',
+            {
+              modelId: run.modelId,
+              status: stage2Result.status,
+              reason: stage2Result.reason,
+            },
+          );
+        }
+      }
+
+      // CI Evals pipeline (weekly matrix Buildkite build). Gated on the local
+      // Stage 2 gate passing when one is configured (`localThenWeekly`); runs
+      // unconditionally when there's no local gate (pure `buildkiteWeekly`).
       let deferPostStage2 = false;
-      if (this.ciEvals?.enabled && run.deployment && run.benchmarkResult?.stage2Eligible !== false) {
+      if (
+        this.ciEvals?.enabled &&
+        localGatePassed &&
+        run.deployment &&
+        run.benchmarkResult?.stage2Eligible !== false
+      ) {
         let skipSuiteIds: string[] | undefined;
         if (options?.resume && this.resultsStore && this.config) {
           const priorResults = await this.resultsStore.getCIEvalResults(run.modelId, {
@@ -584,21 +628,7 @@ export class Scheduler {
         }
       }
 
-      // Local Stage 2 evals — skip when Buildkite CI evals are the source of truth
-      const useCiEvalsAsStage2 = Boolean(this.ciEvals?.enabled);
-      if (this.stage2Worker && !useCiEvalsAsStage2 && run.benchmarkResult) {
-        const stage2Result = await this.stage2Worker.execute(run, run.benchmarkResult);
-        run.stage2Result = stage2Result;
-
-        if (this.resultsStore) {
-          await this.resultsStore.saveStage2Result(stage2Result);
-        }
-
-        if (stage2Result.status === 'error') {
-          await this.failEntry(entry, stage2Result.reason ?? 'Stage 2 eval error', leaseToken);
-          return;
-        }
-      } else if (useCiEvalsAsStage2 && !run.stage2Result && !deferPostStage2) {
+      if (this.ciEvals?.enabled && !hasLocalGate && !run.stage2Result && !deferPostStage2) {
         this.logger.warn('CI evals enabled but no Stage 2 result was produced');
       }
 
