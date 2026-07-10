@@ -91,8 +91,17 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
 
         try {
           await resultsStore.saveStage2Result(result);
-        } catch {
-          // swallow
+        } catch (saveErr: unknown) {
+          // Non-fatal: the caller still gets a valid Stage2Result and the
+          // pipeline should proceed. But a silently swallowed save means the
+          // run vanishes from the golden cluster with zero trace — log it so
+          // it's at least visible in the daemon log / observability surface.
+          const saveMessage = saveErr instanceof Error ? saveErr.message : String(saveErr);
+          logger?.warn('Stage 2 (batch): failed to persist result to results store', {
+            runId: run.runId,
+            modelId: run.modelId,
+            error: saveMessage,
+          });
         }
 
         return result;

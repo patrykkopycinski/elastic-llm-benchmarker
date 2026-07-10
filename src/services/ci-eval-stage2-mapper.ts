@@ -83,6 +83,33 @@ export function mapBuildkiteResultToStage2(
   };
 }
 
+/**
+ * Build the Stage2Result for the "resume" fast-path, where every suite
+ * already completed in a prior partial run and nothing needs to re-run.
+ * Must set score: 1 (not leave it undefined) — elasticsearch-results-store
+ * persists an undefined score as `null`, which recommendation-report-builder
+ * then defaults to 0, turning an all-suites-passed resume into a false
+ * "investigate"/"reject" verdict (regression: Qwen3-Next-80B-A3B 2026-07-06
+ * resume run scored 0 on every suite despite Buildkite passing all of them).
+ */
+export function buildResumeStage2Result(
+  runId: string,
+  modelId: string,
+  evalSuites: string[],
+  startedAt: string,
+): Stage2Result {
+  return {
+    runId,
+    modelId,
+    status: 'success',
+    scores: Object.fromEntries(evalSuites.map((suite) => [suite, 1])),
+    suiteResults: evalSuites.map((suite) => ({ suite, status: 'pass', score: 1 })),
+    reason: 'All suites completed before resume',
+    startedAt,
+    completedAt: new Date().toISOString(),
+  };
+}
+
 /** Merge per-suite on-demand Buildkite results into one Stage2Result for the matrix. */
 export function mergeStage2Results(results: Stage2Result[]): Stage2Result {
   if (results.length === 0) {

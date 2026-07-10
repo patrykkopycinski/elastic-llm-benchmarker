@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  buildResumeStage2Result,
   mapBuildkiteResultToStage2,
   mergeStage2Results,
   parseEvalArtifactJson,
@@ -67,6 +68,29 @@ describe('mergeStage2Results', () => {
     expect(merged.scores?.['security-alert-triage']).toBe(1);
     expect(merged.scores?.['security-alerts-rag-regression']).toBe(0.8);
     expect(merged.suiteResults?.length).toBe(2);
+  });
+});
+
+describe('buildResumeStage2Result', () => {
+  it('sets score: 1 on every resumed suite, not null (regression: Qwen3-Next-80B-A3B false-negative)', () => {
+    const result = buildResumeStage2Result(
+      'run-1',
+      'cyankiwi/Qwen3-Next-80B-A3B-Instruct-AWQ-4bit',
+      ['security-alert-triage', 'security-alerts-rag-regression', 'security-esql-generation-regression'],
+      '2026-07-06T06:00:00Z',
+    );
+
+    expect(result.status).toBe('success');
+    expect(result.suiteResults).toHaveLength(3);
+    for (const sr of result.suiteResults ?? []) {
+      expect(sr.score).toBe(1);
+      expect(sr.status).toBe('pass');
+    }
+    expect(result.scores).toEqual({
+      'security-alert-triage': 1,
+      'security-alerts-rag-regression': 1,
+      'security-esql-generation-regression': 1,
+    });
   });
 });
 

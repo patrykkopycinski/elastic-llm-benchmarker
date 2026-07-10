@@ -12,6 +12,7 @@ import type { ModelSmokeTest } from '../services/model-smoke-test.js';
 import type { BuildkiteEvalTrigger, BuildkiteBuildResult } from '../services/buildkite-eval-trigger.js';
 import { isRetriableInfraState } from '../services/buildkite-eval-trigger.js';
 import {
+  buildResumeStage2Result,
   mapBuildkiteResultToStage2,
   mergeStage2Results,
   parseEvalArtifactJson,
@@ -954,15 +955,7 @@ export class Scheduler {
         this.logger.warn('CI Evals: all suites already completed — nothing to run', {
           modelId: run.modelId,
         });
-        return {
-          status: 'success',
-          modelId: run.modelId,
-          runId: run.runId,
-          suiteResults: evalSuites.map((suite) => ({ suite, status: 'passed' })),
-          reason: 'All suites completed before resume',
-          startedAt,
-          completedAt: new Date().toISOString(),
-        };
+        return buildResumeStage2Result(run.runId, run.modelId, evalSuites, startedAt);
       }
 
       // On-demand pipeline supports vLLM connectors via KIBANA_TESTING_AI_CONNECTORS;

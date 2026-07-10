@@ -813,9 +813,12 @@ export const stage2LocalConfigSchema = z.object({
    * single-stack single-suite path for the full security suite set.
    *
    * Requires `skillDevPluginDir` to point at a checkout of the
-   * agent-builder-skill-dev plugin.
+   * agent-builder-skill-dev plugin. Defaults to true — the single-stack
+   * `eval-suite-runner.ts` path is kept only as an explicit opt-out
+   * (`useBatchRunner: false`) for environments without the plugin checked
+   * out or that need the old single-suite sequencing.
    */
-  useBatchRunner: z.boolean().default(false),
+  useBatchRunner: z.boolean().default(true),
   /**
    * Path to the skill-dev plugin checkout (contains scripts/run-security-evals-batch.sh).
    * Only used when `useBatchRunner` is true.
