@@ -1681,9 +1681,21 @@ if (_binaryName === 'benchmarker-queue') {
       // plugin's run-security-evals-batch.sh instead of the single-suite
       // eval-suite-runner. The batch runner boots parallel Scout stacks with
       // the merged evals_security_all config and two-stage EIS connector boot.
+      // useBatchRunner defaults to true, but skillDevPluginDir has no default
+      // (it's an environment-specific checkout path) — without it,
+      // LocalBatchEvalRunner.run() throws on the very first Stage 2
+      // invocation. Fall back to the single-stack worker instead of failing
+      // every run when the plugin isn't configured.
+      const canUseBatchRunner = config.stage2Local.useBatchRunner && Boolean(config.stage2Local.skillDevPluginDir);
+      if (config.stage2Local.useBatchRunner && !config.stage2Local.skillDevPluginDir) {
+        logger.warn(
+          'stage2Local.useBatchRunner is true but stage2Local.skillDevPluginDir is not set — falling back to the single-stack eval-suite-runner path',
+        );
+      }
+
       const stage2Worker =
         (enableStage2 || config.enableStage2) && useLocalStage2
-          ? config.stage2Local.useBatchRunner
+          ? canUseBatchRunner
             ? (() => {
                 const batchRunner = new LocalBatchEvalRunner(config.stage2Local, logger);
                 return createBatchStage2Worker({ config, gate: new Stage2Gate(config), batchRunner, resultsStore, logger });

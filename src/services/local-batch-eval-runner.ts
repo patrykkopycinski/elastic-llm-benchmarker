@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
@@ -13,18 +14,46 @@ export interface LocalBatchEvalOptions {
   suites?: string[];
 }
 
+export interface LocalBatchEvalSuiteResult {
+  suite: string;
+  status: 'pass' | 'fail';
+  durationMs: number;
+  /** Path to this suite's `node scripts/evals run` log, if the summary reported one. */
+  logPath?: string;
+}
+
 export interface LocalBatchEvalResult {
   modelId: string;
   status: 'success' | 'partial' | 'failed';
-  suites: Array<{
-    suite: string;
-    status: 'pass' | 'fail';
-    durationMs: number;
-  }>;
+  suites: LocalBatchEvalSuiteResult[];
   startedAt: string;
   completedAt: string;
-  /** Raw log output from the batch runner */
+  /** Path to `run-security-evals-batch.sh`'s summary JSON (matrix-output/batch-summary-*.json). */
+  summaryPath?: string;
+  /**
+   * Raw log output from the batch runner. Kept for backward compat with
+   * callers reading a single "where do I look" path — prefer `summaryPath`
+   * (structured) or each suite's `logPath` (per-suite `node scripts/evals`
+   * output) for anything programmatic.
+   */
   logPath?: string;
+}
+
+interface BatchSummaryResultEntry {
+  suite: string;
+  model: string;
+  status: 'pass' | 'fail';
+  duration_ms: number;
+  log_file: string;
+  worker: number;
+}
+
+interface BatchSummaryFile {
+  run_id: string;
+  timestamp: string;
+  overall_exit: number;
+  log_dir: string;
+  results: BatchSummaryResultEntry[];
 }
 
 function execFilePromise(
@@ -43,6 +72,17 @@ function execFilePromise(
       resolve({ stdout, stderr, exitCode });
     });
   });
+}
+
+/**
+ * `run-security-evals-batch.sh` prints `[batch HH:MM:SS] >>> Summary: <path>`
+ * as its last line of stdout (see the script's final `log "Summary: ..."`
+ * call). This is the only signal the caller has for where the structured
+ * per-suite results landed — the script doesn't take a `--summary-out` flag.
+ */
+function extractSummaryPath(stdout: string): string | undefined {
+  const match = stdout.match(/Summary:\s+(\S+\.json)\s*$/m);
+  return match?.[1];
 }
 
 /**
@@ -108,15 +148,13 @@ export class LocalBatchEvalRunner {
       exportProfile: this.config.exportProfile,
     });
 
-    const { exitCode, stderr } = await execFilePromise(
+    const { stdout, stderr, exitCode } = await execFilePromise(
       'bash',
       [batchScript, ...args],
       { cwd: pluginDir, timeout: timeoutMs, env },
     );
 
     const completedAt = new Date().toISOString();
-    const status: LocalBatchEvalResult['status'] =
-      exitCode === 0 ? 'success' : exitCode === null ? 'failed' : 'partial';
 
     if (exitCode !== 0) {
       this.logger.warn('Local batch eval completed with errors', {
@@ -125,11 +163,24 @@ export class LocalBatchEvalRunner {
       });
     }
 
-    const suiteResults = suites.map((suite) => ({
-      suite,
-      status: (exitCode === 0 ? 'pass' : 'fail') as 'pass' | 'fail',
-      durationMs: 0,
-    }));
+    const summaryPath = extractSummaryPath(stdout);
+    const { suiteResults, parseError } = await this.parseSummary(summaryPath, suites, opts.modelId);
+
+    if (parseError) {
+      this.logger.warn('Local batch eval: could not parse structured summary — falling back to exitCode-only per-suite status', {
+        summaryPath,
+        parseError,
+        stdoutTail: stdout.slice(-500),
+      });
+    }
+
+    const passCount = suiteResults.filter((s) => s.status === 'pass').length;
+    const status: LocalBatchEvalResult['status'] =
+      passCount === suiteResults.length && exitCode === 0
+        ? 'success'
+        : passCount > 0
+          ? 'partial'
+          : 'failed';
 
     return {
       modelId: opts.modelId,
@@ -137,7 +188,61 @@ export class LocalBatchEvalRunner {
       suites: suiteResults,
       startedAt,
       completedAt,
-      logPath: undefined,
+      summaryPath,
+      logPath: summaryPath,
     };
+  }
+
+  /**
+   * Reads `run-security-evals-batch.sh`'s summary JSON and maps its flat
+   * `results` array (one entry per suite×model×worker, written incrementally
+   * by the script's `record_suite_result`) onto the suites this call
+   * requested. Suites present in `opts.suites` but missing from `results`
+   * (e.g. the batch crashed before that suite's worker got to it) are
+   * reported as `fail` with `durationMs: 0` rather than silently omitted —
+   * the caller always gets one entry per requested suite.
+   */
+  private async parseSummary(
+    summaryPath: string | undefined,
+    requestedSuites: string[],
+    modelId: string,
+  ): Promise<{ suiteResults: LocalBatchEvalSuiteResult[]; parseError?: string }> {
+    const fallback = (): LocalBatchEvalSuiteResult[] =>
+      requestedSuites.map((suite) => ({ suite, status: 'fail' as const, durationMs: 0 }));
+
+    if (!summaryPath) {
+      return { suiteResults: fallback(), parseError: 'no "Summary: <path>" line found in batch runner stdout' };
+    }
+
+    let summary: BatchSummaryFile;
+    try {
+      const raw = await readFile(summaryPath, 'utf-8');
+      summary = JSON.parse(raw) as BatchSummaryFile;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { suiteResults: fallback(), parseError: `failed to read/parse ${summaryPath}: ${message}` };
+    }
+
+    const bySuite = new Map<string, BatchSummaryResultEntry>();
+    for (const entry of summary.results ?? []) {
+      if (entry.model === modelId) {
+        bySuite.set(entry.suite, entry);
+      }
+    }
+
+    const suiteResults = requestedSuites.map((suite): LocalBatchEvalSuiteResult => {
+      const entry = bySuite.get(suite);
+      if (!entry) {
+        return { suite, status: 'fail', durationMs: 0 };
+      }
+      return {
+        suite,
+        status: entry.status,
+        durationMs: entry.duration_ms,
+        logPath: entry.log_file,
+      };
+    });
+
+    return { suiteResults };
   }
 }
