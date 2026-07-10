@@ -42,6 +42,19 @@ export const toolCallTierSchema = z.object({
 });
 
 /**
+ * Single tier for parameter-count-based health-check timeouts.
+ * First tier where parameterCountBillions <= maxParamsBillions applies.
+ * A flat 30-minute ceiling (the pre-existing default) is enough for models up
+ * to ~14B but starves genuinely slow loads for 70B+ / large-MoE models
+ * (multi-GB safetensors shards, FP8/NVFP4 CPU-side repacking).
+ */
+export const healthCheckTimeoutTierSchema = z.object({
+  maxParamsBillions: z.number().positive(),
+  timeoutSeconds: z.number().int().positive(),
+});
+export type HealthCheckTimeoutTier = z.infer<typeof healthCheckTimeoutTierSchema>;
+
+/**
  * Benchmark threshold configuration for model evaluation criteria
  */
 export const benchmarkThresholdsSchema = z.object({
@@ -71,7 +84,19 @@ export const benchmarkThresholdsSchema = z.object({
     { maxParamsBillions: Infinity, minSuccessRate: 1.0 },
   ]),
   concurrencyLevels: z.array(z.number().int().positive()).default([1, 4, 16]),
+  /** Legacy flat health-check timeout (used when model param count is unknown) */
   healthCheckTimeoutSeconds: z.number().int().positive().default(1800),
+  /**
+   * Tiered health-check timeouts by model size (param count in billions).
+   * First tier where params <= maxParamsBillions applies. Falls back to
+   * `healthCheckTimeoutSeconds` when param count is unknown.
+   */
+  healthCheckTimeoutSecondsTiers: z.array(healthCheckTimeoutTierSchema).default([
+    { maxParamsBillions: 14, timeoutSeconds: 1200 },
+    { maxParamsBillions: 40, timeoutSeconds: 1800 },
+    { maxParamsBillions: 80, timeoutSeconds: 2700 },
+    { maxParamsBillions: Infinity, timeoutSeconds: 3600 },
+  ]),
 });
 
 /**
@@ -311,6 +336,19 @@ export const engineConfigSchema = z.object({
   vllmGpuMemoryUtilization: z.number().min(0).max(1).default(0.95),
   /** Maximum model length override (optional, engine auto-detects) */
   maxModelLen: z.number().int().positive().optional(),
+  /**
+   * Minimum free disk (GB) required on the GPU VM's docker filesystem before a
+   * deploy; the effective per-deploy threshold is
+   * `max(minFreeDiskGb, estimatedModelWeightsGb + modelLoadHeadroomGb)`, so a
+   * large model reserves its own real footprint instead of the static floor.
+   * Set to 0 to disable the pre-deploy disk check entirely. Default 80.
+   */
+  minFreeDiskGb: z.number().nonnegative().default(80),
+  /**
+   * Fixed headroom (GB) added on top of a model's estimated weight size when
+   * computing its disk-space reservation. Default 20.
+   */
+  modelLoadHeadroomGb: z.number().nonnegative().default(20),
 });
 
 /**
@@ -1035,6 +1073,57 @@ export function resolveMinToolCallSuccessRate(
     }
   }
   return sorted[sorted.length - 1]?.minSuccessRate ?? flatFallback;
+}
+
+/**
+ * Resolves the health-check readiness timeout (seconds) for a model based on
+ * its parameter count. Falls back to the flat `healthCheckTimeoutSeconds`
+ * when the param count is unknown or non-positive. Larger models (bigger
+ * weight downloads, FP8/NVFP4 CPU-side repacking) get more time to become
+ * healthy before the deploy is classified as a timeout failure.
+ */
+export function resolveHealthCheckTimeoutSeconds(
+  thresholds: BenchmarkThresholds,
+  parameterCountBillions: number | null,
+): number {
+  const tiers = thresholds.healthCheckTimeoutSecondsTiers;
+  const flatFallback = thresholds.healthCheckTimeoutSeconds;
+  if (parameterCountBillions === null || parameterCountBillions <= 0) {
+    return flatFallback;
+  }
+  if (!Array.isArray(tiers) || tiers.length === 0) {
+    return flatFallback;
+  }
+  const sorted = [...tiers].sort((a, b) => a.maxParamsBillions - b.maxParamsBillions);
+  for (const tier of sorted) {
+    if (parameterCountBillions <= tier.maxParamsBillions) {
+      return tier.timeoutSeconds;
+    }
+  }
+  return sorted[sorted.length - 1]?.timeoutSeconds ?? flatFallback;
+}
+
+/**
+ * Lighter-weight variant of `resolveHealthCheckTimeoutSeconds` for callers that
+ * only have the tiers + flat fallback (e.g. `VllmDeploymentService`, which is
+ * constructed from individual `VllmDeploymentOptions` fields rather than a full
+ * `BenchmarkThresholds` object). Same tier-selection semantics.
+ */
+export function resolveHealthCheckTimeoutMsFromTiers(
+  tiers: HealthCheckTimeoutTier[],
+  flatFallbackMs: number,
+  parameterCountBillions: number | null,
+): number {
+  if (parameterCountBillions === null || parameterCountBillions <= 0 || tiers.length === 0) {
+    return flatFallbackMs;
+  }
+  const sorted = [...tiers].sort((a, b) => a.maxParamsBillions - b.maxParamsBillions);
+  for (const tier of sorted) {
+    if (parameterCountBillions <= tier.maxParamsBillions) {
+      return tier.timeoutSeconds * 1000;
+    }
+  }
+  return (sorted[sorted.length - 1]?.timeoutSeconds ?? flatFallbackMs / 1000) * 1000;
 }
 
 export type VMHardwareProfile = z.infer<typeof vmHardwareProfileSchema>;

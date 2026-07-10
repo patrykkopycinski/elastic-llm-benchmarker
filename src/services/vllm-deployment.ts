@@ -1,4 +1,5 @@
-import type { SSHConfig, VMHardwareProfile } from '../types/config.js';
+import type { SSHConfig, VMHardwareProfile, HealthCheckTimeoutTier } from '../types/config.js';
+import { resolveHealthCheckTimeoutMsFromTiers } from '../types/config.js';
 import type { ModelInfo, GpuUtilization } from '../types/benchmark.js';
 import type { SSHClientPool, CommandResult } from './ssh-client.js';
 import { HealthCheckService } from './health-check.js';
@@ -7,6 +8,7 @@ import {
   getVllmParamsForModel,
   UNSLOTH_CHAT_TEMPLATES_URL,
 } from './vllm-model-params.js';
+import { getBytesPerParamForQuantizations } from './model-candidate-filter.js';
 import { createLogger } from '../utils/logger.js';
 
 /** Redact secret-bearing `-e KEY=value` flags before logging shell commands. */
@@ -67,6 +69,19 @@ export interface VllmDeploymentOptions {
    * Default 80 (headroom for a ~70B download). Set to 0 to disable the check.
    */
   minFreeDiskGb?: number;
+  /**
+   * Fixed headroom (GB) added on top of the incoming model's estimated weight
+   * size when computing the disk-space reservation for a deploy — covers the
+   * container's writable layer, tokenizer/config files, and vLLM's on-disk
+   * compilation/CUDA-graph cache. Default 20.
+   */
+  modelLoadHeadroomGb?: number;
+  /**
+   * Model-size-aware health check timeout tiers (see `resolveHealthCheckTimeoutSeconds`
+   * in `types/config.ts`). When set, overrides the flat `healthCheckTimeoutMs` for models
+   * with a known parameter count — a 235B model gets a longer window than a 7B model.
+   */
+  healthCheckTimeoutSecondsTiers?: HealthCheckTimeoutTier[];
 }
 
 /** Result of a successful vLLM deployment */
@@ -286,7 +301,15 @@ export class VllmDeploymentService {
   private readonly logger;
   private readonly healthCheckService: HealthCheckService;
   private readonly options: Required<
-    Omit<VllmDeploymentOptions, 'additionalDockerArgs' | 'maxModelLen' | 'huggingfaceToken' | 'chatTemplate' | 'otlpTracesEndpoint'>
+    Omit<
+      VllmDeploymentOptions,
+      | 'additionalDockerArgs'
+      | 'maxModelLen'
+      | 'huggingfaceToken'
+      | 'chatTemplate'
+      | 'otlpTracesEndpoint'
+      | 'healthCheckTimeoutSecondsTiers'
+    >
   > & {
     additionalDockerArgs: string[];
     maxModelLen: number | null;
@@ -295,6 +318,8 @@ export class VllmDeploymentService {
     useSudo: boolean;
     otlpTracesEndpoint: string | null;
     minFreeDiskGb: number;
+    modelLoadHeadroomGb: number;
+    healthCheckTimeoutSecondsTiers: HealthCheckTimeoutTier[];
   };
 
   /**
@@ -328,6 +353,8 @@ export class VllmDeploymentService {
       otlpTracesEndpoint: options.otlpTracesEndpoint ?? null,
       hfCacheVolume: options.hfCacheVolume ?? 'vllm-hf-cache',
       minFreeDiskGb: options.minFreeDiskGb ?? 80,
+      modelLoadHeadroomGb: options.modelLoadHeadroomGb ?? 20,
+      healthCheckTimeoutSecondsTiers: options.healthCheckTimeoutSecondsTiers ?? [],
     };
 
     // Initialize the health check service with matching configuration
@@ -410,11 +437,13 @@ export class VllmDeploymentService {
       });
     }
 
-    // Step 0: Reclaim disk if the VM is low on space, so the weight download +
-    // container layer never hit "no space left on device" mid-deploy. Best-effort:
-    // never blocks the deploy — if the disk is genuinely full the docker run fails
-    // and the scheduler's classifier retries it after this GC has run once.
-    await this.ensureDiskSpace(sshConfig, model.id);
+    // Step 0: Reclaim disk if the VM doesn't have room for THIS model's weights
+    // (not just some flat floor), so the weight download + container layer never
+    // hit "no space left on device" mid-deploy. Best-effort: never blocks the
+    // deploy — if the disk is genuinely full the docker run fails and the
+    // scheduler's classifier retries it after this GC has run once.
+    const estimatedModelGb = this.estimateModelDiskGb(model);
+    await this.ensureDiskSpace(sshConfig, model.id, estimatedModelGb);
 
     // Step 1: Stop existing vLLM containers
     await this.stopExistingContainers(sshConfig, model.id);
@@ -487,12 +516,51 @@ export class VllmDeploymentService {
       modelId: model.id,
     });
 
-    // Step 4: Wait for health check using the HealthCheckService
-    const healthCheckResult = await this.healthCheckService.waitForHealthy(
-      sshConfig,
-      containerName,
-      model.id,
+    // Step 4: Wait for health check using the HealthCheckService. Larger models
+    // take proportionally longer to load weights + build CUDA graphs, so the
+    // timeout is resolved per-model from healthCheckTimeoutSecondsTiers rather
+    // than using one flat timeout for a 7B and a 235B model alike.
+    const healthCheckTimeoutMs = resolveHealthCheckTimeoutMsFromTiers(
+      this.options.healthCheckTimeoutSecondsTiers,
+      this.options.healthCheckTimeoutMs,
+      model.parameterCount !== null ? model.parameterCount / 1e9 : null,
     );
+    let healthCheckResult: HealthCheckResult;
+    try {
+      healthCheckResult = await this.healthCheckService.waitForHealthy(
+        sshConfig,
+        containerName,
+        model.id,
+        healthCheckTimeoutMs,
+      );
+    } catch (healthCheckErr) {
+      // A failed health check (timeout, OOM, CUDA error, etc.) leaves a container
+      // running/dead on the VM holding GPU memory and disk. Stage1Worker's
+      // `deployment` local is still null at this point (the deploy() call never
+      // returned), so its finally-block "scheduler owns teardown" log never
+      // fires and nothing else stops this container — clean it up here, at the
+      // one place that actually knows the container name, instead of leaking it
+      // until an unrelated later deploy's stopExistingContainers() sweep finds it.
+      this.logger.warn(
+        `Deploy failed post-launch — removing container '${containerName}' to avoid an orphan`,
+        {
+          modelId: model.id,
+          error: healthCheckErr instanceof Error ? healthCheckErr.message : String(healthCheckErr),
+        },
+      );
+      await this.execSSH(
+        sshConfig,
+        `docker rm -f ${containerName}`,
+        this.options.stopTimeoutMs,
+        model.id,
+      ).catch((rmErr) => {
+        this.logger.error(`Failed to remove orphaned container '${containerName}'`, {
+          modelId: model.id,
+          error: rmErr instanceof Error ? rmErr.message : String(rmErr),
+        });
+      });
+      throw healthCheckErr;
+    }
 
     // Step 5: Determine max-model-len from health check result or running container
     let maxModelLen: number | null = healthCheckResult.modelInfo?.maxModelLen ?? null;
@@ -909,6 +977,22 @@ export class VllmDeploymentService {
   }
 
   /**
+   * Estimates on-disk footprint (GB) for a model's weights, plus a fixed
+   * headroom for the container writable layer / vLLM compile cache. Reuses
+   * the same bytes-per-parameter precision table as candidate filtering
+   * (`getBytesPerParamForQuantizations`) so a quantized model reserves its
+   * real (smaller) footprint rather than a worst-case BF16 estimate. Returns
+   * null when `parameterCount` is unknown — callers fall back to the static
+   * `minFreeDiskGb` floor in that case rather than guessing.
+   */
+  private estimateModelDiskGb(model: ModelInfo): number | null {
+    if (!model.parameterCount || model.parameterCount <= 0) return null;
+    const bytesPerParam = getBytesPerParamForQuantizations(model.quantizations);
+    const weightsGb = (model.parameterCount * bytesPerParam) / 1024 ** 3;
+    return Math.ceil(weightsGb + this.options.modelLoadHeadroomGb);
+  }
+
+  /**
    * Read free disk (GB) on the docker filesystem. Returns null if it can't be
    * parsed (df/docker unavailable) so callers fail open rather than GC blindly.
    */
@@ -947,10 +1031,27 @@ export class VllmDeploymentService {
    * so a deploy never deletes the very weights it is about to serve. Best-effort
    * throughout; a GC failure is logged, not thrown (never stops the VM, never
    * blocks deploy).
+   *
+   * `requiredModelGb`, when provided, is the estimated on-disk size of the
+   * model about to be deployed (weights + headroom). The effective threshold
+   * is `max(minFreeDiskGb, requiredModelGb)` — a static `minFreeDiskGb` floor
+   * (default 80GB) silently under-reserves for large downloads (e.g. a 103GB
+   * FP8 MoE model), leaving too little free space for the download to
+   * complete and stalling the deploy with "no space left on device" deep
+   * inside model loading, well past this preflight check.
    */
-  async ensureDiskSpace(sshConfig: SSHConfig, keepModelId?: string): Promise<void> {
-    const minFreeGb = this.options.minFreeDiskGb;
-    if (minFreeGb <= 0) return;
+  async ensureDiskSpace(
+    sshConfig: SSHConfig,
+    keepModelId?: string,
+    requiredModelGb?: number | null,
+  ): Promise<void> {
+    // minFreeDiskGb <= 0 is the explicit opt-out — honor it regardless of the
+    // estimated model size.
+    if (this.options.minFreeDiskGb <= 0) return;
+    const minFreeGb = Math.max(
+      this.options.minFreeDiskGb,
+      requiredModelGb && requiredModelGb > 0 ? requiredModelGb : 0,
+    );
 
     const before = await this.readFreeDiskGb(sshConfig);
     if (before === null) {

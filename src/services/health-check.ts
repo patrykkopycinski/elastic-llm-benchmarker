@@ -347,6 +347,8 @@ export class HealthCheckService {
    * @param sshConfig - SSH connection configuration for the target VM
    * @param containerName - Name of the Docker container to monitor
    * @param modelId - The model ID being deployed (for error context)
+   * @param timeoutMsOverride - Per-call timeout override (e.g. model-size-aware
+   *   tier resolved by the caller); falls back to the service-wide default when omitted
    * @returns Health check result with status, timing, and error details
    * @throws {HealthCheckServiceError} If the health check fails with a classified error
    */
@@ -354,18 +356,20 @@ export class HealthCheckService {
     sshConfig: SSHConfig,
     containerName: string,
     modelId: string,
+    timeoutMsOverride?: number,
   ): Promise<HealthCheckResult> {
     const startTime = Date.now();
     let pollAttempts = 0;
     let lastPollResult: HealthCheckPollResult | null = null;
+    const timeoutMs = timeoutMsOverride ?? this.options.timeoutMs;
 
     this.logger.info(`Starting health check for container '${containerName}'`, {
       modelId,
-      timeoutMs: this.options.timeoutMs,
+      timeoutMs,
       intervalMs: this.options.intervalMs,
     });
 
-    while (Date.now() - startTime < this.options.timeoutMs) {
+    while (Date.now() - startTime < timeoutMs) {
       pollAttempts++;
       const elapsedMs = Date.now() - startTime;
 
@@ -423,7 +427,7 @@ export class HealthCheckService {
 
       // Log progress
       this.logger.debug(
-        `Health check pending for '${containerName}' (${Math.round(elapsedMs / 1000)}s / ${Math.round(this.options.timeoutMs / 1000)}s)`,
+        `Health check pending for '${containerName}' (${Math.round(elapsedMs / 1000)}s / ${Math.round(timeoutMs / 1000)}s)`,
         {
           modelId,
           attempt: pollAttempts,

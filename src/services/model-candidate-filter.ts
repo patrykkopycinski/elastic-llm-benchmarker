@@ -90,7 +90,7 @@ const DEFAULT_TARGET_HARDWARE: VMHardwareProfile = {
 };
 
 /** Bytes per parameter for different precisions */
-const BYTES_PER_PARAM: Record<string, number> = {
+export const BYTES_PER_PARAM: Record<string, number> = {
   fp32: 4,
   fp16: 2,
   bf16: 2,
@@ -105,6 +105,25 @@ const BYTES_PER_PARAM: Record<string, number> = {
   '4bit': 0.5,
   '8bit': 1,
 };
+
+/**
+ * Determines the lowest bytes-per-parameter based on available quantizations.
+ * Falls back to fp16 (2 bytes) if no quantization is recognized. Standalone
+ * function (not a class method) so other services — e.g. disk-space
+ * reservation before a deploy — can reuse the same precision table without
+ * duplicating it.
+ */
+export function getBytesPerParamForQuantizations(quantizations: string[]): number {
+  let best = 2; // Default: fp16
+  for (const quant of quantizations) {
+    const normalized = quant.toLowerCase();
+    const bytesPerParam = BYTES_PER_PARAM[normalized];
+    if (bytesPerParam !== undefined && bytesPerParam < best) {
+      best = bytesPerParam;
+    }
+  }
+  return best;
+}
 
 /** VRAM per GPU for known GPU types (in GB) */
 const GPU_VRAM_GB: Record<string, number> = {
@@ -633,16 +652,6 @@ export class ModelCandidateFilter {
    * Falls back to fp16 (2 bytes) if no quantization is recognized.
    */
   private getBestBytesPerParam(quantizations: string[]): number {
-    let best = 2; // Default: fp16
-
-    for (const quant of quantizations) {
-      const normalized = quant.toLowerCase();
-      const bytesPerParam = BYTES_PER_PARAM[normalized];
-      if (bytesPerParam !== undefined && bytesPerParam < best) {
-        best = bytesPerParam;
-      }
-    }
-
-    return best;
+    return getBytesPerParamForQuantizations(quantizations);
   }
 }

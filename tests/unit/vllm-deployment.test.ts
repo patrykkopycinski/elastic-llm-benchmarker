@@ -755,6 +755,54 @@ describe('VllmDeploymentService', () => {
       ).rejects.toThrow(HealthCheckServiceError);
     });
 
+    it('removes the container when health check fails (no orphan leak)', async () => {
+      // Regression: a failed health check used to leave the container running —
+      // Stage1Worker's `deployment` local stays null on this path, so nothing else
+      // stopped it, silently blocking subsequent deploys on the VM until an
+      // unrelated later deploy's stopExistingContainers() swept it up.
+      const model = createTestModel();
+      const containerName = 'vllm-model-meta-llama-llama-3-70b-instruct';
+      let rmCalledAfterRun = false;
+      let dockerRunSeen = false;
+
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker ps')) {
+          return Promise.resolve(createCommandResult({ stdout: '', success: true }));
+        }
+        if (command.includes('docker pull')) {
+          return Promise.resolve(createCommandResult({ success: true, durationMs: 100 }));
+        }
+        if (command.includes('docker run')) {
+          dockerRunSeen = true;
+          return Promise.resolve(
+            createCommandResult({ stdout: 'container123\n', success: true }),
+          );
+        }
+        if (dockerRunSeen && command === `docker rm -f ${containerName}`) {
+          rmCalledAfterRun = true;
+          return Promise.resolve(createCommandResult({ success: true }));
+        }
+        if (command.includes('docker inspect')) {
+          return Promise.resolve(createCommandResult({ stdout: 'false', success: true }));
+        }
+        if (command.includes('docker logs')) {
+          return Promise.resolve(
+            createCommandResult({ stdout: 'CUDA out of memory', success: true }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ success: true }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new VllmDeploymentService(pool, 'error');
+
+      await expect(
+        service.deploy(testSSHConfig, model, testHardwareProfile),
+      ).rejects.toThrow(HealthCheckServiceError);
+
+      expect(rmCalledAfterRun).toBe(true);
+    });
+
     it('uses correct tensor-parallel-size from hardware profile', async () => {
       const model = createTestModel();
       const hwProfile: VMHardwareProfile = {

@@ -1653,6 +1653,9 @@ if (_binaryName === 'benchmarker-queue') {
           huggingfaceToken: config.huggingfaceToken,
           useSudo: config.ssh.useSudo,
           healthCheckTimeoutMs: config.benchmarkThresholds.healthCheckTimeoutSeconds * 1000,
+          healthCheckTimeoutSecondsTiers: config.benchmarkThresholds.healthCheckTimeoutSecondsTiers,
+          minFreeDiskGb: config.engine?.minFreeDiskGb,
+          modelLoadHeadroomGb: config.engine?.modelLoadHeadroomGb,
           // Emit vLLM OTLP traces to the EDOT collector when configured. vLLM runs
           // in a bridge-network container on the remote VM, so the endpoint is
           // resolved from the container's perspective (host.docker.internal) and

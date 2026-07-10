@@ -3,6 +3,7 @@ import { loadConfig, loadConfigFile, formatValidationErrors } from '../../src/co
 import {
   benchmarkThresholdsSchema,
   resolveMinToolCallSuccessRate,
+  resolveHealthCheckTimeoutMsFromTiers,
 } from '../../src/types/config.js';
 import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -346,5 +347,32 @@ describe('resolveMinToolCallSuccessRate', () => {
       thresholds.minToolCallSuccessRate,
     );
     expect(resolveMinToolCallSuccessRate(thresholds, 0)).toBe(thresholds.minToolCallSuccessRate);
+  });
+});
+
+describe('resolveHealthCheckTimeoutMsFromTiers', () => {
+  const tiers = [
+    { maxParamsBillions: 14, timeoutSeconds: 1200 },
+    { maxParamsBillions: 40, timeoutSeconds: 1800 },
+    { maxParamsBillions: 80, timeoutSeconds: 2700 },
+    { maxParamsBillions: Infinity, timeoutSeconds: 3600 },
+  ];
+  const flatFallbackMs = 1800 * 1000;
+
+  it('picks the first tier whose ceiling covers the model size', () => {
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 7)).toBe(1200 * 1000);
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 14)).toBe(1200 * 1000);
+  });
+
+  it('escalates the timeout for larger models (regression: GLM-4.5-Air-FP8 103GB timed out at flat 30min)', () => {
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 35)).toBe(1800 * 1000);
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 70)).toBe(2700 * 1000);
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 235)).toBe(3600 * 1000);
+  });
+
+  it('falls back to the flat timeout when param count is unknown, non-positive, or tiers are empty', () => {
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, null)).toBe(flatFallbackMs);
+    expect(resolveHealthCheckTimeoutMsFromTiers(tiers, flatFallbackMs, 0)).toBe(flatFallbackMs);
+    expect(resolveHealthCheckTimeoutMsFromTiers([], flatFallbackMs, 70)).toBe(flatFallbackMs);
   });
 });
