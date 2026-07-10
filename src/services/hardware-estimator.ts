@@ -19,7 +19,11 @@ export interface HFModelConfig {
   intermediate_size?: number;
   num_key_value_heads?: number;
   num_local_experts?: number;
+  n_routed_experts?: number;
+  num_experts?: number;
   num_experts_per_tok?: number;
+  moe_intermediate_size?: number;
+  n_shared_experts?: number;
   num_parameters?: number;
   [key: string]: unknown;
 }
@@ -227,8 +231,14 @@ export class HardwareEstimator {
     const hiddenSize = config.hidden_size;
     const numLayers = config.num_hidden_layers;
     const numAttentionHeads = config.num_attention_heads;
-    const numKvHeads = config.num_key_value_heads;
-    const numLocalExperts = config.num_local_experts;
+    // Expert count naming varies by family: Mixtral uses `num_local_experts`,
+    // Qwen3-MoE uses `num_experts`, DeepSeek-V3/Kimi-K2 use `n_routed_experts`.
+    // Kimi-K2-Instruct (n_routed_experts: 384, ~1T total params) was scored
+    // hardwareFit: true because only `num_local_experts` was checked here —
+    // the MoE multiplier never fired, so a ~1T MoE model was estimated as a
+    // ~37B dense model and would have OOM'd on deploy. See hf-card-parser.ts's
+    // estimateParamsBillionsFromConfig, which already checked all three names.
+    const numExperts = config.num_local_experts || config.num_experts || config.n_routed_experts;
 
     // If explicit parameter count is provided, use it directly.
     const explicitParams = config.num_parameters;
@@ -253,15 +263,31 @@ export class HardwareEstimator {
     // Rough heuristic: hidden_size^2 * 12 * num_layers / 1e9
     let paramsBillions = ((hiddenSize ** 2) * 12 * numLayers) / 1e9;
 
-    // MoE adjustment: if both GQA/MQA heads and local experts are present,
-    // scale up by the expert count factor.
-    if (
-      typeof numKvHeads === 'number' &&
-      numKvHeads > 0 &&
-      typeof numLocalExperts === 'number' &&
-      numLocalExperts > 1
-    ) {
-      paramsBillions *= Math.max(1, numLocalExperts * 0.9);
+    // MoE adjustment: scale up by the expert count factor when the config
+    // declares more than one expert (any naming convention).
+    if (typeof numExperts === 'number' && numExperts > 1) {
+      const moeIntermediateSize = config.moe_intermediate_size;
+      if (typeof moeIntermediateSize === 'number' && moeIntermediateSize > 0) {
+        // Precise estimate: only the FFN scales with expert count, and it
+        // scales at the expert's own (narrow) width — not the dense-
+        // equivalent width baked into the 12h^2 heuristic above. Naively
+        // multiplying the whole dense estimate by numExperts (the old
+        // approach) overshoots by ~10x on high-expert-count architectures
+        // (GLM-4.5-Air: 128 experts → estimated 1990GB vs real ~106B params
+        // / ~200GB bf16; Kimi-K2: 384 experts) because it scales the wide
+        // dense FFN term too, not just the narrow per-expert one. Verified
+        // against both real configs: this formula lands within ~1% of each
+        // model's published total parameter count.
+        const attnParamsBillions = (4 * (hiddenSize ** 2) * numLayers) / 1e9;
+        const totalExperts = numExperts + (config.n_shared_experts ?? 0);
+        const moeFfnParamsBillions =
+          (3 * hiddenSize * moeIntermediateSize * totalExperts * numLayers) / 1e9;
+        paramsBillions = attnParamsBillions + moeFfnParamsBillions;
+      } else {
+        // No expert-width info available — fall back to the coarse
+        // whole-model multiplier (better than ignoring MoE entirely).
+        paramsBillions *= Math.max(1, numExperts * 0.9);
+      }
     }
 
     // Confidence drops to medium if intermediate_size is missing (heuristic is rougher)

@@ -1,6 +1,10 @@
 import type { ModelInfo } from '../types/benchmark.js';
 import type { VMHardwareProfile } from '../types/config.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  VLLM_TOOL_CALL_PARSERS,
+  VLLM_SUPPORTED_ARCHITECTURES,
+} from './vllm-architecture-registry.js';
 
 // ─── Filter Result Types ─────────────────────────────────────────────────────
 
@@ -113,83 +117,6 @@ const GPU_VRAM_GB: Record<string, number> = {
   'nvidia-v100': 16,
   'nvidia-a10g': 24,
 };
-
-/**
- * vLLM supported architectures with their corresponding tool call parser.
- * Only model families that have verified vLLM tool calling support are listed.
- */
-const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
-  // Hermes-style tool calling (Qwen, NousResearch Hermes models)
-  qwen: 'hermes',
-  qwen2: 'hermes',
-  qwen2_moe: 'hermes',
-  qwen3: 'hermes',
-  qwen3_moe: 'hermes',
-  // Qwen3.6 generation (multimodal-capable; text/tool-calling served fine by
-  // vLLM — verified with Ornith-1.0-35B qwen3_5_moe SUPPORT run).
-  qwen3_5: 'hermes',
-  qwen3_5_moe: 'hermes',
-  // Mistral-native tool calling
-  mistral: 'mistral',
-  mixtral: 'mistral',
-  // Llama 3 JSON-based tool calling
-  llama: 'llama3_json',
-  codellama: 'llama3_json',
-  // GLM-4.5/4.6 (Zhipu/Z.ai) — requires --tool-call-parser glm45 --reasoning-parser glm45
-  glm4_moe: 'glm45',
-  // Kimi K2 (Moonshot AI) — DeepseekV3ForCausalLM arch, model_type kimi_k2
-  kimi_k2: 'kimi_k2',
-  // Seed-OSS (ByteDance-Seed) — SeedOssForCausalLM arch, native vLLM support since 0.10.2
-  seed_oss: 'seed_oss',
-};
-
-/**
- * Architectures that vLLM supports for inference (broader than tool-calling list).
- */
-const VLLM_SUPPORTED_ARCHITECTURES = new Set([
-  'llama',
-  'mistral',
-  'mixtral',
-  'qwen',
-  'qwen2',
-  'qwen2_moe',
-  'qwen3',
-  'qwen3_moe',
-  'qwen3_5',
-  'qwen3_5_moe',
-  'gemma',
-  'gemma2',
-  'phi',
-  'phi3',
-  'starcoder2',
-  'codellama',
-  'deepseek',
-  'deepseek_v2',
-  'deepseek_v3',
-  'internlm',
-  'internlm2',
-  'yi',
-  'baichuan',
-  'chatglm',
-  'glm4_moe',
-  'kimi_k2',
-  'seed_oss',
-  'falcon',
-  'mpt',
-  'bloom',
-  'opt',
-  'gpt_neox',
-  'gpt2',
-  'gptj',
-  'stablelm',
-  'command-r',
-  'cohere',
-  'dbrx',
-  'jamba',
-  'olmo',
-  'arctic',
-  'exaone',
-]);
 
 /**
  * Models known to fail deployment or benchmarking.

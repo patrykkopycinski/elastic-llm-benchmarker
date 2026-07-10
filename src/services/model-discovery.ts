@@ -2,6 +2,10 @@ import type { ModelInfo } from '../types/benchmark.js';
 import type { VMHardwareProfile } from '../types/config.js';
 import { HardwareEstimator } from './hardware-estimator.js';
 import { createLogger } from '../utils/logger.js';
+import {
+  TOOL_CALLING_WHITELIST,
+  VLLM_SUPPORTED_ARCHITECTURES,
+} from './vllm-architecture-registry.js';
 
 // ─── HuggingFace API Response Types ──────────────────────────────────────────
 
@@ -60,21 +64,14 @@ const MAX_PAGES = 10;
 const MODELS_PER_PAGE = 100;
 const DEFAULT_SEARCH = '';
 
-/** Default whitelist for tool-calling–friendly model families. */
-const DEFAULT_TOOL_CALLING_WHITELIST = new Set([
-  'llama',
-  'qwen2',
-  'qwen2_moe',
-  'qwen3',
-  'qwen3_moe',
-  // qwen3_5 / qwen3_5_moe = the Qwen3.6 generation (multimodal image-text-to-text
-  // but text/tool-calling capable — Ornith-1.0 is post-trained on it). Included so
-  // discovery re-surfaces the current-gen models auto, not only via manual enqueue.
-  'qwen3_5',
-  'qwen3_5_moe',
-  'mistral',
-  'mixtral',
-]);
+/**
+ * Default whitelist for tool-calling–friendly model families. Derived from the
+ * canonical `TOOL_CALLING_WHITELIST` registry (see vllm-architecture-registry.ts)
+ * so this can't drift out of sync with the parser map — that drift previously
+ * fast-rejected `mistral3` (Mistral-Small-3.x, Devstral-Small-2) and bare
+ * `glm4_moe` (GLM-4.5-Air) even though both have working parsers elsewhere.
+ */
+const DEFAULT_TOOL_CALLING_WHITELIST: ReadonlySet<string> = TOOL_CALLING_WHITELIST;
 
 const defaultOptions: Required<ModelDiscoveryOptions> = {
   search: DEFAULT_SEARCH,
@@ -85,48 +82,13 @@ const defaultOptions: Required<ModelDiscoveryOptions> = {
   includeGated: false,
 };
 
-/** Architecture families compatible with vLLM (transformers-based and MoE) */
-const COMPATIBLE_ARCHITECTURES = new Set([
-  'llama',
-  'mistral',
-  'mixtral',
-  'qwen',
-  'qwen2',
-  'qwen2_moe',
-  'qwen3',
-  'qwen3_moe',
-  'qwen3_5',
-  'qwen3_5_moe',
-  'gemma',
-  'gemma2',
-  'phi',
-  'phi3',
-  'starcoder2',
-  'codellama',
-  'deepseek',
-  'deepseek_v2',
-  'deepseek_v3',
-  'internlm',
-  'internlm2',
-  'yi',
-  'baichuan',
-  'chatglm',
-  'falcon',
-  'mpt',
-  'bloom',
-  'opt',
-  'gpt_neox',
-  'gpt2',
-  'gptj',
-  'stablelm',
-  'command-r',
-  'cohere',
-  'dbrx',
-  'jamba',
-  'olmo',
-  'arctic',
-  'exaone',
-]);
+/**
+ * Architecture families compatible with vLLM (transformers-based and MoE).
+ * Derived from the canonical `VLLM_SUPPORTED_ARCHITECTURES` registry so the
+ * deep-eval compatibility check can't drift from the fast-reject whitelist or
+ * the candidate filter's own architecture check.
+ */
+const COMPATIBLE_ARCHITECTURES: ReadonlySet<string> = VLLM_SUPPORTED_ARCHITECTURES;
 
 /** Known open-source / permissive license identifiers on HuggingFace */
 const OPEN_SOURCE_LICENSES = new Set([
@@ -484,7 +446,7 @@ export class ModelDiscoveryService {
 
     // Step 6: Extract metadata
     const quantizations = this.extractQuantizations(rawModel, config);
-    const supportsToolCalling = this.detectToolCallingSupport(rawModel);
+    const supportsToolCalling = this.detectToolCallingSupport(rawModel, architecture);
 
     const name = id.split('/').pop() ?? id;
 
@@ -614,9 +576,28 @@ export class ModelDiscoveryService {
     return Array.from(quants);
   }
 
-  private detectToolCallingSupport(model: HFModelEntry): boolean {
+  /**
+   * `architecture` is optional so this stays callable from any existing site
+   * without a config fetch. When passed, an architecture with a verified vLLM
+   * tool-call parser (TOOL_CALLING_WHITELIST) counts as tool-calling capable
+   * regardless of id/tag phrasing — release-name conventions like
+   * `zai-org/GLM-4.5-Air` (no 'instruct'/'chat'/'it'/'tool' substring) were
+   * false-negatived by the naming heuristic alone even though `glm4_moe` has a
+   * known `glm45` parser, silently fast-rejecting the model downstream.
+   */
+  private detectToolCallingSupport(model: HFModelEntry, architecture?: string): boolean {
     const id = model.id.toLowerCase();
     const tags = model.tags?.map((t) => t.toLowerCase()) ?? [];
+
+    // An explicit "-base" marker means the checkpoint is a raw pretrained
+    // model, not instruction/tool-call tuned — vLLM can technically load it
+    // with the architecture's parser, but it won't actually emit tool calls.
+    // This overrides the architecture-whitelist shortcut below.
+    const looksLikeBaseModel = /(^|[-_/])base([-_]|$)/.test(id);
+
+    if (architecture && !looksLikeBaseModel && TOOL_CALLING_WHITELIST.has(architecture)) {
+      return true;
+    }
 
     const toolIndicators = [
       'tool-calling',

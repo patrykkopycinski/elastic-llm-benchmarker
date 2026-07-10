@@ -822,6 +822,35 @@ describe('ModelDiscoveryService', () => {
 
       expect(result.models[0]!.supportsToolCalling).toBe(false);
     });
+
+    it('should detect tool calling from a known vLLM parser architecture even without a naming hint', async () => {
+      // Regression: zai-org/GLM-4.5-Air has no 'instruct'/'chat'/'it'/'tool'
+      // substring in its id or tags, so the naming heuristic alone false-
+      // negatived it — even though `glm4_moe` has a verified `glm45` parser
+      // in vllm-architecture-registry.ts. That false negative silently
+      // fast-rejected a hardware-fit, tool-calling-capable model.
+      const mockModel = createMockHFModel({
+        id: 'zai-org/GLM-4.5-Air',
+        tags: ['text-generation', 'license:mit'],
+        config: { model_type: 'glm4_moe', architectures: ['Glm4MoeForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'glm4_moe',
+        architectures: ['Glm4MoeForCausalLM'],
+        max_position_embeddings: 131072,
+      });
+
+      const configs = new Map([['zai-org/GLM-4.5-Air', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models[0]!.supportsToolCalling).toBe(true);
+    });
   });
 
   describe('parameter count extraction', () => {

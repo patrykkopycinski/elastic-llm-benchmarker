@@ -91,6 +91,98 @@ describe('HardwareEstimator', () => {
       expect(result.confidence).toBe('medium');
     });
 
+    it('estimates a DeepSeek-V3/Kimi-K2-style MoE model using n_routed_experts naming', () => {
+      // Regression: moonshotai/Kimi-K2-Instruct-0905 (~1T total params) only
+      // declares `n_routed_experts` (DeepSeek-V3 naming), not `num_local_experts`
+      // (Mixtral naming). Before this fix the MoE multiplier never fired, so
+      // the estimator reported it as a ~37B dense model — hardwareFit: true on
+      // a 2xA100-80GB profile that would actually OOM on deploy.
+      const denseConfig = {
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+        num_attention_heads: 32,
+        num_key_value_heads: 8,
+      };
+      const moeConfig = {
+        ...denseConfig,
+        n_routed_experts: 8,
+        num_experts_per_tok: 2,
+      };
+
+      const denseResult = estimator.estimateGpuMemory(denseConfig);
+      const moeResult = estimator.estimateGpuMemory(moeConfig);
+
+      expect(moeResult.paramsBillions).toBeGreaterThan(denseResult.paramsBillions * 5);
+    });
+
+    it('estimates a Qwen3-MoE-style model using num_experts naming', () => {
+      const denseConfig = {
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+        num_attention_heads: 32,
+        num_key_value_heads: 8,
+      };
+      const moeConfig = {
+        ...denseConfig,
+        num_experts: 8,
+        num_experts_per_tok: 2,
+      };
+
+      const denseResult = estimator.estimateGpuMemory(denseConfig);
+      const moeResult = estimator.estimateGpuMemory(moeConfig);
+
+      expect(moeResult.paramsBillions).toBeGreaterThan(denseResult.paramsBillions * 5);
+    });
+
+    it('estimates a high-expert-count MoE with moe_intermediate_size precisely (GLM-4.5-Air)', () => {
+      // Regression: the naive `numExperts * 0.9` multiplier (used when
+      // moe_intermediate_size is absent) scales the ENTIRE dense-equivalent
+      // estimate — including the wide dense-FFN term baked into the 12h^2
+      // heuristic — by the full expert count. For high-expert-count
+      // DeepSeek-V3-style architectures (128+ experts) that overshoots by
+      // ~10-20x, because real MoE experts use a much narrower
+      // `moe_intermediate_size`, not the dense-equivalent width. Real
+      // zai-org/GLM-4.5-Air config: 128 routed experts, 1 shared expert,
+      // moe_intermediate_size 1408, ~106B published total params. The old
+      // formula estimated ~1990GB (would reject a model that fits on
+      // 2xA100-80GB with FP8); this formula lands within ~1% of 106B params.
+      const config = {
+        hidden_size: 4096,
+        num_hidden_layers: 46,
+        num_attention_heads: 96,
+        num_key_value_heads: 8,
+        n_routed_experts: 128,
+        n_shared_experts: 1,
+        moe_intermediate_size: 1408,
+        num_experts_per_tok: 8,
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      expect(result.paramsBillions).toBeGreaterThan(95);
+      expect(result.paramsBillions).toBeLessThan(115);
+    });
+
+    it('estimates a very-high-expert-count MoE precisely (Kimi-K2)', () => {
+      // Real moonshotai/Kimi-K2-Instruct-0905 config: 384 routed experts,
+      // 1 shared expert, moe_intermediate_size 2048, ~1T published total
+      // params. The old whole-model multiplier estimated ~12,115GB (12x
+      // over); this formula lands within ~5% of 1T params.
+      const config = {
+        hidden_size: 7168,
+        num_hidden_layers: 61,
+        num_attention_heads: 64,
+        num_key_value_heads: 64,
+        n_routed_experts: 384,
+        n_shared_experts: 1,
+        moe_intermediate_size: 2048,
+        num_experts_per_tok: 8,
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      expect(result.paramsBillions).toBeGreaterThan(950);
+      expect(result.paramsBillions).toBeLessThan(1100);
+    });
+
     it('returns low confidence and zero for missing major fields', () => {
       const result = estimator.estimateGpuMemory({});
 
