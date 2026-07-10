@@ -31,6 +31,14 @@ export const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
   qwen2_moe: 'hermes',
   qwen3: 'hermes',
   qwen3_moe: 'hermes',
+  // Qwen3-Next (hybrid Mamba2/attention MoE, e.g. Qwen3-Next-80B-A3B) — HF
+  // model_type `qwen3_next`. Grammar is Qwen3-identical (Hermes-style tool
+  // calling); vLLM has native support since 0.10.2. Was previously reached
+  // only via the `arch.includes('qwen')` substring fallback in both this
+  // registry's consumers AND the model-id string-sniff in
+  // `getRecommendedToolCallParser` — correct by luck, not by design, and
+  // invisible to `TOOL_CALLING_WHITELIST`-based discovery pre-filtering.
+  qwen3_next: 'hermes',
   // Qwen3.6 generation (multimodal-capable; text/tool-calling served fine by
   // vLLM — verified with Ornith-1.0-35B qwen3_5_moe SUPPORT run).
   qwen3_5: 'hermes',

@@ -73,6 +73,19 @@ describe('ModelCandidateFilter', () => {
       expect(filter.evaluate(mistralModel).recommendedToolCallParser).toBe('mistral');
     });
 
+    it('resolves qwen3_next (Qwen3-Next hybrid MoE, e.g. Qwen3-Next-80B-A3B) via explicit registry entry, not substring fallback', () => {
+      const filter = new ModelCandidateFilter('error');
+      const model = createModelCandidate({
+        id: 'cyankiwi/Qwen3-Next-80B-A3B-Instruct-AWQ-4bit',
+        architecture: 'qwen3_next',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.recommendedToolCallParser).toBe('hermes');
+      expect(result.rejections.some((r) => r.criterion === 'vllm_architecture')).toBe(false);
+      expect(result.rejections.some((r) => r.criterion === 'tool_calling')).toBe(false);
+    });
+
     it('should return estimated VRAM for passing models', () => {
       const filter = new ModelCandidateFilter('error');
       const model = createModelCandidate({
