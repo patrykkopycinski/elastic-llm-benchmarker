@@ -57,13 +57,24 @@ function parseVllmOverridesFromSuggestions(
     const maxSeqs = text.match(/--max-num-seqs\s+(\d+)/);
     if (maxSeqs) extraArgs.push(`--max-num-seqs ${maxSeqs[1]}`);
 
-    // --dtype <str>
-    const dtype = text.match(/--dtype\s+(\w+)/);
+    // --dtype <str> — restrict to vLLM's actual accepted values so prose like
+    // "--dtype should be bfloat16" can't capture the stopword "should" (see
+    // chat-template guard below for the same prose-vs-literal failure mode).
+    const dtype = text.match(/--dtype\s+(auto|half|float16|bfloat16|float|float32)\b/);
     if (dtype) extraArgs.push(`--dtype ${dtype[1]}`);
 
-    // --chat-template <str>
+    // --chat-template <path>
+    // Stage 3 suggestions are LLM-authored prose (e.g. "...potentially passing
+    // --chat-template with the correct Mistral instruct template..."), not a
+    // literal shell command. A bare `\S+` capture grabs the next English word
+    // ("with") as if it were a real path, which vLLM then fails to load. Only
+    // accept captures that actually look like a template path/file, never a
+    // stopword — this deployed a broken container for Devstral-Small-2 in
+    // production before the guard was added.
     const chatTpl = text.match(/--chat-template\s+(\S+)/);
-    if (chatTpl) overrides.chatTemplate = chatTpl[1]!;
+    if (chatTpl && /^[\w./-]+\.jinja$|\//.test(chatTpl[1]!)) {
+      overrides.chatTemplate = chatTpl[1]!;
+    }
   }
 
   if (extraArgs.length > 0) {

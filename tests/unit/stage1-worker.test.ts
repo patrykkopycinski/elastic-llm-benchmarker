@@ -389,6 +389,63 @@ describe('Stage1WorkerImpl', () => {
         '/data/tool_chat_template_llama3.1_json.jinja',
       );
     });
+
+    it('should ignore --chat-template when the "value" is prose, not a path (regression: Devstral-Small-2 broken container)', async () => {
+      const reasoning: Stage3Result = {
+        runId: 'run-prev',
+        modelId: 'mistralai/Devstral-Small-2-24B-Instruct-2512',
+        status: 'success',
+        startedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T00:01:00Z',
+        suggestions: [
+          {
+            category: 'config',
+            title: 'Chat template',
+            description:
+              'Ensure the correct chat template is being applied by verifying ' +
+              '--tokenizer-mode and potentially passing --chat-template with the ' +
+              'correct Mistral instruct template.',
+            estimatedImpact: 'high',
+          },
+        ],
+      };
+
+      deps.resultsStore = createMockResultsStore(reasoning);
+      worker = new Stage1WorkerImpl(deps);
+
+      await worker.execute(createPipelineRun());
+
+      const deployCall = vi.mocked(deps.vllmEngine.deploy).mock.calls[0];
+      const overrides = deployCall![3] as VllmDeploymentOptions | undefined;
+      expect(overrides?.chatTemplate).toBeUndefined();
+    });
+
+    it('should ignore --dtype when the "value" is prose, not an actual dtype', async () => {
+      const reasoning: Stage3Result = {
+        runId: 'run-prev',
+        modelId: 'meta-llama/Llama-3-8B',
+        status: 'success',
+        startedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T00:01:00Z',
+        suggestions: [
+          {
+            category: 'config',
+            title: 'Precision',
+            description: 'Passing --dtype should improve throughput.',
+            estimatedImpact: 'medium',
+          },
+        ],
+      };
+
+      deps.resultsStore = createMockResultsStore(reasoning);
+      worker = new Stage1WorkerImpl(deps);
+
+      await worker.execute(createPipelineRun());
+
+      const deployCall = vi.mocked(deps.vllmEngine.deploy).mock.calls[0];
+      const overrides = deployCall![3] as VllmDeploymentOptions | undefined;
+      expect(overrides?.additionalDockerArgs).toBeUndefined();
+    });
   });
 
   describe('execute (happy path)', () => {
