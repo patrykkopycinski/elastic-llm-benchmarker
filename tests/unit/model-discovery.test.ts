@@ -853,6 +853,79 @@ describe('ModelDiscoveryService', () => {
     });
   });
 
+  describe('CUDA-incompatible packaging rejection', () => {
+    it('fast-rejects an MLX-quantized model via library_name', async () => {
+      // Regression: gregfrank/GLM-4.5-Air-ULRE-abliterated (library_name
+      // "mlx", quantization_config {bits:4} with no quant_method) was never
+      // fast-rejected, so it reached the pre-deployment filter where
+      // HardwareEstimator misread the bare `bits` field as a real vLLM
+      // quantization — drastically underestimating VRAM. vLLM's CUDA
+      // backend cannot load MLX weights at all (Metal-only), so the model
+      // deployed as full BF16 and OOM'd on the GPU VM.
+      const mockModel = createMockHFModel({
+        id: 'gregfrank/GLM-4.5-Air-ULRE-abliterated',
+        library_name: 'mlx',
+        tags: ['mlx', 'safetensors', 'glm4_moe', '4-bit'],
+        config: { model_type: 'glm4_moe', architectures: ['Glm4MoeForCausalLM'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map(),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+    });
+
+    it('fast-rejects an MLX-quantized model via tags when library_name is absent', async () => {
+      const mockModel = createMockHFModel({
+        id: 'someorg/some-mlx-model',
+        library_name: undefined,
+        tags: ['mlx', 'safetensors', '4-bit'],
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map(),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+    });
+
+    it('does not reject a normal transformers/safetensors model', async () => {
+      const mockModel = createMockHFModel({
+        id: 'zai-org/GLM-4.5-Air',
+        library_name: 'transformers',
+        tags: ['text-generation', 'safetensors', 'license:mit'],
+        config: { model_type: 'glm4_moe', architectures: ['Glm4MoeForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'glm4_moe',
+        architectures: ['Glm4MoeForCausalLM'],
+        max_position_embeddings: 131072,
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map([['zai-org/GLM-4.5-Air', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(1);
+    });
+  });
+
   describe('parameter count extraction', () => {
     it('should extract parameter count from model name (e.g., 70B)', async () => {
       const mockModel = createMockHFModel({

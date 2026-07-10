@@ -471,6 +471,20 @@ export class ModelDiscoveryService {
    * or `null` if it passes and warrants the expensive deep evaluation.
    */
   private fastReject(model: HFModelEntry): string | null {
+    // 0. CUDA-incompatible packaging (e.g. MLX — Apple Silicon only). These
+    // quantize with fields (`bits` with no `quant_method`) that the VRAM
+    // estimator misreads as a real vLLM-loadable quantization, drastically
+    // underestimating memory and causing an OOM on deploy. vLLM's CUDA
+    // backend cannot load MLX weights at all (MLX inference is Metal-only),
+    // so this is a categorical rejection, not a sizing heuristic.
+    // Verified live: gregfrank/GLM-4.5-Air-ULRE-abliterated (library_name
+    // "mlx", quantization_config {bits:4, no quant_method}) passed the
+    // pre-deployment filter with estimatedVramGb underestimated and OOM'd.
+    const incompatibleLibrary = this.detectCudaIncompatibleLibrary(model);
+    if (incompatibleLibrary) {
+      return `packaging '${incompatibleLibrary}' is not vLLM/CUDA-loadable`;
+    }
+
     // 1. Type whitelist (from search-result metadata)
     const modelType = this.extractModelTypeFromSearchResult(model);
     if (modelType && !this.typeWhitelist.has(modelType)) {
@@ -485,6 +499,35 @@ export class ModelDiscoveryService {
         if (estimatedGb > this.targetVramGb) {
           return `estimated VRAM ${estimatedGb.toFixed(1)} GB > budget ${this.targetVramGb.toFixed(1)} GB`;
         }
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect packaging formats vLLM's CUDA backend cannot load, regardless of
+   * VRAM fit. Returns the offending library/tag name, or `null` if the model
+   * looks CUDA-loadable. Checked via `library_name` (authoritative when
+   * present) and tags (fallback — HF search results don't always populate
+   * `library_name`).
+   */
+  private detectCudaIncompatibleLibrary(model: HFModelEntry): string | null {
+    // GGUF is deliberately NOT in this set: vLLM has (experimental) native
+    // GGUF support (`--quantization gguf`), and `extractQuantizations`
+    // already treats `.gguf` siblings as a recognized quantization tag
+    // elsewhere in this file — rejecting it here would contradict that.
+    const CUDA_INCOMPATIBLE_LIBRARIES = new Set(['mlx', 'mlx-lm']);
+
+    const library = model.library_name?.toLowerCase();
+    if (library && CUDA_INCOMPATIBLE_LIBRARIES.has(library)) {
+      return library;
+    }
+
+    const tags = model.tags?.map((t) => t.toLowerCase()) ?? [];
+    for (const tag of tags) {
+      if (CUDA_INCOMPATIBLE_LIBRARIES.has(tag)) {
+        return tag;
       }
     }
 
