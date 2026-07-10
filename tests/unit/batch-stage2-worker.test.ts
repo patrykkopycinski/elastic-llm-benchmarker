@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Logger } from 'winston';
 import { createBatchStage2Worker } from '../../src/worker/batch-stage2-worker.js';
 import type { Stage2Worker } from '../../src/worker/stage2-worker.js';
 import type { Stage2Gate } from '../../src/worker/stage2-gate.js';
@@ -77,7 +78,7 @@ describe('createBatchStage2Worker', () => {
       gate,
       batchRunner,
       resultsStore,
-      logger: logger as unknown as import('winston').Logger,
+      logger: logger as unknown as Logger,
     });
   });
 
