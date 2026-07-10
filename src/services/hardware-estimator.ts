@@ -305,6 +305,33 @@ export class HardwareEstimator {
         return qc.bits / 8;
       }
 
+      // compressed-tensors format (the successor to bare GPTQ/AWQ configs,
+      // used for FP8/NVFP4 releases like zai-org/GLM-4.5-Air-FP8 and
+      // Firworks/GLM-4.5-Air-nvfp4): bit width lives per-group under
+      // config_groups.<group>.weights.num_bits, not the top-level `bits`
+      // field. Without this branch, quant_method === "compressed-tensors"
+      // matches none of the substring checks below and silently falls
+      // through to DEFAULT_DTYPE_BYTES (full BF16) — verified live: both
+      // models above were mis-estimated at 200GB (BF16 size) instead of
+      // their real ~50-100GB quantized footprint, producing false
+      // "doesn't fit" hardware-fit rejections during discovery.
+      const configGroups = qc['config_groups'];
+      if (configGroups && typeof configGroups === 'object') {
+        const groupBits = Object.values(configGroups as Record<string, unknown>)
+          .map((group) => {
+            const weights = (group as Record<string, unknown> | undefined)?.['weights'] as
+              | Record<string, unknown>
+              | undefined;
+            return typeof weights?.['num_bits'] === 'number'
+              ? (weights['num_bits'] as number)
+              : null;
+          })
+          .filter((bits): bits is number => bits !== null);
+        if (groupBits.length > 0) {
+          return Math.min(...groupBits) / 8;
+        }
+      }
+
       const method = String(qc.quant_method ?? '').toLowerCase();
 
       if (

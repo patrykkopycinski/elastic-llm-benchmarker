@@ -229,6 +229,65 @@ describe('HardwareEstimator', () => {
       expect(result.totalGb).toBe(9);
     });
 
+    it('parses compressed-tensors FP8 quantization from nested config_groups (GLM-4.5-Air-FP8)', () => {
+      // Regression: zai-org/GLM-4.5-Air-FP8 uses HF's "compressed-tensors"
+      // format, where quant_method is literally "compressed-tensors" (matches
+      // no keyword substring check) and the real bit-width lives nested at
+      // quantization_config.config_groups.group_0.weights.num_bits. Before
+      // this fix, estimateDtypeBytes fell through to DEFAULT_DTYPE_BYTES (2
+      // bytes = BF16), overestimating VRAM ~2x and producing a false
+      // "doesn't fit" hardware-fit rejection during discovery. Verified
+      // against the live HF config.json (fetched 2026-07-10).
+      const config = {
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+        num_attention_heads: 32,
+        num_key_value_heads: 32,
+        quantization_config: {
+          quant_method: 'compressed-tensors',
+          format: 'float-quantized',
+          config_groups: {
+            group_0: {
+              weights: { num_bits: 8, type: 'float' },
+              input_activations: { num_bits: 8, type: 'float' },
+            },
+          },
+        },
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      // 8 bits = 1 byte per param → half the fp16 weights, same as `bits: 8`
+      expect(result.weightsGb).toBe(6);
+      expect(result.totalGb).toBe(9);
+    });
+
+    it('parses compressed-tensors NVFP4 quantization from nested config_groups (GLM-4.5-Air-nvfp4)', () => {
+      // Regression: Firworks/GLM-4.5-Air-nvfp4 — same compressed-tensors
+      // shape, but num_bits: 4 nested under config_groups.group_0.weights.
+      const config = {
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+        num_attention_heads: 32,
+        num_key_value_heads: 32,
+        quantization_config: {
+          quant_method: 'compressed-tensors',
+          format: 'nvfp4-pack-quantized',
+          config_groups: {
+            group_0: {
+              format: 'nvfp4-pack-quantized',
+              weights: { num_bits: 4, type: 'float' },
+              input_activations: { num_bits: 4, type: 'float' },
+            },
+          },
+        },
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      // 4 bits = 0.5 bytes per param → quarter the fp16 weights
+      expect(result.weightsGb).toBe(3);
+      expect(result.totalGb).toBe(4.5);
+    });
+
     it('downgrades confidence for unknown quantization', () => {
       const config = {
         hidden_size: 4096,
