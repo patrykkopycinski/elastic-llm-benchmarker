@@ -826,6 +826,16 @@ export const stage2LocalConfigSchema = z.object({
    * isolated Scout+ES stack. Only used when `useBatchRunner` is true.
    */
   batchWorkers: z.number().int().positive().default(2),
+  /**
+   * `run-security-evals-batch.sh` export profile: `'local'` (no export, the
+   * per-worker isolated Scout ES stack only) or `'dev-vault'` (also forwards
+   * scores + traces to the golden kbn-evals cluster via `--profile dev-vault`,
+   * reading credentials from dev Vault at `secret/kibana-issues/dev/kbn-evals/golden`).
+   * Requires `vault login --method oidc` (or `KIBANA_EVALS_CI_CONFIG` env var)
+   * on the host running the batch runner. Defaults to `'local'` so golden
+   * export is opt-in per deployment.
+   */
+  exportProfile: z.enum(['local', 'dev-vault']).default('local'),
 });
 
 /**

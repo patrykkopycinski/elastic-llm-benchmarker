@@ -243,6 +243,13 @@ export function getVllmParamsForModel(
     return { toolCallParser: 'kimi_k2', chatTemplate: null, extraArgs: [], family: 'Kimi K2', unslothTemplateKey: null };
   }
 
+  // ─── Seed-OSS (ByteDance-Seed) ─────────────────────────────────────────────
+  // vLLM >= 0.10.2 supports --tool-call-parser seed_oss natively (SeedOssForCausalLM
+  // arch, model_type seed_oss). Hybrid thinking-budget model.
+  if (id.includes('seed-oss') || id.includes('seed_oss') || arch.includes('seed_oss')) {
+    return { toolCallParser: 'seed_oss', chatTemplate: null, extraArgs: [], family: 'Seed-OSS', unslothTemplateKey: null };
+  }
+
   // ─── GLM-4.5 / 4.6 (Zhipu/Z.ai, glm4_moe architecture) ─────────────────────
   // vLLM requires both --tool-call-parser glm45 and --reasoning-parser glm45 —
   // GLM-4.5/4.6 are hybrid reasoning models (thinking + non-thinking modes).

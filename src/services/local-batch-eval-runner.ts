@@ -94,7 +94,7 @@ export class LocalBatchEvalRunner {
       BATCH_MODELS: opts.modelId,
       BATCH_CONNECTOR_PROFILE: 'litellm',
       BATCH_SUITES: suites.join(','),
-      BATCH_EXPORT_PROFILE: 'local',
+      BATCH_EXPORT_PROFILE: this.config.exportProfile,
       LITELLM_BASE_URL: opts.vllmBaseUrl,
       EVALUATION_CONCURRENCY: '3',
     };
@@ -105,6 +105,7 @@ export class LocalBatchEvalRunner {
       suites,
       workers,
       pluginDir,
+      exportProfile: this.config.exportProfile,
     });
 
     const { exitCode, stderr } = await execFilePromise(

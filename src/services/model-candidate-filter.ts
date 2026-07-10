@@ -139,6 +139,8 @@ const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
   glm4_moe: 'glm45',
   // Kimi K2 (Moonshot AI) — DeepseekV3ForCausalLM arch, model_type kimi_k2
   kimi_k2: 'kimi_k2',
+  // Seed-OSS (ByteDance-Seed) — SeedOssForCausalLM arch, native vLLM support since 0.10.2
+  seed_oss: 'seed_oss',
 };
 
 /**
@@ -171,6 +173,7 @@ const VLLM_SUPPORTED_ARCHITECTURES = new Set([
   'chatglm',
   'glm4_moe',
   'kimi_k2',
+  'seed_oss',
   'falcon',
   'mpt',
   'bloom',
