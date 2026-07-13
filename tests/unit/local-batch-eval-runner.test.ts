@@ -29,7 +29,12 @@ vi.mock('../../src/utils/logger.js', () => ({
 
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
-import { LocalBatchEvalRunner, type LocalBatchEvalOptions } from '../../src/services/local-batch-eval-runner.js';
+import {
+  LocalBatchEvalRunner,
+  resolveBatchTimeoutMs,
+  ESQL_MIN_SUITE_TIMEOUT_MS,
+  type LocalBatchEvalOptions,
+} from '../../src/services/local-batch-eval-runner.js';
 import type { Stage2LocalConfig } from '../../src/types/config.js';
 
 const execFileMock = vi.mocked(execFile);
@@ -79,6 +84,27 @@ const baseOpts: LocalBatchEvalOptions = {
   vllmBaseUrl: 'http://10.0.0.5:8000/v1',
   modelId: 'my-org/my-model',
 };
+
+describe('resolveBatchTimeoutMs', () => {
+  it('gives ESQL at least 2h even when base per-suite is 1h', () => {
+    expect(
+      resolveBatchTimeoutMs(['security-esql-generation-regression'], 3_600_000),
+    ).toBe(ESQL_MIN_SUITE_TIMEOUT_MS);
+  });
+
+  it('sums non-ESQL suites at base rate and bumps only ESQL', () => {
+    expect(
+      resolveBatchTimeoutMs(
+        [
+          'security-alert-triage',
+          'security-alerts-rag-regression',
+          'security-esql-generation-regression',
+        ],
+        3_600_000,
+      ),
+    ).toBe(3_600_000 + 3_600_000 + ESQL_MIN_SUITE_TIMEOUT_MS);
+  });
+});
 
 describe('LocalBatchEvalRunner', () => {
   beforeEach(() => {
@@ -254,6 +280,7 @@ describe('LocalBatchEvalRunner', () => {
     expect(options.env?.BATCH_SUITES).toBe(
       'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',
     );
+    expect(options.timeout).toBe(60_000 + 60_000 + ESQL_MIN_SUITE_TIMEOUT_MS);
   });
 
   it('reports failed status and logs a warning when execFile itself errors with no exit code', async () => {

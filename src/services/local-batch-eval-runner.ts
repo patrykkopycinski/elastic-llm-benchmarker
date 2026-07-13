@@ -103,6 +103,25 @@ function extractSummaryPath(stdout: string): string | undefined {
  * `KIBANA_TESTING_AI_CONNECTORS`.
  */
 
+/** Full ESQL regression dataset routinely exceeds the default 1h per-suite budget. */
+export const ESQL_GENERATION_SUITE = 'security-esql-generation-regression';
+export const ESQL_MIN_SUITE_TIMEOUT_MS = 7_200_000;
+
+/**
+ * Sum per-suite exec timeouts. ESQL gets at least {@link ESQL_MIN_SUITE_TIMEOUT_MS}
+ * even when `basePerSuiteMs` is lower — a single-suite ESQL-only run otherwise
+ * inherits only 1h and gets SIGKILL'd mid-dataset.
+ */
+export function resolveBatchTimeoutMs(suites: string[], basePerSuiteMs: number): number {
+  return suites.reduce((total, suite) => {
+    const perSuite =
+      suite === ESQL_GENERATION_SUITE
+        ? Math.max(basePerSuiteMs, ESQL_MIN_SUITE_TIMEOUT_MS)
+        : basePerSuiteMs;
+    return total + perSuite;
+  }, 0);
+}
+
 /** Benchmarker security trio: alert-triage first on a fresh stack. */
 export function orderBenchmarkerSuites(suites: string[]): string[] {
   const priority = [
@@ -143,7 +162,7 @@ export class LocalBatchEvalRunner {
     const rawSuites = opts.suites ?? this.config.evalSuites;
     const suites = orderBenchmarkerSuites(rawSuites);
     const workers = String(this.config.batchWorkers);
-    const timeoutMs = this.config.suiteTimeoutMs * suites.length;
+    const timeoutMs = resolveBatchTimeoutMs(suites, this.config.suiteTimeoutMs);
 
     // BATCH_SUITES is always set — never pass --smoke (it only substitutes
     // SMOKE_SUITES when BATCH_SUITES is unset and confuses ESQL-only runs).
@@ -171,6 +190,7 @@ export class LocalBatchEvalRunner {
       workers,
       pluginDir,
       exportProfile: this.config.exportProfile,
+      batchTimeoutMs: timeoutMs,
     });
 
     const { stdout, stderr, exitCode } = await execFilePromise(
