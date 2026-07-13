@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
 import type { Stage2LocalConfig } from '../types/config.js';
@@ -30,6 +30,8 @@ export interface LocalBatchEvalResult {
   completedAt: string;
   /** Path to `run-security-evals-batch.sh`'s summary JSON (matrix-output/batch-summary-*.json). */
   summaryPath?: string;
+  /** Full batch runner stdout persisted under matrix-output/batch-logs/. */
+  stdoutLogPath?: string;
   /**
    * Raw log output from the batch runner. Kept for backward compat with
    * callers reading a single "where do I look" path — prefer `summaryPath`
@@ -96,9 +98,31 @@ function extractSummaryPath(stdout: string): string | undefined {
  * and isolates ES data dirs per worker. This is the fast path for running the
  * full security suite set against an OSS model served via vLLM.
  *
- * The vLLM endpoint is passed as a LiteLLM connector profile, which the batch
- * runner injects into Kibana as an OpenAI-compatible `.inference` connector.
+ * The vLLM endpoint is passed as a LiteLLM connector profile (`.gen-ai`,
+ * `apiProvider: Other`), which the batch runner injects into Kibana via
+ * `KIBANA_TESTING_AI_CONNECTORS`.
  */
+
+/** Benchmarker security trio: alert-triage first on a fresh stack. */
+export function orderBenchmarkerSuites(suites: string[]): string[] {
+  const priority = [
+    'security-alert-triage',
+    'security-alerts-rag-regression',
+    'security-esql-generation-regression',
+  ];
+  const ordered: string[] = [];
+  for (const suite of priority) {
+    if (suites.includes(suite)) {
+      ordered.push(suite);
+    }
+  }
+  for (const suite of suites) {
+    if (!ordered.includes(suite)) {
+      ordered.push(suite);
+    }
+  }
+  return ordered;
+}
 export class LocalBatchEvalRunner {
   private readonly config: Stage2LocalConfig;
   private readonly logger: Logger;
@@ -116,7 +140,8 @@ export class LocalBatchEvalRunner {
     }
 
     const batchScript = join(pluginDir, 'scripts', 'run-security-evals-batch.sh');
-    const suites = opts.suites ?? this.config.evalSuites;
+    const rawSuites = opts.suites ?? this.config.evalSuites;
+    const suites = orderBenchmarkerSuites(rawSuites);
     const workers = String(this.config.batchWorkers);
     const timeoutMs = this.config.suiteTimeoutMs * suites.length;
 
@@ -135,6 +160,10 @@ export class LocalBatchEvalRunner {
       BATCH_CONNECTOR_PROFILE: 'litellm',
       BATCH_SUITES: suites.join(','),
       BATCH_EXPORT_PROFILE: this.config.exportProfile,
+      BATCH_SUITE_ORDER: 'benchmarker',
+      BATCH_PAUSE_ALWAYS_ON_STACK: this.config.pauseAlwaysOnStack ? 'true' : 'false',
+      BATCH_TEARDOWN_ON_EXIT: this.config.teardownBatchStack ? 'true' : 'false',
+      BATCH_CLEANUP_STALE_PORTS: this.config.cleanupStalePorts ? 'true' : 'false',
       LITELLM_BASE_URL: opts.vllmBaseUrl,
       EVALUATION_CONCURRENCY: '3',
     };
@@ -153,6 +182,23 @@ export class LocalBatchEvalRunner {
       [batchScript, ...args],
       { cwd: pluginDir, timeout: timeoutMs, env },
     );
+
+    let stdoutLogPath: string | undefined;
+    try {
+      stdoutLogPath = join(
+        pluginDir,
+        'matrix-output',
+        'batch-logs',
+        `batch-stdout-runner-${Date.now()}.log`,
+      );
+      await mkdir(dirname(stdoutLogPath), { recursive: true });
+      await writeFile(stdoutLogPath, stdout, 'utf8');
+      this.logger.info('Local batch eval: stdout persisted', { stdoutLogPath });
+    } catch (persistErr: unknown) {
+      this.logger.warn('Local batch eval: could not persist stdout log', {
+        error: persistErr instanceof Error ? persistErr.message : String(persistErr),
+      });
+    }
 
     const completedAt = new Date().toISOString();
 
@@ -189,6 +235,7 @@ export class LocalBatchEvalRunner {
       startedAt,
       completedAt,
       summaryPath,
+      stdoutLogPath,
       logPath: summaryPath,
     };
   }

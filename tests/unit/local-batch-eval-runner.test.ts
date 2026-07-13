@@ -214,6 +214,46 @@ describe('LocalBatchEvalRunner', () => {
     expect(result.status).toBe('partial');
   });
 
+  it('passes stability env vars to the batch runner', async () => {
+    mockExecFileSuccess('[batch 10:00:00] >>> Summary: /tmp/summary.json\n');
+    readFileMock.mockResolvedValue(
+      JSON.stringify({
+        run_id: 'batch-env',
+        timestamp: '1',
+        overall_exit: 0,
+        log_dir: '/tmp/logs',
+        results: [],
+      }),
+    );
+
+    const runner = new LocalBatchEvalRunner(
+      createConfig({
+        pauseAlwaysOnStack: true,
+        teardownBatchStack: true,
+        cleanupStalePorts: true,
+      } as Partial<Stage2LocalConfig>),
+    );
+    await runner.run({
+      ...baseOpts,
+      suites: [
+        'security-esql-generation-regression',
+        'security-alert-triage',
+        'security-alerts-rag-regression',
+      ],
+    });
+
+    expect(execFileMock).toHaveBeenCalled();
+    const call = execFileMock.mock.calls[0];
+    const options = call[2] as { env?: NodeJS.ProcessEnv };
+    expect(options.env?.BATCH_PAUSE_ALWAYS_ON_STACK).toBe('true');
+    expect(options.env?.BATCH_TEARDOWN_ON_EXIT).toBe('true');
+    expect(options.env?.BATCH_CLEANUP_STALE_PORTS).toBe('true');
+    expect(options.env?.BATCH_SUITE_ORDER).toBe('benchmarker');
+    expect(options.env?.BATCH_SUITES).toBe(
+      'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',
+    );
+  });
+
   it('reports failed status and logs a warning when execFile itself errors with no exit code', async () => {
     mockExecFileFailure('spawn ENOENT', '', 'bash: not found', null);
 

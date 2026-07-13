@@ -877,6 +877,15 @@ export const stage2LocalConfigSchema = z.object({
    * export is opt-in per deployment.
    */
   exportProfile: z.enum(['local', 'dev-vault']).default('local'),
+  /**
+   * Kill the always-on `weekly-evals-matrix` tmux stack before batch Stage 2
+   * to free RAM for Entity Store V2 install and long esql suites.
+   */
+  pauseAlwaysOnStack: z.boolean().default(true),
+  /** Tear down batch worker Scout+ES stacks after Stage 2 (pass or fail). */
+  teardownBatchStack: z.boolean().default(true),
+  /** Reject Stage 2 start when stale Kibana/ES still bound on worker ports. */
+  cleanupStalePorts: z.boolean().default(true),
 });
 
 /**

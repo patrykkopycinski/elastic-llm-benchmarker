@@ -61,6 +61,8 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           runId: run.runId,
           modelId: run.modelId,
           endpointUrl,
+          pauseAlwaysOnStack: deps.config.stage2Local.pauseAlwaysOnStack,
+          teardownBatchStack: deps.config.stage2Local.teardownBatchStack,
         });
 
         const batchResult = await batchRunner.run({
