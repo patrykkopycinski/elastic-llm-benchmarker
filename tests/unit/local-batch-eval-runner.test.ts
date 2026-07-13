@@ -244,6 +244,8 @@ describe('LocalBatchEvalRunner', () => {
 
     expect(execFileMock).toHaveBeenCalled();
     const call = execFileMock.mock.calls[0];
+    const args = call[1] as string[];
+    expect(args).not.toContain('--smoke');
     const options = call[2] as { env?: NodeJS.ProcessEnv };
     expect(options.env?.BATCH_PAUSE_ALWAYS_ON_STACK).toBe('true');
     expect(options.env?.BATCH_TEARDOWN_ON_EXIT).toBe('true');

@@ -272,7 +272,16 @@ program
 
 const _binaryName = basename(process.argv[1] ?? '');
 
-if (_binaryName !== 'benchmarker-queue') {
+/** Queue subcommands (start/stop/enqueue) work via symlink or direct dist/cli.js. */
+function isQueueCliInvocation(): boolean {
+  const entry = process.argv[1] ?? '';
+  if (_binaryName === 'benchmarker-queue') {
+    return true;
+  }
+  return entry.includes('dist/cli.js') || entry.includes('benchmarker-queue');
+}
+
+if (!isQueueCliInvocation()) {
   program
     .command('start')
     .description('Start the benchmarking daemon (deprecated: use benchmarker-queue start instead)')
@@ -1368,7 +1377,7 @@ program
 
 // ─── benchmarker-queue commands ───────────────────────────────────────────────
 
-if (_binaryName === 'benchmarker-queue') {
+if (isQueueCliInvocation()) {
   program.name('benchmarker-queue').description('LLM Benchmarker Queue Scheduler');
 
   program
@@ -1509,7 +1518,9 @@ if (_binaryName === 'benchmarker-queue') {
       logger.info('Config loaded successfully', {
         configPath: resolve(process.cwd(), configPath),
         buildkiteBranch: config.buildkite.kibanaBranch,
-        evalSuites: config.buildkite.defaultEvalSuites,
+        evalTier: config.evalTier ?? (config.buildkite.enabled ? 'buildkite-weekly' : 'local'),
+        stage2LocalEvalSuites: config.stage2Local.evalSuites,
+        buildkiteEvalSuites: config.buildkite.defaultEvalSuites,
       });
 
       // Create ES client

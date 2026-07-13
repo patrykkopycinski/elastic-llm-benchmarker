@@ -145,13 +145,9 @@ export class LocalBatchEvalRunner {
     const workers = String(this.config.batchWorkers);
     const timeoutMs = this.config.suiteTimeoutMs * suites.length;
 
-    const args = [
-      '--smoke',
-    ];
-
-    if (suites.length > 2) {
-      args.length = 0;
-    }
+    // BATCH_SUITES is always set — never pass --smoke (it only substitutes
+    // SMOKE_SUITES when BATCH_SUITES is unset and confuses ESQL-only runs).
+    const args: string[] = [];
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,

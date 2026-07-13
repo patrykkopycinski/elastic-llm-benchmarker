@@ -81,6 +81,7 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           scores[sr.suite] = sr.score ?? 0;
         }
 
+        const passCount = suiteResults.filter((sr) => sr.status === 'pass').length;
         const result: Stage2Result = {
           runId: run.runId,
           modelId: run.modelId,
@@ -89,7 +90,21 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           suiteResults,
           startedAt,
           completedAt: batchResult.completedAt,
+          reason:
+            batchResult.status !== 'success'
+              ? `Stage 2 batch ${batchResult.status}: ${passCount}/${suiteResults.length} suites passed`
+              : undefined,
         };
+
+        logger?.info('Stage 2 (batch): completed', {
+          runId: run.runId,
+          modelId: run.modelId,
+          status: batchResult.status,
+          passCount,
+          suiteCount: suiteResults.length,
+          summaryPath: batchResult.summaryPath,
+          stdoutLogPath: batchResult.stdoutLogPath,
+        });
 
         try {
           await resultsStore.saveStage2Result(result);
