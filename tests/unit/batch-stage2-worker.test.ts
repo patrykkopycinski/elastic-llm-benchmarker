@@ -74,7 +74,9 @@ describe('createBatchStage2Worker', () => {
     logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
     worker = createBatchStage2Worker({
-      config: {} as AppConfig,
+      config: {
+        stage2Local: { pauseAlwaysOnStack: false, teardownBatchStack: true },
+      } as AppConfig,
       gate,
       batchRunner,
       resultsStore,
@@ -114,9 +116,22 @@ describe('createBatchStage2Worker', () => {
       'security-esql-generation-regression': 1,
     });
     expect(result.suiteResults).toEqual([
-      { suite: 'security-alert-triage', status: 'pass', score: 1 },
-      { suite: 'security-esql-generation-regression', status: 'pass', score: 1 },
+      {
+        suite: 'security-alert-triage',
+        status: 'pass',
+        score: 1,
+        durationMs: 1000,
+        logPath: '/log/a.log',
+      },
+      {
+        suite: 'security-esql-generation-regression',
+        status: 'pass',
+        score: 1,
+        durationMs: 2000,
+        logPath: '/log/b.log',
+      },
     ]);
+    expect(result.batchSummaryPath).toBe('/tmp/batch-summary.json');
     expect(resultsStore.saveStage2Result).toHaveBeenCalledOnce();
   });
 

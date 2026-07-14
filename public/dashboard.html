@@ -378,7 +378,7 @@
       transition: max-height 0.25s ease;
       max-height: 0;
     }
-    tr.deploy-row.open .deploy-wrap { max-height: 600px; }
+    tr.deploy-row.open .deploy-wrap { max-height: 2400px; }
     .deploy-detail {
       margin: 0 18px 12px;
       padding: 14px 16px;
@@ -439,6 +439,65 @@
     }
     .deploy-cmd-wrap .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
     .deploy-cmd-wrap .copy-btn.copied { color: var(--good); border-color: var(--good); }
+
+    .evidence-detail { margin-bottom: 14px; }
+    .evidence-detail:last-child { margin-bottom: 0; }
+    .evidence-detail h4 {
+      margin: 0 0 8px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .pipeline-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .pipeline-badges .stage {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .matrix-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .matrix-table th,
+    .matrix-table td {
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    .matrix-table th {
+      font-size: 11px;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 600;
+    }
+    .matrix-table td.num { font-family: var(--mono); text-align: right; }
+    .matrix-table tr:last-child td { border-bottom: none; }
+    .issues-list {
+      margin: 0;
+      padding-left: 18px;
+      font-size: 12px;
+      color: var(--text);
+    }
+    .issues-list li { margin-bottom: 4px; }
+    .issues-list li:last-child { margin-bottom: 0; }
+    .evidence-meta {
+      font-size: 11px;
+      color: var(--text-soft);
+      margin-top: 6px;
+    }
+    .evidence-meta span + span::before { content: " · "; }
 
     tr.rec-data-row { cursor: pointer; }
     tr.rec-data-row:hover td { background: var(--surface-elev); }
@@ -1212,17 +1271,163 @@
       });
     }
 
+    function fmtDuration(sec) {
+      if (sec == null || sec <= 0) return "—";
+      if (sec < 60) return sec + "s";
+      var m = Math.floor(sec / 60);
+      var s = sec % 60;
+      return m + "m" + (s ? " " + s + "s" : "");
+    }
+
+    function fmtPct(rate) {
+      if (rate == null) return "—";
+      return Math.round(rate * 100) + "%";
+    }
+
+    function suiteDuration(r, suite) {
+      var s2 = r.stage2Results;
+      if (!s2 || !s2.suiteResults) return null;
+      var entry = s2.suiteResults[suite];
+      return entry ? entry.durationSec : null;
+    }
+
     function buildDeployCommand(dep) {
       if (!dep) return null;
-      if (dep.dockerCommand) return dep.dockerCommand;
+      if (dep.dockerCommand) return redactSecrets(dep.dockerCommand);
       return null;
     }
 
-    function renderDeployDetail(dep, vllmConfig) {
-      if (!dep) return '<div class="deploy-detail"><span class="muted">No deployment data available. Run a benchmark to capture deployment details.</span></div>';
+    var SUITE_MATRIX = {
+      "security-alert-triage": { label: "Alert triage", category: "C1 · Agent Builder" },
+      "security-alerts-rag-regression": { label: "Alerts RAG", category: "C4 · Retrieval" },
+      "security-esql-generation-regression": { label: "ES|QL generation", category: "C2 · ES|QL" },
+    };
+
+    function suiteMeta(suite) {
+      return SUITE_MATRIX[suite] || { label: suite, category: "Security eval" };
+    }
+
+    function redactSecrets(text) {
+      if (!text) return text;
+      return text.replace(/HF_TOKEN=[^\s\\]+/g, "HF_TOKEN=<redacted>");
+    }
+
+    function stageBadge(passed, ran, label) {
+      if (!ran) return '<span class="badge skipped">' + esc(label) + " skipped</span>";
+      if (passed === true) return '<span class="badge pass">' + esc(label) + " pass</span>";
+      if (passed === false) return '<span class="badge fail">' + esc(label) + " fail</span>";
+      return '<span class="badge skipped">' + esc(label) + " —</span>";
+    }
+
+    function renderEvidenceDetail(r) {
+      var html = '<div class="evidence-detail">';
+      html += "<h4>Pipeline evidence</h4>";
+      html += '<div class="pipeline-badges">' +
+        stageBadge(r.stage1Passed, true, "Stage 1") +
+        stageBadge(r.stage2Passed, r.stage2Ran, "Stage 2") +
+        stageBadge(r.stage3Ran ? true : null, r.stage3Ran, "Stage 3") +
+        "</div>";
+      if (r.runId || r.evaluatedAt) {
+        html += '<div class="evidence-meta">';
+        if (r.runId) html += "<span>Run " + esc(r.runId.slice(0, 8)) + "</span>";
+        if (r.evaluatedAt) html += "<span>Evaluated " + esc(fmtAgo(r.evaluatedAt)) + "</span>";
+        if (r.hardwareProfile) html += "<span>" + esc(r.hardwareProfile) + "</span>";
+        html += "</div>";
+      }
+      html += "</div>";
+
+      var s1 = r.stage1Metrics;
+      if (s1) {
+        html += '<div class="evidence-detail"><h4>Stage 1 — performance</h4>';
+        html += '<table class="matrix-table"><thead><tr>' +
+          "<th>Metric</th><th>p50</th><th>p99</th><th>Mean</th></tr></thead><tbody>";
+        if (s1.itl) {
+          html += "<tr><td>ITL (ms)</td>" +
+            '<td class="num">' + fmtNum(s1.itl.p50, 1) + "</td>" +
+            '<td class="num">' + fmtNum(s1.itl.p99, 1) + "</td>" +
+            '<td class="num">' + fmtNum(s1.itl.mean, 1) + "</td></tr>";
+        }
+        if (s1.ttft) {
+          html += "<tr><td>TTFT (ms)</td>" +
+            '<td class="num">' + fmtNum(s1.ttft.p50, 0) + "</td>" +
+            '<td class="num">' + fmtNum(s1.ttft.p99, 0) + "</td>" +
+            '<td class="num">' + fmtNum(s1.ttft.mean, 0) + "</td></tr>";
+        }
+        if (s1.throughputTps != null) {
+          html += "<tr><td>Throughput (tok/s)</td>" +
+            '<td class="num" colspan="3">' + fmtNum(s1.throughputTps, 0) + "</td></tr>";
+        }
+        if (r.singleToolSuccessRate != null || r.toolCallSuccessRate != null) {
+          html += "<tr><td>Tool-call (single)</td>" +
+            '<td class="num" colspan="3">' + fmtPct(r.singleToolSuccessRate) + "</td></tr>";
+          if (r.toolCallSuccessRate != null && r.toolCallSuccessRate !== r.singleToolSuccessRate) {
+            html += "<tr><td>Tool-call (all scenarios)</td>" +
+              '<td class="num" colspan="3">' + fmtPct(r.toolCallSuccessRate) + "</td></tr>";
+          }
+        }
+        html += "</tbody></table></div>";
+      }
+
+      var evals = r.passingEvals || [];
+      if (evals.length) {
+        var passedCount = evals.filter(function (e) { return e.passed; }).length;
+        html += '<div class="evidence-detail"><h4>Security LLM matrix — ' +
+          passedCount + "/" + evals.length + " suites passed</h4>";
+        html += '<table class="matrix-table"><thead><tr>' +
+          "<th>Suite</th><th>Matrix</th><th>Score</th><th>Threshold</th><th>Duration</th><th>Result</th></tr></thead><tbody>";
+        evals.forEach(function (e) {
+          var meta = suiteMeta(e.suite);
+          var scorePct = Math.round((e.score || 0) * 100);
+          var threshPct = Math.round((e.threshold || 0) * 100);
+          var durSec = suiteDuration(r, e.suite);
+          html += "<tr><td>" + esc(meta.label) + '<div class="muted" style="font-size:11px">' + esc(e.suite) + "</div></td>" +
+            "<td>" + esc(meta.category) + "</td>" +
+            '<td class="num">' + scorePct + "%</td>" +
+            '<td class="num">' + threshPct + "%</td>" +
+            '<td class="num">' + esc(fmtDuration(durSec)) + "</td>" +
+            "<td>" + (e.passed
+              ? '<span class="badge pass">pass</span>'
+              : '<span class="badge fail">fail</span>') + "</td></tr>";
+        });
+        html += "</tbody></table>";
+        if (r.batchSummaryBasename) {
+          html += '<div class="evidence-meta" style="margin-top:8px">' +
+            '<a href="/api/batch-summary/' + esc(r.batchSummaryBasename) + '" target="_blank" rel="noopener">Batch summary JSON</a>' +
+            '<span> · </span><a href="/api/matrix/latest" target="_blank" rel="noopener">Security LLM matrix HTML</a>' +
+            "</div>";
+        }
+        html += "</div>";
+      } else if (r.stage2Ran && !r.stage2Passed) {
+        html += '<div class="evidence-detail"><h4>Security LLM matrix</h4>' +
+          '<span class="muted">Stage 2 ran but no suite scores were recorded.</span></div>';
+      }
+
+      var issues = r.blockingIssues || [];
+      if (issues.length) {
+        html += '<div class="evidence-detail"><h4>Blocking issues (' + issues.length + ")</h4><ul class=\"issues-list\">";
+        issues.forEach(function (i) {
+          html += "<li><strong>" + esc(i.category) + "</strong> (" + esc(i.severity) + "): " + esc(i.message) + "</li>";
+        });
+        html += "</ul></div>";
+      }
+
+      return html;
+    }
+
+    function renderExpandedDetail(r) {
+      var html = '<div class="deploy-detail">';
+      html += renderEvidenceDetail(r);
+      html += "<h4 style=\"margin:14px 0 8px;font-size:11px;font-weight:600;color:var(--text-soft);text-transform:uppercase;letter-spacing:0.05em\">Deployment</h4>";
+      html += renderDeployDetailInner(r.deployment || null, r.vllmConfigUsed || null);
+      html += "</div>";
+      return html;
+    }
+
+    function renderDeployDetailInner(dep, vllmConfig) {
+      if (!dep) return '<span class="muted">No deployment data available. Run a benchmark to capture deployment details.</span>';
 
       var hw = dep.hardwareConfig || {};
-      var html = '<div class="deploy-detail">';
+      var html = "";
       html += '<div class="deploy-grid">';
 
       var fields = [
@@ -1244,7 +1449,9 @@
 
       var cmd = buildDeployCommand(dep);
       if (cmd) {
-        html += '<div class="deploy-cmd-wrap"><pre>' + esc(cmd) + '</pre>' +
+        var fullCmd = dep.dockerCommand || cmd;
+        var cmdB64 = btoa(unescape(encodeURIComponent(fullCmd)));
+        html += '<div class="deploy-cmd-wrap" data-full-cmd-b64="' + cmdB64 + '"><pre>' + esc(cmd) + '</pre>' +
           '<button class="copy-btn" type="button" onclick="copyCommand(this)">Copy command</button></div>';
       }
 
@@ -1257,14 +1464,28 @@
         html += '</div></div>';
       }
 
-      html += '</div>';
       return html;
     }
 
+    function renderDeployDetail(dep, vllmConfig) {
+      return '<div class="deploy-detail">' + renderDeployDetailInner(dep, vllmConfig) + '</div>';
+    }
+
     function copyCommand(btn) {
-      var pre = btn.parentElement.querySelector("pre");
-      if (!pre) return;
-      navigator.clipboard.writeText(pre.textContent).then(function () {
+      var wrap = btn.parentElement;
+      var pre = wrap ? wrap.querySelector("pre") : null;
+      var text = "";
+      if (wrap && wrap.dataset.fullCmdB64) {
+        try {
+          text = decodeURIComponent(escape(atob(wrap.dataset.fullCmdB64)));
+        } catch (e) {
+          text = pre ? pre.textContent : "";
+        }
+      } else {
+        text = pre ? pre.textContent : "";
+      }
+      if (!text) return;
+      navigator.clipboard.writeText(text).then(function () {
         btn.textContent = "Copied!";
         btn.classList.add("copied");
         setTimeout(function () {
@@ -1309,7 +1530,9 @@
         var itlMean = s1.itl ? s1.itl.mean : null;
         var ttftMean = s1.ttft ? s1.ttft.mean : null;
         var tps = s1.throughputTps || null;
-        var evalCount = (r.passingEvals || []).length;
+        var evals = r.passingEvals || [];
+        var evalPassed = evals.filter(function (e) { return e.passed; }).length;
+        var evalTotal = evals.length;
         var issueCount = (r.blockingIssues || []).length;
 
         html += '<tr class="rec-data-row" data-idx="' + idx + '">' +
@@ -1320,8 +1543,9 @@
           "<td>" + fmtNum(itlMean, 1) + "</td>" +
           "<td>" + fmtNum(ttftMean, 0) + "</td>" +
           "<td>" + fmtNum(tps, 0) + "</td>" +
-          "<td>" + (evalCount > 0
-            ? '<span class="badge pass">' + evalCount + " passed</span>"
+          "<td>" + (evalTotal > 0
+            ? '<span class="badge ' + (evalPassed === evalTotal ? "pass" : evalPassed > 0 ? "investigate" : "fail") + '">' +
+              evalPassed + "/" + evalTotal + "</span>"
             : '<span class="muted">0</span>') + "</td>" +
           "<td>" + (issueCount > 0
             ? '<span class="badge fail">' + issueCount + "</span>"
@@ -1331,7 +1555,7 @@
 
         html += '<tr class="deploy-row" data-idx="' + idx + '">' +
           '<td colspan="9"><div class="deploy-wrap">' +
-          renderDeployDetail(r.deployment || null, r.vllmConfigUsed || null) +
+          renderExpandedDetail(r) +
           '</div></td></tr>';
       });
       html += "</tbody></table></div>";

@@ -75,6 +75,8 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           suite: s.suite,
           status: s.status,
           score: s.status === 'pass' ? 1 : 0,
+          durationMs: s.durationMs,
+          logPath: s.logPath,
         }));
 
         for (const sr of suiteResults) {
@@ -88,6 +90,8 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           status: batchResult.status === 'success' ? 'success' : 'failed',
           scores,
           suiteResults,
+          batchSummaryPath: batchResult.summaryPath,
+          stdoutLogPath: batchResult.stdoutLogPath,
           startedAt,
           completedAt: batchResult.completedAt,
           reason:

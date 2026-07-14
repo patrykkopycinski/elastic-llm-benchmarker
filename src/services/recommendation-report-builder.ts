@@ -84,10 +84,11 @@ export function buildRecommendationReport(
     const suitesRun = stage2.suiteResults.map((sr) => sr.suite);
     const suiteResults: Record<string, { score: number; passRate: number; durationSec: number }> = {};
     for (const sr of stage2.suiteResults) {
+      const durationSec = sr.durationMs != null ? Math.round(sr.durationMs / 1000) : 0;
       suiteResults[sr.suite] = {
         score: sr.score ?? 0,
         passRate: sr.score ?? 0,
-        durationSec: 0,
+        durationSec,
       };
 
       const threshold = config.kibanaEval.passThreshold / 100;
@@ -150,6 +151,10 @@ export function buildRecommendationReport(
 
   const modelName = run.modelId.includes('/') ? run.modelId.split('/').pop()! : run.modelId;
 
+  const batchSummaryBasename = stage2?.batchSummaryPath
+    ? stage2.batchSummaryPath.split('/').pop() ?? null
+    : null;
+
   return {
     reportId: crypto.randomUUID(),
     modelId: run.modelId,
@@ -168,6 +173,9 @@ export function buildRecommendationReport(
     stage1Metrics,
     stage2Results,
     reasoningSummary,
+    toolCallSuccessRate: stage1?.toolCallSuccessRate ?? null,
+    singleToolSuccessRate: stage1?.singleToolSuccessRate ?? null,
+    batchSummaryBasename,
     runId: run.runId,
     version: 1,
     evaluatedAt: new Date().toISOString(),

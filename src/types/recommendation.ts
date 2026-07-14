@@ -59,6 +59,12 @@ export interface RecommendationReport {
   stage1Metrics: Stage1Metrics | null;
   stage2Results: Stage2Results | null;
   reasoningSummary: string | null;
+  /** All-scenario tool-call success rate from Stage 1 (0–1). */
+  toolCallSuccessRate?: number | null;
+  /** Single-tool success rate — Agent Builder gate (0–1). */
+  singleToolSuccessRate?: number | null;
+  /** Basename of batch-summary JSON (e.g. batch-summary-20260714-090350.json). */
+  batchSummaryBasename?: string | null;
   runId: string;
   version: number;
   evaluatedAt: string;

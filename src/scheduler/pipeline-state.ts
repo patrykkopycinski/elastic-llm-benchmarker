@@ -64,6 +64,10 @@ export interface Stage1Result {
   stage2Eligible?: boolean;
   /** HF card param count (billions) — used by Stage2Gate tiered ITL caps when MODEL_PARAMS lacks the id. */
   parameterCountBillions?: number | null;
+  /** All-scenario tool-call success rate from Stage 1 benchmark (0–1). */
+  toolCallSuccessRate?: number | null;
+  /** Single-tool success rate — Agent Builder gate metric (0–1). */
+  singleToolSuccessRate?: number | null;
 }
 
 export interface Stage2Result {
@@ -71,9 +75,19 @@ export interface Stage2Result {
   modelId: string;
   status: 'success' | 'skipped' | 'failed' | 'error';
   scores?: Record<string, number>;
-  suiteResults?: Array<{ suite: string; status: string; score?: number; error?: string }>;
+  suiteResults?: Array<{
+    suite: string;
+    status: string;
+    score?: number;
+    error?: string;
+    durationMs?: number;
+    logPath?: string;
+  }>;
   tracesIndex?: string;
   reason?: string;
+  /** Path to run-security-evals-batch.sh summary JSON. */
+  batchSummaryPath?: string;
+  stdoutLogPath?: string;
   startedAt: string;
   completedAt: string;
 }

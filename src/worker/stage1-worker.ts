@@ -469,6 +469,9 @@ export class Stage1WorkerImpl implements Stage1Worker {
 
       result.stage2Eligible = stage2Eligible;
       result.parameterCountBillions = paramBillions;
+      result.toolCallSuccessRate = toolCallResults?.successRate ?? null;
+      result.singleToolSuccessRate =
+        toolCallResults?.singleToolSuccessRate ?? toolCallResults?.successRate ?? null;
 
       // Populate result fields
       result.status = benchmarkResult.passed ? 'success' : 'failed';

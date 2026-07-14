@@ -1,11 +1,18 @@
 import { fileURLToPath } from 'node:url';
-import { dirname, resolve } from 'node:path';
+import { dirname, resolve, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import dotenv from 'dotenv';
 import express from 'express';
 import { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../services/queue-service.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
+import {
+  findLatestBatchSummaryForModel,
+  mergeBatchDurationsIntoReport,
+  readBatchSummaryFile,
+} from '../services/batch-summary-enrichment.js';
+import type { RecommendationReport } from '../types/recommendation.js';
 import { SystemHealthChecker } from '../services/system-health-check.js';
 import { HealthMonitor } from '../services/health-monitor.js';
 import { monitoring } from '../services/monitoring-integration.js';
@@ -15,6 +22,65 @@ import { createHash } from 'node:crypto';
 // ─── Constants ──────────────────────────────────────────────────────
 const MODEL_ID_PATTERN = /^[\w\-./]+$/;
 const MODEL_ID_MAX_LENGTH = 256;
+const BATCH_SUMMARY_BASENAME_PATTERN = /^batch-summary-[a-zA-Z0-9._-]+\.json$/;
+
+function resolveMatrixOutputDir(): string | null {
+  const explicit = process.env.MATRIX_OUTPUT_DIR;
+  if (explicit) return explicit;
+  const pluginDir = process.env.SKILL_DEV_PLUGIN_DIR;
+  if (!pluginDir) return null;
+  return join(pluginDir, 'matrix-output');
+}
+
+async function enrichRecommendationReport(
+  report: RecommendationReport,
+  latestBenchmark: Awaited<ReturnType<ElasticsearchResultsStore['query']>>[number] | undefined,
+  matrixOutputDir: string | null,
+): Promise<RecommendationReport> {
+  let enriched: RecommendationReport = { ...report };
+
+  if (
+    (enriched.toolCallSuccessRate == null || enriched.singleToolSuccessRate == null) &&
+    latestBenchmark?.toolCallResults
+  ) {
+    const tc = latestBenchmark.toolCallResults;
+    enriched = {
+      ...enriched,
+      toolCallSuccessRate: enriched.toolCallSuccessRate ?? tc.successRate,
+      singleToolSuccessRate:
+        enriched.singleToolSuccessRate ?? tc.singleToolSuccessRate ?? tc.successRate,
+    };
+  }
+
+  const needsDurations =
+    enriched.stage2Results &&
+    Object.values(enriched.stage2Results.suiteResults).every((s) => !s.durationSec);
+
+  if (needsDurations && matrixOutputDir) {
+    let summaryPath: string | null = null;
+    let summary = null;
+
+    if (enriched.batchSummaryBasename) {
+      summaryPath = join(matrixOutputDir, enriched.batchSummaryBasename);
+      summary = await readBatchSummaryFile(summaryPath);
+    }
+
+    if (!summary) {
+      const found = await findLatestBatchSummaryForModel(matrixOutputDir, enriched.modelId);
+      if (found) {
+        summary = found.summary;
+        enriched = { ...enriched, batchSummaryBasename: found.basename };
+      }
+    }
+
+    if (summary) {
+      enriched = mergeBatchDurationsIntoReport(enriched, summary, enriched.modelId);
+    }
+  }
+
+  return enriched;
+}
+
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 100;
 
@@ -453,13 +519,16 @@ export function createQueueServer(config: QueueServerConfig & {
         return;
       }
 
+      const matrixOutputDir = resolveMatrixOutputDir();
+
       const enriched = await Promise.all(
         reports.map(async (r) => {
           const results = await resultsStore.query({ modelId: r.modelId, limit: 1 });
           const latest = results[0];
-          if (!latest) return r;
+          let report = await enrichRecommendationReport(r, latest, matrixOutputDir);
+          if (!latest) return report;
           return {
-            ...r,
+            ...report,
             deployment: {
               dockerCommand: latest.dockerCommand,
               vllmVersion: latest.vllmVersion,
@@ -472,6 +541,52 @@ export function createQueueServer(config: QueueServerConfig & {
       res.json({ reports: enriched, total: enriched.length });
     } catch (err) {
       logger.error('GET /api/recommendations failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/batch-summary/:basename — structured batch eval evidence JSON
+  app.get('/api/batch-summary/:basename', async (req, res) => {
+    try {
+      const basename = req.params.basename;
+      if (!basename || !BATCH_SUMMARY_BASENAME_PATTERN.test(basename)) {
+        res.status(400).json({ error: 'Invalid batch summary basename' });
+        return;
+      }
+      const matrixOutputDir = resolveMatrixOutputDir();
+      if (!matrixOutputDir) {
+        res.status(503).json({ error: 'MATRIX_OUTPUT_DIR or SKILL_DEV_PLUGIN_DIR not configured' });
+        return;
+      }
+      const summary = await readBatchSummaryFile(join(matrixOutputDir, basename));
+      if (!summary) {
+        res.status(404).json({ error: 'Batch summary not found' });
+        return;
+      }
+      res.json({ basename, summary });
+    } catch (err) {
+      logger.error('GET /api/batch-summary failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  // GET /api/matrix/latest — latest security LLM matrix HTML export
+  app.get('/api/matrix/latest', async (_req, res) => {
+    try {
+      const matrixOutputDir = resolveMatrixOutputDir();
+      if (!matrixOutputDir) {
+        res.status(503).json({ error: 'MATRIX_OUTPUT_DIR or SKILL_DEV_PLUGIN_DIR not configured' });
+        return;
+      }
+      const htmlPath = join(matrixOutputDir, 'latest-security-llm-matrix.html');
+      if (!existsSync(htmlPath)) {
+        res.status(404).json({ error: 'Matrix HTML not found' });
+        return;
+      }
+      const html = await readFile(htmlPath, 'utf-8');
+      res.type('text/html').send(html);
+    } catch (err) {
+      logger.error('GET /api/matrix/latest failed', { err });
       res.status(500).json({ error: 'Internal server error' });
     }
   });

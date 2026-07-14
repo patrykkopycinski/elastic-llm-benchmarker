@@ -82,8 +82,8 @@ describe('buildRecommendationReport', () => {
       status: 'success',
       scores: { tool_calls: 0.94, skill_invocation: 0.91 },
       suiteResults: [
-        { suite: 'tool_calls', status: 'passed', score: 0.94 },
-        { suite: 'skill_invocation', status: 'passed', score: 0.91 },
+        { suite: 'tool_calls', status: 'passed', score: 0.94, durationMs: 120_000 },
+        { suite: 'skill_invocation', status: 'passed', score: 0.91, durationMs: 90_000 },
       ],
       startedAt: '2026-06-01T00:05:00Z',
       completedAt: '2026-06-01T00:10:00Z',
@@ -116,6 +116,7 @@ describe('buildRecommendationReport', () => {
     expect(report.stage3Ran).toBe(true);
     expect(report.passingEvals).toHaveLength(2);
     expect(report.passingEvals.every(e => e.passed)).toBe(true);
+    expect(report.stage2Results?.suiteResults['tool_calls']?.durationSec).toBe(120);
     expect(report.suggestions).toHaveLength(1);
     expect(report.reportId).toBeTruthy();
     expect(report.version).toBe(1);

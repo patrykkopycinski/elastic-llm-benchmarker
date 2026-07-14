@@ -786,10 +786,12 @@ export class ElasticsearchResultsStore {
         suite: sr.suite,
         status: sr.status,
         score: sr.score ?? null,
-        duration_ms: null,
+        duration_ms: sr.durationMs ?? null,
         error: sr.error ?? null,
         trace_id: null,
       })),
+      batch_summary_path: result.batchSummaryPath ?? null,
+      stdout_log_path: result.stdoutLogPath ?? null,
       reason: result.reason ?? null,
       started_at: result.startedAt,
       completed_at: result.completedAt,
@@ -950,6 +952,9 @@ export class ElasticsearchResultsStore {
           }
         : null,
       reasoning_summary: report.reasoningSummary,
+      tool_call_success_rate: report.toolCallSuccessRate ?? null,
+      single_tool_success_rate: report.singleToolSuccessRate ?? null,
+      batch_summary_basename: report.batchSummaryBasename ?? null,
       run_id: report.runId,
       version: report.version,
       evaluated_at: report.evaluatedAt,
@@ -1068,6 +1073,17 @@ export class ElasticsearchResultsStore {
           }
         : null,
       reasoningSummary: src.reasoning_summary ? String(src.reasoning_summary) : null,
+      toolCallSuccessRate:
+        src.tool_call_success_rate === null || src.tool_call_success_rate === undefined
+          ? null
+          : Number(src.tool_call_success_rate),
+      singleToolSuccessRate:
+        src.single_tool_success_rate === null || src.single_tool_success_rate === undefined
+          ? null
+          : Number(src.single_tool_success_rate),
+      batchSummaryBasename: src.batch_summary_basename
+        ? String(src.batch_summary_basename)
+        : null,
       runId: String(src.run_id ?? ''),
       version: Number(src.version ?? 1),
       evaluatedAt: String(src.evaluated_at ?? ''),
