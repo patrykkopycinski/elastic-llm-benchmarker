@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
@@ -58,10 +58,13 @@ interface BatchSummaryFile {
   results: BatchSummaryResultEntry[];
 }
 
+/** Node's default execFile maxBuffer (1 MiB) kills long batch runs before Summary is printed. */
+export const BATCH_RUNNER_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+
 function execFilePromise(
   file: string,
   args: string[],
-  options: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
+  options: { cwd: string; timeout: number; maxBuffer: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve) => {
     execFile(file, args, options, (error, stdout, stderr) => {
@@ -196,7 +199,7 @@ export class LocalBatchEvalRunner {
     const { stdout, stderr, exitCode } = await execFilePromise(
       'bash',
       [batchScript, ...args],
-      { cwd: pluginDir, timeout: timeoutMs, env },
+      { cwd: pluginDir, timeout: timeoutMs, maxBuffer: BATCH_RUNNER_MAX_BUFFER_BYTES, env },
     );
 
     let stdoutLogPath: string | undefined;
@@ -226,14 +229,27 @@ export class LocalBatchEvalRunner {
     }
 
     const summaryPath = extractSummaryPath(stdout);
-    const { suiteResults, parseError } = await this.parseSummary(summaryPath, suites, opts.modelId);
+    let { suiteResults, parseError } = await this.parseSummary(summaryPath, suites, opts.modelId);
 
     if (parseError) {
-      this.logger.warn('Local batch eval: could not parse structured summary — falling back to exitCode-only per-suite status', {
-        summaryPath,
-        parseError,
-        stdoutTail: stdout.slice(-500),
-      });
+      const jsonlResults = await this.parseJsonlStateResults(pluginDir, suites, opts.modelId);
+      const jsonlPassCount = jsonlResults.filter((s) => s.status === 'pass').length;
+      if (jsonlPassCount > 0) {
+        this.logger.warn('Local batch eval: summary missing — using incremental worker JSONL results', {
+          summaryPath,
+          parseError,
+          jsonlPassCount,
+          jsonlSuiteCount: jsonlResults.length,
+        });
+        suiteResults = jsonlResults;
+        parseError = undefined;
+      } else {
+        this.logger.warn('Local batch eval: could not parse structured summary — falling back to exitCode-only per-suite status', {
+          summaryPath,
+          parseError,
+          stdoutTail: stdout.slice(-500),
+        });
+      }
     }
 
     const passCount = suiteResults.filter((s) => s.status === 'pass').length;
@@ -307,5 +323,58 @@ export class LocalBatchEvalRunner {
     });
 
     return { suiteResults };
+  }
+
+  /**
+   * Reads per-suite results written incrementally by `record_suite_result`
+   * when the batch script is killed before it prints `Summary: <path>`.
+   */
+  private async parseJsonlStateResults(
+    pluginDir: string,
+    requestedSuites: string[],
+    modelId: string,
+  ): Promise<LocalBatchEvalSuiteResult[]> {
+    const stateDir = join(pluginDir, 'matrix-output', '.batch-state');
+    const bySuite = new Map<string, LocalBatchEvalSuiteResult>();
+
+    try {
+      const entries = await readdir(stateDir);
+      const resultFiles = entries.filter((e) => /^worker-\d+-results\.jsonl$/.test(e));
+      for (const file of resultFiles) {
+        const raw = await readFile(join(stateDir, file), 'utf8');
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const row = JSON.parse(line) as {
+              suite?: string;
+              model?: string;
+              status?: string;
+              duration_ms?: number;
+              log_file?: string;
+            };
+            if (row.model !== modelId || !row.suite) continue;
+            if (row.status !== 'pass' && row.status !== 'fail') continue;
+            bySuite.set(row.suite, {
+              suite: row.suite,
+              status: row.status,
+              durationMs: row.duration_ms ?? 0,
+              logPath: row.log_file,
+            });
+          } catch {
+            // skip malformed lines
+          }
+        }
+      }
+    } catch {
+      // no state dir
+    }
+
+    return requestedSuites.map((suite) => {
+      const entry = bySuite.get(suite);
+      if (!entry) {
+        return { suite, status: 'fail' as const, durationMs: 0 };
+      }
+      return entry;
+    });
   }
 }

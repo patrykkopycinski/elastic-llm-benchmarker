@@ -15,6 +15,7 @@ vi.mock('node:fs/promises', async () => {
   return {
     ...actual,
     readFile: vi.fn(),
+    readdir: vi.fn(),
   };
 });
 
@@ -28,17 +29,19 @@ vi.mock('../../src/utils/logger.js', () => ({
 }));
 
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import {
   LocalBatchEvalRunner,
   resolveBatchTimeoutMs,
   ESQL_MIN_SUITE_TIMEOUT_MS,
+  BATCH_RUNNER_MAX_BUFFER_BYTES,
   type LocalBatchEvalOptions,
 } from '../../src/services/local-batch-eval-runner.js';
 import type { Stage2LocalConfig } from '../../src/types/config.js';
 
 const execFileMock = vi.mocked(execFile);
 const readFileMock = vi.mocked(readFile);
+const readdirMock = vi.mocked(readdir);
 
 function mockExecFileSuccess(stdout: string, stderr: string = '') {
   execFileMock.mockImplementation((_file, _args, _options, _callback) => {
@@ -193,6 +196,7 @@ describe('LocalBatchEvalRunner', () => {
 
   it('falls back to per-suite fail entries when no "Summary:" line is present in stdout', async () => {
     mockExecFileSuccess('nothing useful here\n');
+    readdirMock.mockRejectedValue(new Error('ENOENT'));
 
     const runner = new LocalBatchEvalRunner(createConfig());
     const result = await runner.run(baseOpts);
@@ -203,6 +207,36 @@ describe('LocalBatchEvalRunner', () => {
       { suite: 'security-alert-triage', status: 'fail', durationMs: 0 },
       { suite: 'security-esql-generation-regression', status: 'fail', durationMs: 0 },
     ]);
+  });
+
+  it('uses incremental worker JSONL when summary line is missing but state has passes', async () => {
+    mockExecFileSuccess('nothing useful here\n');
+    readdirMock.mockResolvedValue(['worker-0-results.jsonl']);
+    readFileMock.mockImplementation(async (path) => {
+      const p = String(path);
+      if (p.endsWith('worker-0-results.jsonl')) {
+        return JSON.stringify({
+          suite: 'security-alert-triage',
+          model: 'my-org/my-model',
+          status: 'pass',
+          duration_ms: 999,
+          log_file: '/tmp/a.log',
+        }) + '\n';
+      }
+      throw new Error(`ENOENT ${p}`);
+    });
+
+    const runner = new LocalBatchEvalRunner(createConfig());
+    const result = await runner.run(baseOpts);
+
+    expect(result.status).toBe('partial');
+    expect(result.suites[0]).toEqual({
+      suite: 'security-alert-triage',
+      status: 'pass',
+      durationMs: 999,
+      logPath: '/tmp/a.log',
+    });
+    expect(result.suites[1]?.status).toBe('fail');
   });
 
   it('falls back to per-suite fail entries when the summary file cannot be read', async () => {
@@ -281,6 +315,7 @@ describe('LocalBatchEvalRunner', () => {
       'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',
     );
     expect(options.timeout).toBe(60_000 + 60_000 + ESQL_MIN_SUITE_TIMEOUT_MS);
+    expect(options.maxBuffer).toBe(BATCH_RUNNER_MAX_BUFFER_BYTES);
   });
 
   it('reports failed status and logs a warning when execFile itself errors with no exit code', async () => {
