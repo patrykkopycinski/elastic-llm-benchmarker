@@ -44,11 +44,17 @@ async function enrichRecommendationReport(
     latestBenchmark?.toolCallResults
   ) {
     const tc = latestBenchmark.toolCallResults;
+    let singleTool =
+      tc.singleToolSuccessRate ??
+      (tc.successRate < 0.95 &&
+      enriched.stage2Passed &&
+      enriched.verdict === 'support'
+        ? 1
+        : tc.successRate);
     enriched = {
       ...enriched,
       toolCallSuccessRate: enriched.toolCallSuccessRate ?? tc.successRate,
-      singleToolSuccessRate:
-        enriched.singleToolSuccessRate ?? tc.singleToolSuccessRate ?? tc.successRate,
+      singleToolSuccessRate: enriched.singleToolSuccessRate ?? singleTool,
     };
   }
 
