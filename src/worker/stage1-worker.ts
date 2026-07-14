@@ -24,6 +24,7 @@ import type { QueueService } from '../services/queue-service.js';
 import type { VllmDeploymentOptions } from '../services/vllm-deployment.js';
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
+import { progressNow, reportQueueProgress } from '../utils/queue-progress.js';
 import type { EngineDeploymentResult } from '../engines/engine-types.js';
 import type { Stage3Suggestion } from '../scheduler/pipeline-state.js';
 
@@ -236,6 +237,11 @@ export class Stage1WorkerImpl implements Stage1Worker {
         queueEntryId: run.queueEntryId,
       });
       await this.queueService.updateStatus(run.queueEntryId, 'deploying');
+      await reportQueueProgress(
+        this.queueService,
+        run.queueEntryId,
+        progressNow('stage1_deploy', 'Parsing HuggingFace card and preparing vLLM deploy'),
+      );
 
       // b. Parse HF card
       this.logger.info('Stage 1: parsing HF card', { modelId: run.modelId });
@@ -323,6 +329,11 @@ export class Stage1WorkerImpl implements Stage1Worker {
       }
 
       this.logger.info('Stage 1: deploying model', { modelId: run.modelId });
+      await reportQueueProgress(
+        this.queueService,
+        run.queueEntryId,
+        progressNow('stage1_health', 'Pulling image and starting vLLM container — health check pending'),
+      );
       deployment = await this.vllmEngine.deploy(
         this.config.ssh,
         modelInfo,
@@ -341,6 +352,15 @@ export class Stage1WorkerImpl implements Stage1Worker {
       const paramBillions = modelInfo.parameterCount
         ? modelInfo.parameterCount / 1_000_000_000
         : null;
+
+      await reportQueueProgress(
+        this.queueService,
+        run.queueEntryId,
+        progressNow('stage1_benchmark', `Running throughput benchmark (${concurrencyLevels.length} concurrency levels)`, {
+          step: 0,
+          stepTotal: concurrencyLevels.length,
+        }),
+      );
 
       const benchmarkResult = await this.vllmEngine.runBenchmarks(
         this.config.ssh,
@@ -362,6 +382,11 @@ export class Stage1WorkerImpl implements Stage1Worker {
       let toolCallResults: ToolCallResult | null = null;
       if (this.vllmEngine.supportsToolCalling(modelInfo)) {
         this.logger.info('Stage 1: running tool-call benchmark', { modelId: run.modelId });
+        await reportQueueProgress(
+          this.queueService,
+          run.queueEntryId,
+          progressNow('stage1_tool_call', 'Single-tool calling competence gate'),
+        );
         toolCallResults = await this.toolCallBenchmarkRunner(run.modelId);
       } else {
         this.logger.info('Stage 1: skipping tool-call benchmark (model does not advertise tool calling)', {

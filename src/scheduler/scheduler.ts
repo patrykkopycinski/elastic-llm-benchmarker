@@ -28,6 +28,7 @@ import { resolveCompletedEvalSuites } from '../services/ci-eval-resume.js';
 import type { SSHClientPool } from '../services/ssh-client.js';
 import type { TunnelService } from '../services/tunnel-service.js';
 import type { SshPortForward } from '../utils/ssh-port-forward.js';
+import { progressNow, reportQueueProgress } from '../utils/queue-progress.js';
 
 export interface SchedulerOptions {
   pollIntervalMs: number;
@@ -736,6 +737,12 @@ export class Scheduler {
     leaseToken: string | undefined,
   ): Promise<void> {
     if (this.stage3Worker) {
+      await reportQueueProgress(
+        this.queueService,
+        queueEntryId,
+        progressNow('stage3_reasoning', 'Generating recommendation via EIS reasoning'),
+        leaseToken,
+      );
       const stage3Result = await this.stage3Worker.execute(run);
       run.stage3Result = stage3Result;
       if (this.resultsStore) {
@@ -750,6 +757,12 @@ export class Scheduler {
 
     let report: RecommendationReport | undefined;
     if (this.resultsStore && this.config) {
+      await reportQueueProgress(
+        this.queueService,
+        queueEntryId,
+        progressNow('finalize', 'Building recommendation report'),
+        leaseToken,
+      );
       try {
         report = buildRecommendationReport(run, { config: this.config });
         await this.resultsStore.saveRecommendationReport(report);

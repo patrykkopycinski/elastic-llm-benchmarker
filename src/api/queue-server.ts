@@ -18,6 +18,16 @@ import { HealthMonitor } from '../services/health-monitor.js';
 import { monitoring } from '../services/monitoring-integration.js';
 import { createLogger } from '../utils/logger.js';
 import { createHash } from 'node:crypto';
+import { enrichQueueEntryProgress } from '../services/queue-progress-enrichment.js';
+
+const DEFAULT_STAGE2_EVAL_SUITES = [
+  'security-alerts-rag-regression',
+  'security-ai-rules',
+  'security-multi-step',
+  'attack-discovery',
+  'siem-readiness',
+  'agent-builder',
+];
 
 // ─── Constants ──────────────────────────────────────────────────────
 const MODEL_ID_PATTERN = /^[\w\-./]+$/;
@@ -30,6 +40,14 @@ function resolveMatrixOutputDir(): string | null {
   const pluginDir = process.env.SKILL_DEV_PLUGIN_DIR;
   if (!pluginDir) return null;
   return join(pluginDir, 'matrix-output');
+}
+
+function resolveSkillDevPluginDir(): string | undefined {
+  const fromEnv = process.env.SKILL_DEV_PLUGIN_DIR;
+  if (fromEnv) return fromEnv;
+  const matrixParent = resolveMatrixOutputDir();
+  if (matrixParent) return dirname(matrixParent);
+  return undefined;
 }
 
 async function enrichRecommendationReport(
@@ -659,7 +677,11 @@ export function createQueueServer(config: QueueServerConfig & {
   app.get('/api/queue/current', async (_req, res) => {
     try {
       const entry = await queueService.getCurrent();
-      res.json(entry);
+      const enriched = await enrichQueueEntryProgress(entry, {
+        skillDevPluginDir: resolveSkillDevPluginDir(),
+        defaultEvalSuites: DEFAULT_STAGE2_EVAL_SUITES,
+      });
+      res.json(enriched);
     } catch (err) {
       logger.error('GET /api/queue/current failed', { err });
       res.status(500).json({ error: 'Internal server error' });
@@ -695,10 +717,14 @@ export function createQueueServer(config: QueueServerConfig & {
 
     const sendState = async () => {
       try {
-        const [entries, current] = await Promise.all([
+        const [entries, currentRaw] = await Promise.all([
           queueService.getQueue(),
           queueService.getCurrent(),
         ]);
+        const current = await enrichQueueEntryProgress(currentRaw, {
+          skillDevPluginDir: resolveSkillDevPluginDir(),
+          defaultEvalSuites: DEFAULT_STAGE2_EVAL_SUITES,
+        });
         res.write(`data: ${JSON.stringify({ entries, current })}\n\n`);
       } catch (err) {
         logger.error('SSE state fetch failed', { err });

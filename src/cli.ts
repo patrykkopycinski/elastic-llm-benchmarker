@@ -1712,7 +1712,7 @@ if (isQueueCliInvocation()) {
           ? canUseBatchRunner
             ? (() => {
                 const batchRunner = new LocalBatchEvalRunner(config.stage2Local, logger);
-                return createBatchStage2Worker({ config, gate: new Stage2Gate(config), batchRunner, resultsStore, logger });
+                return createBatchStage2Worker({ config, gate: new Stage2Gate(config), batchRunner, resultsStore, queueService, logger });
               })()
             : new Stage2WorkerImpl({
                 config,

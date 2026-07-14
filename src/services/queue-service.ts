@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Client } from '@elastic/elasticsearch';
 import { INDEX_NAMES } from './es-index-mappings.js';
+import type { PipelineProgress } from '../types/pipeline-progress.js';
 
 const INDEX = INDEX_NAMES.BENCHMARKER_QUEUE;
 
@@ -70,6 +71,8 @@ export interface QueueEntry {
     reason?: string;
     /** Number of prior auto-retries after transient/resource failures (retry budget). */
     infraRetryCount?: number;
+    /** Live pipeline stage/progress for dashboard. */
+    pipelineProgress?: PipelineProgress;
   };
 }
 
@@ -99,8 +102,50 @@ type EsSource = {
     force?: boolean;
     reason?: string;
     infra_retry_count?: number;
+    pipeline_progress?: {
+      stage: PipelineProgress['stage'];
+      detail: string;
+      eval_suites?: string[];
+      eval_completed?: string[];
+      eval_current?: string | null;
+      eval_total?: number;
+      step?: number;
+      step_total?: number;
+      updated_at: string;
+    };
   };
 };
+
+function mapPipelineProgressFromEs(
+  raw: NonNullable<EsSource['metadata']>['pipeline_progress'],
+): PipelineProgress | undefined {
+  if (!raw) return undefined;
+  return {
+    stage: raw.stage,
+    detail: raw.detail,
+    evalSuites: raw.eval_suites,
+    evalCompleted: raw.eval_completed,
+    evalCurrent: raw.eval_current,
+    evalTotal: raw.eval_total,
+    step: raw.step,
+    stepTotal: raw.step_total,
+    updatedAt: raw.updated_at,
+  };
+}
+
+function mapPipelineProgressToEs(progress: PipelineProgress): NonNullable<EsSource['metadata']>['pipeline_progress'] {
+  return {
+    stage: progress.stage,
+    detail: progress.detail,
+    eval_suites: progress.evalSuites,
+    eval_completed: progress.evalCompleted,
+    eval_current: progress.evalCurrent,
+    eval_total: progress.evalTotal,
+    step: progress.step,
+    step_total: progress.stepTotal,
+    updated_at: progress.updatedAt,
+  };
+}
 
 function toEntry(id: string, src: EsSource): QueueEntry {
   return {
@@ -130,6 +175,7 @@ function toEntry(id: string, src: EsSource): QueueEntry {
       force: src.metadata.force,
       reason: src.metadata.reason,
       infraRetryCount: src.metadata.infra_retry_count,
+      pipelineProgress: mapPipelineProgressFromEs(src.metadata.pipeline_progress),
     } : undefined,
   };
 }
@@ -605,6 +651,44 @@ export class QueueService {
           status,
           now,
           error_message: errorMessage ?? null,
+          token: leaseToken ?? null,
+        },
+      },
+      refresh: true,
+    });
+    return updateRes.result !== 'noop';
+  }
+
+  /**
+   * Patch pipeline progress on an in-flight entry (dashboard live state).
+   * Best-effort: returns false when the write did not apply.
+   */
+  async updateProgress(
+    id: string,
+    progress: PipelineProgress,
+    leaseToken?: string,
+  ): Promise<boolean> {
+    const source = leaseToken
+      ? `
+          if (ctx._source.lease_token == null || ctx._source.lease_token == params.token) {
+            if (ctx._source.metadata == null) { ctx._source.metadata = new HashMap(); }
+            ctx._source.metadata.pipeline_progress = params.progress;
+          } else {
+            ctx.op = 'none';
+          }
+        `
+      : `
+          if (ctx._source.metadata == null) { ctx._source.metadata = new HashMap(); }
+          ctx._source.metadata.pipeline_progress = params.progress;
+        `;
+
+    const updateRes = await this.esClient.update({
+      index: INDEX,
+      id,
+      script: {
+        source,
+        params: {
+          progress: mapPipelineProgressToEs(progress),
           token: leaseToken ?? null,
         },
       },

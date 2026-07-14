@@ -301,6 +301,47 @@
       word-break: break-all;
     }
     .current .small { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+    .current .stage-pipeline {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 12px;
+    }
+    .current .stage-chip {
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      color: var(--text-soft);
+      background: var(--surface);
+    }
+    .current .stage-chip.done { color: var(--good); border-color: var(--good); background: var(--good-soft); }
+    .current .stage-chip.active { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); font-weight: 600; }
+    .current .progress-detail { font-size: 12px; color: var(--text); margin-top: 10px; line-height: 1.45; }
+    .current .progress-bar-wrap {
+      margin-top: 10px;
+      height: 6px;
+      border-radius: 4px;
+      background: var(--surface-elev);
+      overflow: hidden;
+    }
+    .current .progress-bar-fill {
+      height: 100%;
+      background: var(--accent);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+    }
+    .current .eval-list { margin-top: 10px; font-size: 12px; }
+    .current .eval-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 4px 0;
+      color: var(--text-muted);
+    }
+    .current .eval-row.done { color: var(--good); }
+    .current .eval-row.active { color: var(--warn); font-weight: 600; }
+    .current .eval-icon { width: 14px; text-align: center; flex-shrink: 0; }
     .queue-list { list-style: none; margin: 0; padding: 0 8px 8px; }
     .queue-list li {
       display: flex;
@@ -1161,6 +1202,81 @@
     }
 
     // ── Queue (live via SSE, fallback poll) ────────────
+    var PIPELINE_STAGE_ORDER = [
+      "stage1_deploy", "stage1_health", "stage1_benchmark", "stage1_tool_call",
+      "stage2_evals", "stage3_reasoning", "finalize"
+    ];
+    var PIPELINE_STAGE_LABELS = {
+      stage1_deploy: "Deploy vLLM",
+      stage1_health: "Health check",
+      stage1_benchmark: "Perf benchmark",
+      stage1_tool_call: "Tool-call gate",
+      stage2_evals: "Security evals",
+      stage3_reasoning: "Reasoning",
+      finalize: "Report"
+    };
+    var EVAL_SUITE_LABELS = {
+      "security-alert-triage": { label: "Alert triage", cat: "C1" },
+      "security-alerts-rag-regression": { label: "Alerts RAG", cat: "C4" },
+      "security-esql-generation-regression": { label: "ES|QL gen", cat: "C2" },
+      "security-ai-rules": { label: "AI rules", cat: "C2" },
+      "security-multi-step": { label: "Multi-step", cat: "C5" },
+      "attack-discovery": { label: "Attack discovery", cat: "C6" },
+      "siem-readiness": { label: "SIEM readiness", cat: "C3" },
+      "agent-builder": { label: "Agent Builder", cat: "C1" }
+    };
+
+    function renderCurrentProgress(current) {
+      var p = current.progress || (current.metadata && current.metadata.pipelineProgress);
+      if (!p || !p.stage) return "";
+
+      var stageIdx = PIPELINE_STAGE_ORDER.indexOf(p.stage);
+      var html = '<div class="stage-pipeline">';
+      PIPELINE_STAGE_ORDER.forEach(function (st, i) {
+        var cls = "stage-chip";
+        if (i < stageIdx) cls += " done";
+        else if (i === stageIdx) cls += " active";
+        html += '<span class="' + cls + '">' + esc(PIPELINE_STAGE_LABELS[st] || st) + "</span>";
+      });
+      html += "</div>";
+
+      if (p.detail) {
+        html += '<div class="progress-detail">' + esc(p.detail) + "</div>";
+      }
+
+      if (p.stepTotal && p.step != null) {
+        var pct = Math.min(100, Math.round((p.step / p.stepTotal) * 100));
+        html += '<div class="progress-bar-wrap"><div class="progress-bar-fill" style="width:' + pct + '%"></div></div>';
+        html += '<div class="muted" style="font-size:11px;margin-top:4px">Step ' + p.step + "/" + p.stepTotal + "</div>";
+      }
+
+      var suites = p.evalSuites || [];
+      if (suites.length) {
+        var done = p.evalCompleted || [];
+        var currentSuite = p.evalCurrent;
+        var evalDone = done.length;
+        var evalTotal = p.evalTotal || suites.length;
+        var evalPct = Math.min(100, Math.round((evalDone / evalTotal) * 100));
+        html += '<div class="progress-bar-wrap" style="margin-top:8px"><div class="progress-bar-fill" style="width:' + evalPct + '%"></div></div>';
+        html += '<div class="muted" style="font-size:11px;margin-top:4px">Evals ' + evalDone + "/" + evalTotal + "</div>";
+        html += '<div class="eval-list">';
+        suites.forEach(function (suiteId) {
+          var meta = EVAL_SUITE_LABELS[suiteId] || { label: suiteId, cat: "" };
+          var rowCls = "eval-row";
+          var icon = "\u25CB";
+          if (done.indexOf(suiteId) >= 0) { rowCls += " done"; icon = "\u2713"; }
+          else if (suiteId === currentSuite) { rowCls += " active"; icon = "\u25B6"; }
+          html += '<div class="' + rowCls + '">' +
+            '<span class="eval-icon">' + icon + "</span>" +
+            '<span>' + esc(meta.label) + (meta.cat ? ' <span class="muted">(' + esc(meta.cat) + ")</span>" : "") + "</span>" +
+            "</div>";
+        });
+        html += "</div>";
+      }
+
+      return html;
+    }
+
     function renderQueue(data) {
       var body = $("queue-body");
       var current = data && data.current;
@@ -1174,6 +1290,7 @@
           '<div class="mid">' + esc(current.modelId) + "</div>" +
           '<div class="small"><span class="badge ' + esc(current.status) + '">' + esc(current.status) + "</span>" +
             (current.startedAt ? " &nbsp;started " + fmtAgo(current.startedAt) : "") + "</div>" +
+          renderCurrentProgress(current) +
           "</div>";
       }
 
@@ -1202,7 +1319,9 @@
       $("kpi-current").textContent = current ? "Running" : "Idle";
       $("kpi-current").classList.toggle("accent", !!current);
       $("kpi-current-meta").textContent = current
-        ? truncate(current.modelId, 28)
+        ? (current.progress && current.progress.detail
+          ? truncate(current.progress.detail, 40)
+          : truncate(current.modelId, 28))
         : pending.length + " pending in queue";
     }
 

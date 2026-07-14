@@ -5,12 +5,15 @@ import type { Stage2Gate } from './stage2-gate.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import type { AppConfig } from '../types/config.js';
 import type { LocalBatchEvalRunner } from '../services/local-batch-eval-runner.js';
+import { progressNow, reportQueueProgress } from '../utils/queue-progress.js';
+import type { QueueService } from '../services/queue-service.js';
 
 interface BatchStage2WorkerDeps {
   config: AppConfig;
   gate: Stage2Gate;
   batchRunner: LocalBatchEvalRunner;
   resultsStore: ElasticsearchResultsStore;
+  queueService?: QueueService;
   logger?: Logger;
 }
 
@@ -25,7 +28,7 @@ interface BatchStage2WorkerDeps {
  * connector boot that is required for the merged config set.
  */
 export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Worker {
-  const { gate, batchRunner, resultsStore, logger } = deps;
+  const { gate, batchRunner, resultsStore, queueService, logger } = deps;
 
   return {
     async execute(run: PipelineRun, stage1Result: Stage1Result): Promise<Stage2Result> {
@@ -64,6 +67,18 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
           pauseAlwaysOnStack: deps.config.stage2Local.pauseAlwaysOnStack,
           teardownBatchStack: deps.config.stage2Local.teardownBatchStack,
         });
+
+        const evalSuites = deps.config.stage2Local.evalSuites ?? [];
+        await reportQueueProgress(
+          queueService,
+          run.queueEntryId,
+          progressNow('stage2_evals', `Starting ${evalSuites.length} security eval suites`, {
+            evalSuites,
+            evalTotal: evalSuites.length,
+            evalCompleted: [],
+            evalCurrent: evalSuites[0] ?? null,
+          }),
+        );
 
         const batchResult = await batchRunner.run({
           vllmBaseUrl: endpointUrl,
