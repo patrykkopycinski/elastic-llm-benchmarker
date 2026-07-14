@@ -32,6 +32,7 @@ if [[ -f .env ]]; then
 fi
 
 export PORT="${BENCHMARKER_API_PORT:-3200}"
+export SKILL_DEV_PLUGIN_DIR="${SKILL_DEV_PLUGIN_DIR:-${HOME}/Projects/agent-builder-skill-dev-cursor-plugin}"
 
 # Boot-time log tail-truncate. launchd does NOT rotate StandardOutPath, so the
 # dashboard log would grow unbounded across KeepAlive respawns. Keep the last

@@ -33,6 +33,14 @@
   <key>WorkingDirectory</key>
   <string>__REPO_ROOT__</string>
 
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>BENCHMARKER_API_PORT</key>
+    <string>3200</string>
+    <key>SKILL_DEV_PLUGIN_DIR</key>
+    <string>__REPO_ROOT__/../agent-builder-skill-dev-cursor-plugin</string>
+  </dict>
+
   <key>RunAtLoad</key>
   <true/>
 

@@ -398,6 +398,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
         toolCallParser: deployment.toolCallParser,
         rawOutput: benchmarkResult.combinedRawOutput,
         gpuUtilization: deployment.gpuUtilization ?? null,
+        runId: run.runId,
       };
       await this.resultsStore.save(benchmarkRecord);
       this.logger.info('Stage 1: results stored', { modelId: run.modelId });

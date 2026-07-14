@@ -172,6 +172,8 @@ export interface BenchmarkResult {
   rawOutput: string;
   /** Runtime GPU utilization metrics captured after deployment (optional, for backward compatibility) */
   gpuUtilization?: GpuUtilization | null;
+  /** Pipeline run id — ties this benchmark doc to a recommendation report. */
+  runId?: string;
 }
 
 // ─── Model Evaluation Types ──────────────────────────────────────────────────

@@ -20,6 +20,7 @@ import type { CIEvalResult } from '../types/ci-eval.js';
 
 export interface ResultsQueryOptions {
   modelId?: string;
+  runId?: string;
   vllmVersion?: string;
   after?: string;
   before?: string;
@@ -125,6 +126,7 @@ function resultToEs(result: BenchmarkResult): Record<string, unknown> {
         max_concurrent_calls: toolCall.maxConcurrentCalls,
         avg_tool_call_latency_ms: toolCall.avgToolCallLatencyMs,
         success_rate: toolCall.successRate,
+        single_tool_success_rate: toolCall.singleToolSuccessRate ?? null,
         total_tests: toolCall.totalTests,
       }
       : null,
@@ -143,6 +145,7 @@ function resultToEs(result: BenchmarkResult): Record<string, unknown> {
           gpu_utilization_pct: result.gpuUtilization.gpuUtilizationPct,
         }
       : null,
+    run_id: result.runId ?? null,
   };
 }
 
@@ -184,6 +187,10 @@ function esHitToResult(hit: Record<string, unknown>): BenchmarkResult {
         maxConcurrentCalls: tcr.max_concurrent_calls as number,
         avgToolCallLatencyMs: tcr.avg_tool_call_latency_ms as number,
         successRate: tcr.success_rate as number,
+        singleToolSuccessRate:
+          tcr.single_tool_success_rate !== null && tcr.single_tool_success_rate !== undefined
+            ? (tcr.single_tool_success_rate as number)
+            : undefined,
         totalTests: tcr.total_tests as number,
       } satisfies ToolCallResult)
       : null,
@@ -205,6 +212,7 @@ function esHitToResult(hit: Record<string, unknown>): BenchmarkResult {
           };
         })()
       : null,
+    runId: (hit.run_id as string | null) ?? undefined,
   };
 }
 
@@ -372,6 +380,7 @@ export class ElasticsearchResultsStore {
   async query(options: ResultsQueryOptions = {}): Promise<BenchmarkResult[]> {
     const must: Record<string, unknown>[] = [];
     if (options.modelId) must.push({ term: { model_id: options.modelId } });
+    if (options.runId) must.push({ term: { run_id: options.runId } });
     if (options.vllmVersion) must.push({ term: { vllm_version: options.vllmVersion } });
     if (options.after) must.push({ range: { timestamp: { gte: options.after } } });
     if (options.before) must.push({ range: { timestamp: { lte: options.before } } });
@@ -402,6 +411,46 @@ export class ElasticsearchResultsStore {
       unknown
     >[];
     return hits.map((hit) => esHitToResult(hit));
+  }
+
+  /**
+   * Benchmark doc that produced a recommendation report — prefers an exact
+   * `run_id` match, otherwise the passed run whose timestamp is nearest to
+   * `evaluatedAt` (avoids picking a later stale/failed re-run).
+   */
+  async getBenchmarkForRecommendation(
+    report: RecommendationReport,
+  ): Promise<BenchmarkResult | null> {
+    if (report.runId) {
+      const byRun = await this.query({ runId: report.runId, limit: 1 });
+      if (byRun[0]) return byRun[0];
+    }
+
+    if (!report.evaluatedAt) return null;
+
+    const evaluatedMs = new Date(report.evaluatedAt).getTime();
+    const after = new Date(evaluatedMs - 6 * 3_600_000).toISOString();
+    const before = new Date(evaluatedMs + 30 * 60_000).toISOString();
+    const candidates = await this.query({
+      modelId: report.modelId,
+      passed: true,
+      after,
+      before,
+      limit: 20,
+      orderBy: 'desc',
+    });
+    if (!candidates.length) return null;
+
+    let best: BenchmarkResult | null = null;
+    let bestDelta = Infinity;
+    for (const candidate of candidates) {
+      const delta = Math.abs(new Date(candidate.timestamp).getTime() - evaluatedMs);
+      if (delta < bestDelta) {
+        best = candidate;
+        bestDelta = delta;
+      }
+    }
+    return best;
   }
 
   async getEvaluatedModelIds(): Promise<string[]> {

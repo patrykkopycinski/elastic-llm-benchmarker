@@ -523,17 +523,16 @@ export function createQueueServer(config: QueueServerConfig & {
 
       const enriched = await Promise.all(
         reports.map(async (r) => {
-          const results = await resultsStore.query({ modelId: r.modelId, limit: 1 });
-          const latest = results[0];
-          let report = await enrichRecommendationReport(r, latest, matrixOutputDir);
-          if (!latest) return report;
+          const benchmark = await resultsStore.getBenchmarkForRecommendation(r);
+          let report = await enrichRecommendationReport(r, benchmark ?? undefined, matrixOutputDir);
+          if (!benchmark) return report;
           return {
             ...report,
             deployment: {
-              dockerCommand: latest.dockerCommand,
-              vllmVersion: latest.vllmVersion,
-              tensorParallelSize: latest.tensorParallelSize,
-              hardwareConfig: latest.hardwareConfig,
+              dockerCommand: benchmark.dockerCommand,
+              vllmVersion: benchmark.vllmVersion,
+              tensorParallelSize: benchmark.tensorParallelSize,
+              hardwareConfig: benchmark.hardwareConfig,
             },
           };
         }),
@@ -770,7 +769,9 @@ export function createQueueServer(config: QueueServerConfig & {
 
 // ─── Starter ────────────────────────────────────────────────────────
 export function startQueueServer(config: QueueServerConfig = {}) {
-  const port = config.port ?? (process.env.PORT ? Number(process.env.PORT) : 3200);
+  const port =
+    config.port ??
+    Number(process.env.BENCHMARKER_API_PORT ?? process.env.PORT ?? 3200);
   const app = createQueueServer(config);
   const server = app.listen(port, () => {
     const logger = createLogger();
@@ -783,7 +784,7 @@ export function startQueueServer(config: QueueServerConfig = {}) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   dotenv.config();
   startQueueServer({
-    port: Number(process.env.PORT) || 3200,
+    port: Number(process.env.BENCHMARKER_API_PORT ?? process.env.PORT) || 3200,
     esUrl: process.env.ES_URL ?? process.env.ELASTICSEARCH_URL,
     esApiKey: process.env.ES_API_KEY ?? process.env.ELASTICSEARCH_API_KEY,
     esUsername: process.env.ES_USERNAME,
