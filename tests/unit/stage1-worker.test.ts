@@ -420,6 +420,34 @@ describe('Stage1WorkerImpl', () => {
       expect(overrides?.chatTemplate).toBeUndefined();
     });
 
+    it('should ignore --gpu-memory-utilization when the value is prose, not a float (regression: Qwen3.6-27B NaN deploy)', async () => {
+      const reasoning: Stage3Result = {
+        runId: 'run-prev',
+        modelId: 'Qwen/Qwen3.6-27B',
+        status: 'success',
+        startedAt: '2026-01-01T00:00:00Z',
+        completedAt: '2026-01-01T00:01:00Z',
+        suggestions: [
+          {
+            category: 'config',
+            title: 'GPU memory',
+            description:
+              'Consider lowering --gpu-memory-utilization to avoid OOM on this 27B dense model.',
+            estimatedImpact: 'high',
+          },
+        ],
+      };
+
+      deps.resultsStore = createMockResultsStore(reasoning);
+      worker = new Stage1WorkerImpl(deps);
+
+      await worker.execute(createPipelineRun());
+
+      const deployCall = vi.mocked(deps.vllmEngine.deploy).mock.calls[0];
+      const overrides = deployCall![3] as VllmDeploymentOptions | undefined;
+      expect(overrides?.gpuMemoryUtilization).toBeUndefined();
+    });
+
     it('should ignore --dtype when the "value" is prose, not an actual dtype', async () => {
       const reasoning: Stage3Result = {
         runId: 'run-prev',

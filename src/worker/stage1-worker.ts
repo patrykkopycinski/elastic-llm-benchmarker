@@ -45,9 +45,15 @@ function parseVllmOverridesFromSuggestions(
   for (const sug of suggestions) {
     const text = `${sug.title} ${sug.description}`;
 
-    // --gpu-memory-utilization <float>
-    const gpuMem = text.match(/--gpu-memory-utilization\s+(\d*(?:\.\d+)?)/);
-    if (gpuMem) overrides.gpuMemoryUtilization = parseFloat(gpuMem[1]!);
+    // --gpu-memory-utilization <float> — require a numeric token (not prose like
+    // "--gpu-memory-utilization to avoid OOM", which previously became NaN).
+    const gpuMem = text.match(/--gpu-memory-utilization\s+(\d+(?:\.\d+)?|\.\d+)/);
+    if (gpuMem) {
+      const val = parseFloat(gpuMem[1]!);
+      if (Number.isFinite(val) && val > 0 && val <= 1) {
+        overrides.gpuMemoryUtilization = val;
+      }
+    }
 
     // --max-model-len <int>
     const maxLen = text.match(/--max-model-len\s+(\d+)/);
