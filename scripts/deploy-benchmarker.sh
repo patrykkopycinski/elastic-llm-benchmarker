@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # deploy-benchmarker.sh — run from ANY machine to update + bounce the i9 benchmarker.
 #
-# Pushes latest main, then SSHes the i9 to pull/rebuild/bounce via the
-# update-benchmarker.sh helper there. The i9's launchd respawns the daemon
-# on the fresh binary automatically.
+# Pushes latest main, syncs scripts/update-benchmarker.sh to i9, then SSHes to
+# pull/rebuild/bounce. The i9 launchd respawns the daemon on the fresh binary.
 #
 # Usage:
 #   ~/Projects/elastic-llm-benchmarker/scripts/deploy-benchmarker.sh           # full: push + i9 pull + rebuild + bounce
@@ -14,8 +13,22 @@
 set -euo pipefail
 
 I9_HOST="kibana-i9"
-I9_HELPER="\$HOME/i9-setup/update-benchmarker.sh"
+I9_HELPER='$HOME/i9-setup/update-benchmarker.sh'
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+UPDATE_SCRIPT="$HERE/scripts/update-benchmarker.sh"
+
+run_i9_update() {
+  local extra_args="${1:-}"
+  ssh "$I9_HOST" "mkdir -p ~/i9-setup"
+  scp -q "$UPDATE_SCRIPT" "$I9_HOST:~/i9-setup/update-benchmarker.sh"
+  ssh "$I9_HOST" "chmod +x ~/i9-setup/update-benchmarker.sh"
+  # zsh -lic: login shell loads nvm; update-benchmarker.sh also sources nvm as fallback.
+  if [ -n "$extra_args" ]; then
+    ssh "$I9_HOST" "zsh -lic '$I9_HELPER $extra_args'"
+  else
+    ssh "$I9_HOST" "zsh -lic '$I9_HELPER'"
+  fi
+}
 
 # Resolve flags
 MODE="full"
@@ -44,12 +57,12 @@ else
   echo "--- local main in sync with origin, nothing to push ---"
 fi
 
-# 2. SSH the i9 to pull + rebuild + bounce
-echo "--- invoking i9 update helper ($MODE) ---"
+# 2. Sync helper + SSH the i9 to pull + rebuild + bounce
+echo "--- syncing update-benchmarker.sh + invoking i9 helper ($MODE) ---"
 if [ "$MODE" = "no-bounce" ]; then
-  ssh "$I9_HOST" "$I9_HELPER --no-bounce"
+  run_i9_update "--no-bounce"
 else
-  ssh "$I9_HOST" "$I9_HELPER"
+  run_i9_update ""
 fi
 
 echo "=== deploy complete ==="

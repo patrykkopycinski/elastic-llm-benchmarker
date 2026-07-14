@@ -9,6 +9,10 @@ export interface PipelineRun {
   startedAt: string;
   completedAt?: string;
   error?: string;
+  /** Local batch suites to skip (resume / eval-only re-run). */
+  skipStage2Suites?: string[];
+  /** Skip Stage 3 reasoning (metadata or hard Stage 2 infra fail). */
+  skipReasoning?: boolean;
   // Populated during run
   hfCard?: HFCardResult;
   deployment?: DeploymentInfo;
@@ -73,7 +77,7 @@ export interface Stage1Result {
 export interface Stage2Result {
   runId: string;
   modelId: string;
-  status: 'success' | 'skipped' | 'failed' | 'error';
+  status: 'success' | 'partial' | 'skipped' | 'failed' | 'error';
   scores?: Record<string, number>;
   suiteResults?: Array<{
     suite: string;

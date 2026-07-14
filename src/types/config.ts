@@ -840,6 +840,16 @@ export const stage2LocalConfigSchema = z.object({
       'security-alerts-rag-regression',
       'security-esql-generation-regression',
     ]),
+  /**
+   * Fast gate suites (Tier A). When set, these run first; Tier B runs only when
+   * every Tier A suite passes. Defaults to empty (single-phase: all evalSuites).
+   */
+  tierASuites: z.array(z.string()).optional(),
+  /**
+   * Full matrix suites (Tier B). Defaults to `evalSuites` minus `tierASuites`
+   * when Tier A is configured.
+   */
+  tierBSuites: z.array(z.string()).optional(),
   /** Per-suite timeout (ms). Defaults to 1h — kbn-evals are long. */
   suiteTimeoutMs: z.number().int().positive().default(3_600_000),
   /**

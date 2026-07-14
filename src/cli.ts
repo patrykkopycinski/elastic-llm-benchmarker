@@ -2103,6 +2103,10 @@ if (isQueueCliInvocation()) {
     .option('--priority <n>', 'Queue priority (1 = highest)', '5')
     .option('--force', 'Skip hardware-fit check and enqueue anyway')
     .option('--reason <text>', 'Optional reason/note to store in metadata')
+    .option('--skip-stage1', 'Skip Stage 1 deploy/benchmark (eval-only)')
+    .option('--endpoint-url <url>', 'vLLM endpoint when using --skip-stage1')
+    .option('--deployment-name <name>', 'Deployment name for eval-only teardown')
+    .option('--skip-passed-suites', 'Resume: skip suites already passed in batch jsonl/ES')
     .action(async (modelId: string, opts) => {
       const configPath = opts['config'] as string;
       const config = loadAppConfig({ config: configPath, json: false });
@@ -2123,6 +2127,10 @@ if (isQueueCliInvocation()) {
           priority: Number(opts['priority']),
           force: Boolean(opts['force']),
           reason: opts['reason'] as string | undefined,
+          skipStage1: Boolean(opts['skipStage1']),
+          endpointUrl: opts['endpointUrl'] as string | undefined,
+          deploymentName: opts['deploymentName'] as string | undefined,
+          skipPassedSuites: Boolean(opts['skipPassedSuites']),
         });
 
         console.log(result.message);

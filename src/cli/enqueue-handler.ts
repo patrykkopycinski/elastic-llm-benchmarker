@@ -7,6 +7,7 @@ import {
   evaluateAgentBuilderBaseline,
   formatBaselineRejections,
 } from '../services/agent-builder-baseline.js';
+import { deriveModelFamily } from '../services/discovery-scheduler.js';
 import type { AppConfig } from '../types/config.js';
 
 export interface EnqueueOptions {
@@ -17,6 +18,14 @@ export interface EnqueueOptions {
   reason?: string;
   config: AppConfig;
   esClient: Client;
+  /** Skip Stage 1; run evals against an existing vLLM endpoint. */
+  skipStage1?: boolean;
+  /** Required when skipStage1 is true. */
+  endpointUrl?: string;
+  /** Optional deployment name for teardown when skipStage1 is true. */
+  deploymentName?: string;
+  /** Resume evals: skip suites already passed in batch jsonl / ES for this model. */
+  skipPassedSuites?: boolean;
 }
 
 export interface EnqueueResult {
@@ -31,12 +40,37 @@ export interface EnqueueResult {
   };
 }
 
+async function findFamilyDedupConflict(
+  queueService: QueueService,
+  modelId: string,
+  config: AppConfig,
+  force: boolean,
+): Promise<string | null> {
+  if (force) return null;
+  const family = deriveModelFamily(modelId);
+  const inFlight = await queueService.findNonTerminalEntries();
+  for (const entry of inFlight) {
+    if (deriveModelFamily(entry.modelId) === family) {
+      return `Family ${family} already has in-flight entry for ${entry.modelId} (${entry.status})`;
+    }
+  }
+
+  const days = config.discoveryScheduler?.skipRecentlyBenchmarkedDays ?? 30;
+  if (days > 0) {
+    const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const recent = await queueService.findRecentTerminalModelIds(sinceIso);
+    for (const recentId of recent) {
+      if (deriveModelFamily(recentId) === family && recentId !== modelId) {
+        return `Family ${family} was benchmarked recently via ${recentId} (within ${days}d window)`;
+      }
+    }
+  }
+
+  return null;
+}
+
 /**
  * Enqueue a model for benchmarking with an optional hardware-fit dry-run.
- *
- * If `force` is not set and the model config cannot be fetched or the model
- * does not fit the target hardware profile, the operation fails with a
- * descriptive message.
  */
 export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult> {
   const { modelId, config, esClient } = options;
@@ -44,8 +78,25 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
   const priority = options.priority ?? 5;
   const force = options.force ?? false;
   const reason = options.reason;
+  const skipStage1 = options.skipStage1 ?? false;
+  const endpointUrl = options.endpointUrl;
+  const deploymentName = options.deploymentName;
+  const skipPassedSuites = options.skipPassedSuites ?? skipStage1;
+
+  if (skipStage1 && !endpointUrl) {
+    return {
+      success: false,
+      message: '--skip-stage1 requires --endpoint-url',
+    };
+  }
 
   const queueService = new QueueService(esClient);
+
+  const familyConflict = await findFamilyDedupConflict(queueService, modelId, config, force);
+  if (familyConflict) {
+    return { success: false, message: familyConflict };
+  }
+
   const estimator = new HardwareEstimator();
   const profileRegistry = new HardwareProfileRegistry();
   const modelDiscovery = new ModelDiscoveryService(
@@ -54,7 +105,25 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     config.logLevel ?? 'info',
   );
 
-  // Fetch model config from HuggingFace
+  if (skipStage1) {
+    const entry = await queueService.enqueue(modelId, 'user', priority, undefined, {
+      hardwareProfileId,
+      estimatedGb: null,
+      fits: true,
+      force,
+      reason: reason ?? `eval-only against ${endpointUrl}`,
+      skipStage1: true,
+      endpointUrl,
+      deploymentName,
+      skipPassedSuites,
+    });
+    return {
+      success: true,
+      entryId: entry.id,
+      message: `Enqueued ${modelId} for eval-only (Stage 1 skipped) at ${endpointUrl}`,
+    };
+  }
+
   const modelConfig = await modelDiscovery.fetchModelConfig(modelId);
 
   if (!modelConfig && !force) {
@@ -79,7 +148,6 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     };
   }
 
-  // Agent Builder baseline gate (pre-deploy filter)
   if (config.agentBuilderBaseline.enabled && !force) {
     const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config, modelConfig ?? undefined);
     if (model && filter && !filter.passed) {
@@ -99,7 +167,6 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     }
   }
 
-  // Resolve hardware profile
   const profile = profileRegistry.getProfile(hardwareProfileId);
   if (!profile) {
     return {
@@ -108,7 +175,6 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     };
   }
 
-  // Run dry-run hardware fit check
   const dryRun = estimator.dryRunCheck(modelConfig!, profile.hardware);
 
   if (!dryRun.fits && !force) {
@@ -121,7 +187,6 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     };
   }
 
-  // Enqueue (with or without force override)
   const entry = await queueService.enqueue(modelId, 'user', priority, undefined, {
     hardwareProfileId,
     estimatedGb: dryRun.estimatedGb,
@@ -130,6 +195,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     reason:
       reason ??
       `estimated ${dryRun.estimatedGb.toFixed(2)} GB / available ${dryRun.availableGb.toFixed(2)} GB`,
+    skipPassedSuites: options.skipPassedSuites,
   });
 
   return {

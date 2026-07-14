@@ -122,6 +122,30 @@ describe('buildRecommendationReport', () => {
     expect(report.version).toBe(1);
   });
 
+  it('produces an investigate verdict when some evals fail (partial)', () => {
+    const config = makeConfig();
+    const stage2: Stage2Result = {
+      runId: 'run-123',
+      modelId: 'Qwen/Qwen2.5-72B-Instruct',
+      status: 'partial',
+      suiteResults: [
+        { suite: 'tool_calls', status: 'passed', score: 0.94 },
+        { suite: 'skill_invocation', status: 'failed', score: 0.5 },
+      ],
+      startedAt: '2026-06-01T00:05:00Z',
+      completedAt: '2026-06-01T00:10:00Z',
+    };
+    const run = makeRun({
+      benchmarkResult: makeStage1(),
+      stage2Result: stage2,
+    });
+
+    const report = buildRecommendationReport(run, { config });
+
+    expect(report.verdict).toBe('investigate');
+    expect(report.stage2Passed).toBe(false);
+  });
+
   it('produces an investigate verdict when some evals fail', () => {
     const config = makeConfig();
     const stage2: Stage2Result = {

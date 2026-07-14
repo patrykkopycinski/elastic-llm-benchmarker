@@ -35,6 +35,8 @@ describe('runEnqueue', () => {
 
     vi.mocked(QueueService).mockImplementation(() => ({
       enqueue: vi.fn().mockResolvedValue({ id: 'entry-123' }),
+      findNonTerminalEntries: vi.fn().mockResolvedValue([]),
+      findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set()),
     } as unknown as QueueService));
 
     vi.mocked(ModelDiscoveryService).mockImplementation(() => ({
@@ -178,6 +180,8 @@ describe('runEnqueue', () => {
     const enqueueMock = vi.fn().mockResolvedValue({ id: 'entry-456' });
     vi.mocked(QueueService).mockImplementation(() => ({
       enqueue: enqueueMock,
+      findNonTerminalEntries: vi.fn().mockResolvedValue([]),
+      findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set()),
     } as unknown as QueueService));
 
     await runEnqueue({
@@ -200,6 +204,8 @@ describe('runEnqueue', () => {
     const enqueueMock = vi.fn().mockResolvedValue({ id: 'entry-789' });
     vi.mocked(QueueService).mockImplementation(() => ({
       enqueue: enqueueMock,
+      findNonTerminalEntries: vi.fn().mockResolvedValue([]),
+      findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set()),
     } as unknown as QueueService));
 
     await runEnqueue({

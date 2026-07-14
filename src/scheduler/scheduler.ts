@@ -25,6 +25,7 @@ import { compileModelExcludeMatchers, findMatchingExcludePattern } from '../util
 import { VllmPublicEndpointResolver } from '../services/vllm-public-endpoint.js';
 import { CiEvalInfrastructureGuard } from '../services/ci-eval-infrastructure-guard.js';
 import { resolveCompletedEvalSuites } from '../services/ci-eval-resume.js';
+import { resolveSkipLocalBatchSuites } from '../services/local-batch-resume.js';
 import type { SSHClientPool } from '../services/ssh-client.js';
 import type { TunnelService } from '../services/tunnel-service.js';
 import type { SshPortForward } from '../utils/ssh-port-forward.js';
@@ -387,8 +388,40 @@ export class Scheduler {
     let deferInfrastructureTeardown = false;
 
     try {
+      run.skipReasoning = entry.metadata?.skipReasoning === true;
       let stage1Skipped = false;
-      if (options?.resume && this.ciEvals?.enabled && this.engine && this.config) {
+
+      if (entry.metadata?.skipStage1 && entry.metadata?.endpointUrl) {
+        stage1Skipped = true;
+        await this.queueService.updateStatus(entry.id, 'benchmarking');
+        const now = new Date().toISOString();
+        const deploymentName = entry.metadata.deploymentName ?? `eval-only-${entry.modelId}`;
+        run.benchmarkResult = {
+          runId: run.runId,
+          modelId: entry.modelId,
+          queueEntryId: entry.id,
+          status: 'skipped',
+          metrics: null,
+          rawOutput: '',
+          startedAt: now,
+          completedAt: now,
+          deploymentName,
+          endpointUrl: entry.metadata.endpointUrl,
+          stage2Eligible: true,
+        };
+        run.deployment = {
+          deploymentName,
+          containerId: '',
+          endpointUrl: entry.metadata.endpointUrl,
+          status: 'deployed',
+        };
+        this.logger.info('Scheduler: eval-only enqueue (skipped Stage 1)', {
+          modelId: entry.modelId,
+          endpointUrl: entry.metadata.endpointUrl,
+        });
+      }
+
+      if (options?.resume && !stage1Skipped && this.engine && this.config) {
         const findRunning = this.engine.findRunningDeployment;
         const existing = findRunning
           ? await findRunning.call(this.engine, this.config.ssh, entry.modelId)
@@ -408,6 +441,7 @@ export class Scheduler {
             completedAt: now,
             deploymentName: existing.deploymentName,
             endpointUrl: existing.endpointUrl,
+            stage2Eligible: true,
           };
           run.deployment = {
             deploymentName: existing.deploymentName,
@@ -533,6 +567,26 @@ export class Scheduler {
       const hasLocalGate = Boolean(localStage2Worker);
       let localGatePassed = true;
       if (localStage2Worker && run.benchmarkResult) {
+        if (
+          (options?.resume || entry.metadata?.skipPassedSuites) &&
+          this.config?.stage2Local?.useBatchRunner
+        ) {
+          const evalSuites = this.config.stage2Local.evalSuites ?? [];
+          run.skipStage2Suites = await resolveSkipLocalBatchSuites({
+            pluginDir: this.config.stage2Local.skillDevPluginDir,
+            modelId: entry.modelId,
+            queueEntryId: entry.id,
+            evalSuites,
+            resultsStore: this.resultsStore,
+          });
+          if (run.skipStage2Suites.length > 0) {
+            this.logger.info('Local batch: skipping suites already passed (resume)', {
+              modelId: entry.modelId,
+              skipStage2Suites: run.skipStage2Suites,
+            });
+          }
+        }
+
         const stage2Result = await localStage2Worker.execute(run, run.benchmarkResult);
         run.stage2Result = stage2Result;
 
@@ -736,7 +790,10 @@ export class Scheduler {
     queueEntryId: string,
     leaseToken: string | undefined,
   ): Promise<void> {
-    if (this.stage3Worker) {
+    const hardStage2Fail = this.isHardStage2InfraFail(run);
+    const skipStage3 = run.skipReasoning === true || hardStage2Fail;
+
+    if (this.stage3Worker && !skipStage3) {
       await reportQueueProgress(
         this.queueService,
         queueEntryId,
@@ -753,6 +810,12 @@ export class Scheduler {
           error: stage3Result.error,
         });
       }
+    } else if (skipStage3) {
+      this.logger.info('Scheduler: skipping Stage 3 reasoning', {
+        modelId: run.modelId,
+        hardStage2Fail,
+        skipReasoning: run.skipReasoning === true,
+      });
     }
 
     let report: RecommendationReport | undefined;
@@ -793,6 +856,17 @@ export class Scheduler {
         // Notification failure should not block pipeline
       }
     }
+  }
+
+  private isHardStage2InfraFail(run: PipelineRun): boolean {
+    const s2 = run.stage2Result;
+    if (!s2) return false;
+    if (s2.status === 'error') return true;
+    if (s2.status !== 'failed') return false;
+    const passCount = (s2.suiteResults ?? []).filter(
+      (sr) => sr.status === 'pass' || (sr.score ?? 0) >= 1,
+    ).length;
+    return passCount === 0;
   }
 
   private async resolveEvalArtifactSummary(

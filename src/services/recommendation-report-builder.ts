@@ -32,7 +32,9 @@ export function buildRecommendationReport(
 
   const stage1Passed = stage1?.status === 'success';
   const stage2Ran = stage2 !== undefined && stage2.status !== 'skipped';
-  const stage2Passed = stage2Ran ? stage2!.status === 'success' : null;
+  const stage2Passed = stage2Ran
+    ? stage2!.status === 'success'
+    : null;
   const stage3Ran = stage3 !== undefined;
 
   const blockingIssues: BlockingIssue[] = [];
@@ -193,7 +195,7 @@ function computeVerdict(
   if (!stage1Passed) return 'reject';
   if (!stage2Ran) return 'investigate';
   if (stage2Passed === false) {
-    const allFailed = passingEvals.every((e) => !e.passed);
+    const allFailed = passingEvals.length === 0 || passingEvals.every((e) => !e.passed);
     return allFailed ? 'reject' : 'investigate';
   }
   const allEvalsPassed = passingEvals.length > 0 && passingEvals.every((e) => e.passed);

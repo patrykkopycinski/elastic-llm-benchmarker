@@ -12,6 +12,8 @@ export interface LocalBatchEvalOptions {
   modelId: string;
   /** Suites to run. Defaults to stage2Local.evalSuites */
   suites?: string[];
+  /** Suites already passed — excluded from this batch invocation. */
+  skipSuites?: string[];
 }
 
 export interface LocalBatchEvalSuiteResult {
@@ -162,7 +164,17 @@ export class LocalBatchEvalRunner {
     }
 
     const batchScript = join(pluginDir, 'scripts', 'run-security-evals-batch.sh');
-    const rawSuites = opts.suites ?? this.config.evalSuites;
+    const skipSet = new Set(opts.skipSuites ?? []);
+    const rawSuites = (opts.suites ?? this.config.evalSuites).filter((s) => !skipSet.has(s));
+    if (rawSuites.length === 0) {
+      return {
+        modelId: opts.modelId,
+        status: 'success',
+        suites: [],
+        startedAt,
+        completedAt: new Date().toISOString(),
+      };
+    }
     const suites = orderBenchmarkerSuites(rawSuites);
     const workers = String(this.config.batchWorkers);
     const timeoutMs = resolveBatchTimeoutMs(suites, this.config.suiteTimeoutMs);

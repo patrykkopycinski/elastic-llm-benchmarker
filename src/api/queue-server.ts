@@ -593,6 +593,39 @@ export function createQueueServer(config: QueueServerConfig & {
     }
   });
 
+  // GET /api/matrix/cells/:modelId — ES-backed suite scores (no HTML regen required)
+  app.get('/api/matrix/cells/:modelId', async (req, res) => {
+    try {
+      const modelId = decodeURIComponent(req.params.modelId);
+      if (!modelId || modelId.length > MODEL_ID_MAX_LENGTH || !MODEL_ID_PATTERN.test(modelId)) {
+        res.status(400).json({ error: 'Invalid modelId' });
+        return;
+      }
+      const stage2 = await resultsStore.getLatestStage2ForModel(modelId);
+      const report = await resultsStore.getLatestRecommendation(modelId);
+      if (!stage2 && !report) {
+        res.status(404).json({ error: 'No matrix data for this model' });
+        return;
+      }
+      res.json({
+        modelId,
+        verdict: report?.verdict ?? null,
+        stage2Status: stage2?.status ?? null,
+        suites: (stage2?.suiteResults ?? []).map((sr) => ({
+          suite: sr.suite,
+          status: sr.status,
+          score: sr.score ?? null,
+          durationMs: sr.durationMs ?? null,
+        })),
+        passingEvals: report?.passingEvals ?? [],
+        evaluatedAt: report?.evaluatedAt ?? stage2?.completedAt ?? null,
+      });
+    } catch (err) {
+      logger.error('GET /api/matrix/cells failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // GET /api/matrix/latest — latest security LLM matrix HTML export
   app.get('/api/matrix/latest', async (_req, res) => {
     try {

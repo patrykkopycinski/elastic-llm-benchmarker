@@ -823,12 +823,13 @@ export class ElasticsearchResultsStore {
     this.logger.info('Stored eval suite result', { modelId: result.modelId, index, status: result.status });
   }
 
-  async saveStage2Result(result: Stage2Result): Promise<void> {
+  async saveStage2Result(result: Stage2Result, queueEntryId?: string): Promise<void> {
     const dateSuffix = result.startedAt.slice(0, 10);
     const index = `${INDEX_NAMES.BENCHMARKER_STAGE2}-${dateSuffix}`;
     const doc: Record<string, unknown> = {
       run_id: result.runId,
       model_id: result.modelId,
+      queue_entry_id: queueEntryId ?? null,
       status: result.status,
       scores: result.scores ?? null,
       suite_results: (result.suiteResults ?? []).map((sr) => ({
@@ -850,6 +851,83 @@ export class ElasticsearchResultsStore {
       document: doc,
     });
     this.logger.info('Stored stage2 result', { modelId: result.modelId, index, status: result.status });
+  }
+
+  /**
+   * Suite ids that passed in stage2 results for a specific queue entry (resume).
+   */
+  async getPassedStage2SuitesForEntry(
+    queueEntryId: string,
+    evalSuites: string[],
+  ): Promise<string[]> {
+    const passed = new Set<string>();
+    try {
+      const resp = await this.esClient.search({
+        index: `${INDEX_NAMES.BENCHMARKER_STAGE2}-*`,
+        query: {
+          bool: {
+            filter: [
+              { term: { queue_entry_id: queueEntryId } },
+              { terms: { status: ['success', 'partial'] } },
+            ],
+          },
+        },
+        sort: [{ started_at: { order: 'desc' } }],
+        size: 20,
+      });
+      for (const hit of resp.hits.hits ?? []) {
+        const src = hit._source as Record<string, unknown> | undefined;
+        const suiteResults = src?.suite_results as Array<Record<string, unknown>> | undefined;
+        for (const sr of suiteResults ?? []) {
+          const suite = String(sr.suite ?? '');
+          const status = String(sr.status ?? '');
+          const score = Number(sr.score ?? 0);
+          if (!evalSuites.includes(suite)) continue;
+          if (status === 'pass' || score >= 1) passed.add(suite);
+        }
+      }
+    } catch {
+      // fail open — no skips from ES
+    }
+    return [...passed];
+  }
+
+  /** Latest stage2 document for matrix cell rendering (ES-first, no HTML dependency). */
+  async getLatestStage2ForModel(modelId: string): Promise<Stage2Result | null> {
+    try {
+      const resp = await this.esClient.search({
+        index: `${INDEX_NAMES.BENCHMARKER_STAGE2}-*`,
+        query: { term: { model_id: modelId } },
+        sort: [{ started_at: { order: 'desc' } }],
+        size: 1,
+      });
+      const hit = resp.hits.hits?.[0];
+      if (!hit?._source) return null;
+      const src = hit._source as Record<string, unknown>;
+      const suiteResults = (src.suite_results as Array<Record<string, unknown>> | undefined)?.map(
+        (sr) => ({
+          suite: String(sr.suite ?? ''),
+          status: String(sr.status ?? ''),
+          score: sr.score !== null && sr.score !== undefined ? Number(sr.score) : undefined,
+          durationMs: sr.duration_ms !== null && sr.duration_ms !== undefined ? Number(sr.duration_ms) : undefined,
+          error: sr.error ? String(sr.error) : undefined,
+        }),
+      );
+      return {
+        runId: String(src.run_id ?? ''),
+        modelId: String(src.model_id ?? modelId),
+        status: String(src.status ?? 'failed') as Stage2Result['status'],
+        scores: (src.scores as Record<string, number> | undefined) ?? undefined,
+        suiteResults,
+        batchSummaryPath: src.batch_summary_path ? String(src.batch_summary_path) : undefined,
+        stdoutLogPath: src.stdout_log_path ? String(src.stdout_log_path) : undefined,
+        reason: src.reason ? String(src.reason) : undefined,
+        startedAt: String(src.started_at ?? ''),
+        completedAt: String(src.completed_at ?? ''),
+      };
+    } catch {
+      return null;
+    }
   }
 
   async saveReasoningResult(result: Stage3Result): Promise<void> {

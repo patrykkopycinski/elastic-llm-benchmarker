@@ -22,6 +22,10 @@ export class Stage2Gate {
    * the first failing threshold.
    */
   check(result: Stage1Result): { proceed: boolean; reason: string } {
+    if (result.status === 'skipped' && result.stage2Eligible !== false) {
+      return { proceed: true, reason: 'Stage 1 skipped (eval-only/resume)' };
+    }
+
     if (!result.metrics) {
       return { proceed: false, reason: 'No metrics available' };
     }

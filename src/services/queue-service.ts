@@ -73,6 +73,14 @@ export interface QueueEntry {
     infraRetryCount?: number;
     /** Live pipeline stage/progress for dashboard. */
     pipelineProgress?: PipelineProgress;
+    /** Skip Stage 1 deploy/benchmark; use endpointUrl instead (eval-only). */
+    skipStage1?: boolean;
+    /** vLLM endpoint when skipStage1 is true. */
+    endpointUrl?: string;
+    /** Deployment name for teardown when skipStage1 is true. */
+    deploymentName?: string;
+    /** On enqueue/resume, skip suites already passed in jsonl/ES for this entry. */
+    skipPassedSuites?: boolean;
   };
 }
 
@@ -113,6 +121,10 @@ type EsSource = {
       step_total?: number;
       updated_at: string;
     };
+    skip_stage1?: boolean;
+    endpoint_url?: string;
+    deployment_name?: string;
+    skip_passed_suites?: boolean;
   };
 };
 
@@ -176,6 +188,10 @@ function toEntry(id: string, src: EsSource): QueueEntry {
       reason: src.metadata.reason,
       infraRetryCount: src.metadata.infra_retry_count,
       pipelineProgress: mapPipelineProgressFromEs(src.metadata.pipeline_progress),
+      skipStage1: src.metadata.skip_stage1,
+      endpointUrl: src.metadata.endpoint_url,
+      deploymentName: src.metadata.deployment_name,
+      skipPassedSuites: src.metadata.skip_passed_suites,
     } : undefined,
   };
 }
@@ -233,6 +249,10 @@ export class QueueService {
         force: metadata.force,
         reason: metadata.reason,
         infra_retry_count: metadata.infraRetryCount,
+        skip_stage1: metadata.skipStage1,
+        endpoint_url: metadata.endpointUrl,
+        deployment_name: metadata.deploymentName,
+        skip_passed_suites: metadata.skipPassedSuites,
       } : undefined,
     };
     const res = await this.esClient.index({
@@ -812,6 +832,21 @@ export class QueueService {
       if (modelId) ids.add(modelId);
     }
     return ids;
+  }
+
+  /**
+   * Non-terminal queue entries (pending, deploying, benchmarking) for family dedup.
+   */
+  async findNonTerminalEntries(limit: number = 100): Promise<QueueEntry[]> {
+    const res = await this.esClient.search<EsSource>({
+      index: INDEX,
+      query: {
+        terms: { status: ['pending', 'deploying', 'benchmarking'] },
+      },
+      sort: [{ priority: { order: 'desc' } }, { requested_at: { order: 'asc' } }],
+      size: limit,
+    });
+    return res.hits.hits.map((h) => toEntry(h._id!, h._source!));
   }
 
   /**

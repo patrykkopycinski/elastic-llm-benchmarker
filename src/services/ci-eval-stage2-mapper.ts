@@ -131,8 +131,9 @@ export function mergeStage2Results(results: Stage2Result[]): Stage2Result {
     }
   }
 
-  const failed = results.filter((r) => r.status !== 'success');
-  const status = failed.length === 0 ? 'success' : 'failed';
+  const failed = results.filter((r) => r.status !== 'success' && r.status !== 'partial');
+  const hasPartial = results.some((r) => r.status === 'partial');
+  const status = failed.length === 0 ? (hasPartial ? 'partial' : 'success') : 'failed';
   const reason =
     failed.length === 0
       ? undefined

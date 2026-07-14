@@ -70,12 +70,21 @@ describe('createBatchStage2Worker', () => {
   beforeEach(() => {
     gate = { check: vi.fn() } as unknown as Stage2Gate;
     batchRunner = { run: vi.fn() } as unknown as LocalBatchEvalRunner;
-    resultsStore = { saveStage2Result: vi.fn().mockResolvedValue(undefined) } as unknown as ElasticsearchResultsStore;
+    resultsStore = {
+      saveStage2Result: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ElasticsearchResultsStore;
     logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
     worker = createBatchStage2Worker({
       config: {
-        stage2Local: { pauseAlwaysOnStack: false, teardownBatchStack: true },
+        stage2Local: {
+          pauseAlwaysOnStack: false,
+          teardownBatchStack: true,
+          evalSuites: [
+            'security-alert-triage',
+            'security-esql-generation-regression',
+          ],
+        },
       } as AppConfig,
       gate,
       batchRunner,
@@ -135,7 +144,7 @@ describe('createBatchStage2Worker', () => {
     expect(resultsStore.saveStage2Result).toHaveBeenCalledOnce();
   });
 
-  it('maps a partial batch run (some suites failed) to a failed Stage2Result', async () => {
+  it('maps a partial batch run (some suites failed) to a partial Stage2Result', async () => {
     vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'ok' });
     vi.mocked(batchRunner.run).mockResolvedValue(
       createBatchResult({
@@ -149,7 +158,7 @@ describe('createBatchStage2Worker', () => {
 
     const result = await worker.execute(createPipelineRun(), createStage1Result());
 
-    expect(result.status).toBe('failed');
+    expect(result.status).toBe('partial');
     expect(result.scores).toEqual({
       'security-alert-triage': 1,
       'security-esql-generation-regression': 0,
