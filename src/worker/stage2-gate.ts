@@ -28,10 +28,9 @@ export class Stage2Gate {
 
     const { metrics } = result;
     const { maxTtftMs, minThroughputTps } = this.thresholds;
-    const maxItlP50Ms = resolveMaxItlP50Ms(
-      this.thresholds,
-      getModelParamsBillions(result.modelId),
-    );
+    const paramBillions =
+      result.parameterCountBillions ?? getModelParamsBillions(result.modelId);
+    const maxItlP50Ms = resolveMaxItlP50Ms(this.thresholds, paramBillions);
 
     if (metrics.itl_p50_ms > maxItlP50Ms) {
       return {

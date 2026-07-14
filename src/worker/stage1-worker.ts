@@ -468,6 +468,7 @@ export class Stage1WorkerImpl implements Stage1Worker {
       });
 
       result.stage2Eligible = stage2Eligible;
+      result.parameterCountBillions = paramBillions;
 
       // Populate result fields
       result.status = benchmarkResult.passed ? 'success' : 'failed';

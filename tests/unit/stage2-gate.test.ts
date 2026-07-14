@@ -61,6 +61,12 @@ function createMockConfig(overrides?: Partial<AppConfig['stage2Thresholds']>): A
     kibanaRepo: {},
     stage2Thresholds: {
       maxItlP50Ms: 20,
+      maxItlP50MsTiers: [
+        { maxParamsBillions: 14, maxITLMs: 20 },
+        { maxParamsBillions: 40, maxITLMs: 40 },
+        { maxParamsBillions: 80, maxITLMs: 60 },
+        { maxParamsBillions: Infinity, maxITLMs: 100 },
+      ],
       minThroughputTps: 10,
       maxTtftMs: 5000,
       minContextWindow: 128000,
@@ -225,22 +231,20 @@ describe('Stage2Gate', () => {
     expect(decision.proceed).toBe(true);
   });
 
-  it('should fail with custom threshold overrides when TTFT exceeds overridden value', () => {
-    const gate = new Stage2Gate(
-      createMockConfig({ maxItlP50Ms: 100, maxTtftMs: 100 }),
-    );
+  it('should use parameterCountBillions from Stage 1 when MODEL_PARAMS lacks the model id', () => {
+    const gate = new Stage2Gate(createMockConfig());
     const result = createStage1Result({
-      itl_p50_ms: 50,
-      itl_p99_ms: 70,
-      ttft_ms: 101,
-      throughput_tps: 150,
+      itl_p50_ms: 22,
+      itl_p99_ms: 30,
+      ttft_ms: 100,
+      throughput_tps: 50,
       duration_sec: 60,
     });
+    result.modelId = 'Qwen/Qwen3.6-27B';
+    result.parameterCountBillions = 27;
 
     const decision = gate.check(result);
 
-    expect(decision.proceed).toBe(false);
-    expect(decision.reason).toContain('101ms');
-    expect(decision.reason).toContain('100ms');
+    expect(decision.proceed).toBe(true);
   });
 });

@@ -62,6 +62,8 @@ export interface Stage1Result {
   deploymentName?: string;
   /** Whether model meets stage2Thresholds (ITL, throughput, TTFT, context window). */
   stage2Eligible?: boolean;
+  /** HF card param count (billions) — used by Stage2Gate tiered ITL caps when MODEL_PARAMS lacks the id. */
+  parameterCountBillions?: number | null;
 }
 
 export interface Stage2Result {

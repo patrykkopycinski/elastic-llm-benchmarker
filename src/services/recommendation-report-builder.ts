@@ -61,7 +61,7 @@ export function buildRecommendationReport(
     const thresholds = config.stage2Thresholds;
     const maxItlP50Ms = resolveMaxItlP50Ms(
       thresholds,
-      getModelParamsBillions(run.modelId),
+      stage1?.parameterCountBillions ?? getModelParamsBillions(run.modelId),
     );
     if (m.itl_p50_ms > maxItlP50Ms) {
       blockingIssues.push({
