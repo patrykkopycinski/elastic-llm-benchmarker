@@ -482,6 +482,8 @@ export const elasticsearchConfigSchema = z.object({
   cloudId: z.string().optional(),
   username: z.string().optional(),
   password: z.string().optional(),
+  /** Per-request timeout for ES API calls (ms). Large benchmark docs on serverless need >30s. */
+  requestTimeoutMs: z.number().int().positive().default(120_000),
 });
 
 export const elasticAgentConfigSchema = z.object({
@@ -896,6 +898,12 @@ export const stage2LocalConfigSchema = z.object({
   teardownBatchStack: z.boolean().default(true),
   /** Reject Stage 2 start when stale Kibana/ES still bound on worker ports. */
   cleanupStalePorts: z.boolean().default(true),
+  /**
+   * Scout `/api/status` poll attempts for batch worker boot (1s each in the
+   * batch script). Default 1800 ≈ 30m — i9 RAM pressure + GCS snapshot restore
+   * routinely exceeds the script's 450 (15m) default.
+   */
+  bootPollAttempts: z.number().int().positive().default(1800),
 });
 
 /**

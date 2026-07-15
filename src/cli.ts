@@ -26,6 +26,7 @@ import { mkdirSync } from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
 import { Client } from '@elastic/elasticsearch';
 import { loadConfig } from './config/index.js';
+import { createElasticsearchClient } from './utils/es-client.js';
 import { ElasticsearchResultsStore } from './services/elasticsearch-results-store.js';
 import { ensureIndices } from './services/es-index-mappings.js';
 import { ResultsStore } from './services/results-store.js';
@@ -88,19 +89,7 @@ const VERSION = '0.1.0';
 
 function createEsClient(config: AppConfig | null): Client | null {
   if (!config) return null;
-  const es = config.elasticsearch;
-  if (es.cloudId) {
-    return new Client({
-      cloud: { id: es.cloudId },
-      ...(es.apiKey ? { auth: { apiKey: es.apiKey } } : {}),
-      ...(es.username && es.password ? { auth: { username: es.username, password: es.password } } : {}),
-    });
-  }
-  return new Client({
-    node: es.url,
-    ...(es.apiKey ? { auth: { apiKey: es.apiKey } } : {}),
-    ...(es.username && es.password ? { auth: { username: es.username, password: es.password } } : {}),
-  });
+  return createElasticsearchClient(config.elasticsearch);
 }
 
 // ─── Helper Functions ──────────────────────────────────────────────────────────

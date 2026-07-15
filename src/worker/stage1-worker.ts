@@ -425,8 +425,18 @@ export class Stage1WorkerImpl implements Stage1Worker {
         gpuUtilization: deployment.gpuUtilization ?? null,
         runId: run.runId,
       };
-      await this.resultsStore.save(benchmarkRecord);
-      this.logger.info('Stage 1: results stored', { modelId: run.modelId });
+      try {
+        await this.resultsStore.save(benchmarkRecord);
+        this.logger.info('Stage 1: results stored', { modelId: run.modelId });
+      } catch (saveErr) {
+        // ES serverless can time out on large raw_output docs — never fail a
+        // passing benchmark run because persistence lagged; gate logic below
+        // uses in-memory metrics/tool-call results, not the stored doc.
+        this.logger.warn('Stage 1: ES save failed (continuing with in-memory gate)', {
+          modelId: run.modelId,
+          error: saveErr instanceof Error ? saveErr.message : String(saveErr),
+        });
+      }
 
       // Gate logic (Stage 2 eligibility)
       const successfulRuns = benchmarkResult.runs.filter((r) => r.success);

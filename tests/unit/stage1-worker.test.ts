@@ -503,6 +503,14 @@ describe('Stage1WorkerImpl', () => {
       expect(deps.resultsStore.save).toHaveBeenCalledTimes(1);
     });
 
+    it('should continue when ES save fails (fail-open on persistence)', async () => {
+      vi.mocked(deps.resultsStore.save).mockRejectedValueOnce(new Error('Request timed out'));
+      const result = await worker.execute(createPipelineRun());
+      expect(result.status).toBe('success');
+      expect(result.error).toBeUndefined();
+      expect(deps.resultsStore.save).toHaveBeenCalledTimes(1);
+    });
+
     it('should NOT teardown deployment — scheduler owns teardown', async () => {
       await worker.execute(createPipelineRun());
       expect(deps.vllmEngine.stop).not.toHaveBeenCalled();

@@ -194,6 +194,10 @@ export class LocalBatchEvalRunner {
       BATCH_PAUSE_ALWAYS_ON_STACK: this.config.pauseAlwaysOnStack ? 'true' : 'false',
       BATCH_TEARDOWN_ON_EXIT: this.config.teardownBatchStack ? 'true' : 'false',
       BATCH_CLEANUP_STALE_PORTS: this.config.cleanupStalePorts ? 'true' : 'false',
+      BOOT_POLL_ATTEMPTS: String(
+        this.config.bootPollAttempts ??
+          (process.env.BOOT_POLL_ATTEMPTS ? Number(process.env.BOOT_POLL_ATTEMPTS) : 1800),
+      ),
       LITELLM_BASE_URL: opts.vllmBaseUrl,
       EVALUATION_CONCURRENCY: '3',
     };

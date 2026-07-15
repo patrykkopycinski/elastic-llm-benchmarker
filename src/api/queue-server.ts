@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import dotenv from 'dotenv';
 import express from 'express';
 import { Client } from '@elastic/elasticsearch';
+import { createElasticsearchClient } from '../utils/es-client.js';
 import { QueueService } from '../services/queue-service.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import {
@@ -136,13 +137,16 @@ function createEsClient(config: QueueServerConfig): Client {
   const username = config.esUsername ?? process.env.ES_USERNAME;
   const password = config.esPassword ?? process.env.ES_PASSWORD;
 
-  const auth = apiKey
-    ? { apiKey }
-    : username && password
-      ? { username, password }
-      : undefined;
-
-  return new Client({ node, ...(auth ? { auth } : {}) });
+  return createElasticsearchClient({
+    url: node,
+    apiKey,
+    username,
+    password,
+    cloudId: process.env.ELASTICSEARCH_CLOUD_ID,
+    requestTimeoutMs: process.env.ES_REQUEST_TIMEOUT_MS
+      ? Number(process.env.ES_REQUEST_TIMEOUT_MS)
+      : 120_000,
+  });
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────

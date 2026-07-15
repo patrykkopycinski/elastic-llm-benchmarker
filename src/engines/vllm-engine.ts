@@ -156,7 +156,7 @@ export class VllmEngine implements InferenceEngine {
     }
     return {
       deploymentName: match.containerName,
-      endpointUrl: `http://127.0.0.1:${this.apiPort}`,
+      endpointUrl: `http://${sshConfig.host}:${this.apiPort}`,
     };
   }
 

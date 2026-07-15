@@ -187,6 +187,8 @@ function buildEnvConfig(): Record<string, unknown> {
   }
   if (process.env['ELASTICSEARCH_CLOUD_ID'] !== undefined)
     elasticsearch['cloudId'] = process.env['ELASTICSEARCH_CLOUD_ID'];
+  if (process.env['ES_REQUEST_TIMEOUT_MS'] !== undefined)
+    elasticsearch['requestTimeoutMs'] = Number(process.env['ES_REQUEST_TIMEOUT_MS']);
   if (Object.keys(elasticsearch).length > 0) env['elasticsearch'] = elasticsearch;
 
   const elasticAgent: Record<string, unknown> = {};
@@ -269,6 +271,8 @@ function buildEnvConfig(): Record<string, unknown> {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+  if (process.env['BOOT_POLL_ATTEMPTS'] !== undefined)
+    stage2Local['bootPollAttempts'] = Number(process.env['BOOT_POLL_ATTEMPTS']);
   if (Object.keys(stage2Local).length > 0) env['stage2Local'] = stage2Local;
 
   // Eval tier selection ('local' | 'buildkite-weekly')

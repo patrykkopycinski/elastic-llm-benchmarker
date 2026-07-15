@@ -291,6 +291,7 @@ describe('LocalBatchEvalRunner', () => {
         pauseAlwaysOnStack: true,
         teardownBatchStack: true,
         cleanupStalePorts: true,
+        bootPollAttempts: 1800,
       } as Partial<Stage2LocalConfig>),
     );
     await runner.run({
@@ -310,6 +311,7 @@ describe('LocalBatchEvalRunner', () => {
     expect(options.env?.BATCH_PAUSE_ALWAYS_ON_STACK).toBe('true');
     expect(options.env?.BATCH_TEARDOWN_ON_EXIT).toBe('true');
     expect(options.env?.BATCH_CLEANUP_STALE_PORTS).toBe('true');
+    expect(options.env?.BOOT_POLL_ATTEMPTS).toBe('1800');
     expect(options.env?.BATCH_SUITE_ORDER).toBe('benchmarker');
     expect(options.env?.BATCH_SUITES).toBe(
       'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',

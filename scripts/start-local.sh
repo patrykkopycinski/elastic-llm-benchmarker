@@ -16,6 +16,8 @@ if [[ ! -f config/local.json ]]; then
   exit 1
 fi
 
+export BOOT_POLL_ATTEMPTS="${BOOT_POLL_ATTEMPTS:-1800}"
+
 if [[ -f .env ]]; then
   set -a
   # shellcheck source=/dev/null
@@ -56,6 +58,15 @@ if [[ -f "$LOG_FILE" ]]; then
 fi
 
 export BENCHMARKER_CONFIG="${ROOT}/config/local.json"
+
+# Stage 2 batch runner: GCS snapshot creds + eval runtime from skill-dev plugin.
+PLUGIN_DIR="${SKILL_DEV_PLUGIN_DIR:-$HOME/Projects/agent-builder-skill-dev-cursor-plugin}"
+if [[ -f "${PLUGIN_DIR}/.env" ]]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "${PLUGIN_DIR}/.env"
+  set +a
+fi
 
 if [[ -z "${BUILDKITE_API_TOKEN:-}" && -f "${HOME}/.buildkite/token" ]]; then
   export BUILDKITE_API_TOKEN

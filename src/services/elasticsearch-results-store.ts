@@ -134,7 +134,7 @@ function resultToEs(result: BenchmarkResult): Record<string, unknown> {
     rejection_reasons: result.rejectionReasons,
     tensor_parallel_size: result.tensorParallelSize,
     tool_call_parser: result.toolCallParser,
-    raw_output: result.rawOutput,
+    raw_output: truncateRawOutput(result.rawOutput),
     gpu_utilization: result.gpuUtilization
       ? {
           vram_used_gb: result.gpuUtilization.vramUsedGb,
@@ -306,6 +306,21 @@ function esHitToReport(hit: Record<string, unknown>): ModelEvaluationReport {
  */
 const SERVERLESS_FORBIDDEN_SETTINGS = ['number_of_shards', 'number_of_replicas', 'refresh_interval'];
 
+/** Cap raw vLLM bench output stored in ES — large docs slow serverless indexing. */
+const MAX_RAW_OUTPUT_BYTES = 512_000;
+
+const ES_SAVE_MAX_ATTEMPTS = 3;
+const ES_SAVE_RETRY_DELAY_MS = 2_000;
+
+function truncateRawOutput(raw: string): string {
+  if (raw.length <= MAX_RAW_OUTPUT_BYTES) return raw;
+  return `${raw.slice(0, MAX_RAW_OUTPUT_BYTES)}\n...[truncated for ES indexing]`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export class ElasticsearchResultsStore {
   private readonly esClient: Client;
   private readonly logger: ReturnType<typeof createLogger>;
@@ -368,13 +383,37 @@ export class ElasticsearchResultsStore {
   async save(result: BenchmarkResult): Promise<string> {
     const id = Buffer.from(`${result.modelId}:${result.timestamp}`).toString('base64url');
     const doc = resultToEs(result);
-    await this.esClient.index({
-      index: INDEX_NAMES.BENCHMARKER_RESULTS,
-      id,
-      document: doc,
+
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= ES_SAVE_MAX_ATTEMPTS; attempt++) {
+      try {
+        await this.esClient.index({
+          index: INDEX_NAMES.BENCHMARKER_RESULTS,
+          id,
+          document: doc,
+        });
+        this.logger.info('Stored benchmark result', { modelId: result.modelId, id, attempt });
+        return id;
+      } catch (err) {
+        lastError = err;
+        if (attempt < ES_SAVE_MAX_ATTEMPTS) {
+          this.logger.warn('Benchmark ES save failed — retrying', {
+            modelId: result.modelId,
+            attempt,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          await sleep(ES_SAVE_RETRY_DELAY_MS * attempt);
+        }
+      }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : String(lastError);
+    this.logger.error('Benchmark ES save failed after retries', {
+      modelId: result.modelId,
+      attempts: ES_SAVE_MAX_ATTEMPTS,
+      error: message,
     });
-    this.logger.info('Stored benchmark result', { modelId: result.modelId, id });
-    return id;
+    throw lastError instanceof Error ? lastError : new Error(message);
   }
 
   async query(options: ResultsQueryOptions = {}): Promise<BenchmarkResult[]> {
