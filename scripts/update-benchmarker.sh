@@ -35,7 +35,30 @@ if [ -d .git ]; then
   LOCAL_BEHIND=$(git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
   if [ "$LOCAL_BEHIND" -gt 0 ]; then
     echo "--- pulling $LOCAL_BEHIND commit(s) from origin/main ---"
-    git pull --ff-only origin main
+    if ! git pull --ff-only origin main 2>/dev/null; then
+      # Dirty working tree (common on i9: operator config tweaks land as
+      # uncommitted edits between deploys). Stash, retry, then drop the stash
+      # if its content is already on origin/main (so stashes don't accumulate
+      # across deploys and re-block the next pull). Non-merged stash is kept.
+      echo "--- working tree dirty — stashing local changes to pull ---"
+      STASH_REF=$(git stash create)
+      if [ -n "$STASH_REF" ]; then
+        git stash push -u -m "update-benchmarker $(date +%s)" >/dev/null
+        if git pull --ff-only origin main; then
+          # Re-check: does the stashed content still differ from origin/main?
+          STASH_TOP=$(git rev-parse stash@{0} 2>/dev/null)
+          if [ -n "$STASH_TOP" ] && ! git diff --quiet "origin/main..$STASH_TOP" -- 2>/dev/null; then
+            echo "--- stash content differs from origin/main — kept for manual triage ---"
+          else
+            echo "--- stash content already on origin/main — dropping ---"
+            git stash drop stash@{0} >/dev/null
+          fi
+        fi
+      else
+        echo "ERROR: pull failed and no stashable changes — aborting deploy"
+        exit 1
+      fi
+    fi
   else
     echo "--- already on latest origin/main ---"
   fi
