@@ -53,6 +53,7 @@ export function createAgentBuilderFilter(config: AppConfig): ModelCandidateFilte
     targetHardwareProfile: config.vmHardwareProfile,
     requireToolCalling: baseline.requireToolCalling,
     minParameterCountBillions: baseline.minParameterCountBillions,
+    minActiveParametersBillions: baseline.minActiveParametersBillions,
     requireInstructVariant: baseline.requireInstructVariant,
     checkKnownFailures: true,
   });

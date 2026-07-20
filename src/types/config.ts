@@ -656,6 +656,22 @@ export const agentBuilderBaselineSchema = z.object({
    */
   minParameterCountBillions: z.number().positive().default(24),
   /**
+   * Minimum MoE active (per-token) parameter count in billions. WARN-only —
+   * never hard-rejects. `minParameterCountBillions` gates on TOTAL params,
+   * which over-states the agentic capacity of sparse MoE models by ~10×:
+   * Qwen3.6-35B-A3B (35B total, ~3B active) fails the same security evals a
+   * dense 24B passes, yet clears the 24B total-param floor. An active-param
+   * warning surfaces this gap pre-enqueue without hard-rejecting — a well
+   * post-trained small-active model (Ornith-1.0-35B, same ~3B-active arch)
+   * can still pass every suite, so capability beats the count.
+   *
+   * Active params are read from the `-A{N}B` naming convention
+   * (Qwen3.6-35B-A3B, Qwen3-235B-A22B, Kimi-Linear-48B-A3B), which HF and
+   * vendors reliably encode; config.json-derived `num_experts_per_tok` is a
+   * fallback. Set to 0 to disable the warning.
+   */
+  minActiveParametersBillions: z.number().min(0).default(8),
+  /**
    * Require single-tool calling support via a known vLLM parser family.
    * Does NOT require parallel/multi-tool calling.
    */

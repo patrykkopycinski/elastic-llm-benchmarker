@@ -26,6 +26,8 @@ export interface ScoredModel extends ModelInfo {
   family: string;
   /** True when a newer, hardware-fitting sibling in the same family exists. */
   superseded: boolean;
+  /** Non-blocking Agent Builder baseline warnings (e.g. low MoE active-param count). */
+  baselineWarnings?: string[];
 }
 
 /**
@@ -379,6 +381,7 @@ export class DiscoveryScheduler {
           continue;
         }
 
+        let baselineWarnings: string[] | undefined;
         if (this.deps.candidateFilter) {
           const filterResult = this.deps.candidateFilter.evaluate(model);
           if (!filterResult.passed) {
@@ -386,6 +389,13 @@ export class DiscoveryScheduler {
               `Skipping ${model.id}: Agent Builder baseline — ${filterResult.rejections.map((r) => r.criterion).join(', ')}`,
             );
             continue;
+          }
+          if (filterResult.warnings.length > 0) {
+            baselineWarnings = filterResult.warnings.map((w) => `${w.criterion}: ${w.reason}`);
+            this.logger.info('Discovery: model passed with baseline warnings', {
+              modelId: model.id,
+              warnings: filterResult.warnings.map((w) => w.criterion),
+            });
           }
         }
 
@@ -409,6 +419,7 @@ export class DiscoveryScheduler {
           createdAt: createdAt ? createdAt.toISOString() : null,
           family: deriveModelFamily(model.id),
           superseded: false,
+          baselineWarnings,
         });
       } catch (err) {
         this.logger.debug(`Skipping ${model.id}: error during scoring: ${String(err)}`);
@@ -547,6 +558,7 @@ export class DiscoveryScheduler {
         await this.deps.queueService.enqueue(model.id, 'discovery', priority, undefined, {
           trendingScore: model.trendingScore,
           hardwareFit: model.hardwareFit,
+          ...(model.baselineWarnings ? { baselineWarnings: model.baselineWarnings } : {}),
         });
         this.deps.weightPrefetcher?.(model.id);
         queued++;

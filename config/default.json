@@ -88,6 +88,7 @@
     "enabled": true,
     "minContextWindow": 128000,
     "minParameterCountBillions": 24,
+    "minActiveParametersBillions": 8,
     "requireToolCalling": true,
     "requireInstructVariant": true
   }

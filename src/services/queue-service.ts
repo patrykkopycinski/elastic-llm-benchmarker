@@ -81,6 +81,8 @@ export interface QueueEntry {
     deploymentName?: string;
     /** On enqueue/resume, skip suites already passed in jsonl/ES for this entry. */
     skipPassedSuites?: boolean;
+    /** Non-blocking Agent Builder baseline warnings (e.g. low MoE active-param count). */
+    baselineWarnings?: string[];
   };
 }
 
@@ -125,6 +127,7 @@ type EsSource = {
     endpoint_url?: string;
     deployment_name?: string;
     skip_passed_suites?: boolean;
+    baseline_warnings?: string[];
   };
 };
 
@@ -192,6 +195,7 @@ function toEntry(id: string, src: EsSource): QueueEntry {
       endpointUrl: src.metadata.endpoint_url,
       deploymentName: src.metadata.deployment_name,
       skipPassedSuites: src.metadata.skip_passed_suites,
+      baselineWarnings: src.metadata.baseline_warnings,
     } : undefined,
   };
 }
@@ -253,6 +257,7 @@ export class QueueService {
         endpoint_url: metadata.endpointUrl,
         deployment_name: metadata.deploymentName,
         skip_passed_suites: metadata.skipPassedSuites,
+        baseline_warnings: metadata.baselineWarnings,
       } : undefined,
     };
     const res = await this.esClient.index({

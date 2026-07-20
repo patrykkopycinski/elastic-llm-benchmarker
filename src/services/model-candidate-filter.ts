@@ -25,6 +25,7 @@ export type FilterCriterion =
   | 'vllm_architecture'
   | 'tool_calling'
   | 'parameter_count'
+  | 'active_parameter_count'
   | 'instruct_variant'
   | 'known_failure';
 
@@ -66,6 +67,13 @@ export interface CandidateFilterOptions {
   requireToolCalling?: boolean;
   /** Minimum parameter count in billions (Agent Builder floor). Unknown count → warning only. */
   minParameterCountBillions?: number;
+  /**
+   * Minimum MoE active (per-token) parameter count in billions. Unknown count
+   * (dense model or no `-A{N}B` marker) → no warning. Below floor → warning
+   * only, never hard-reject (capability beats count — Ornith-1.0-35B is the
+   * same ~3B-active arch as Qwen3.6-35B-A3B yet passes every suite).
+   */
+  minActiveParametersBillions?: number;
   /** Require instruct/chat-tuned variant in model id (instruct, chat, -it). */
   requireInstructVariant?: boolean;
   /** Whether to check against known failure list (default: true) */
@@ -190,6 +198,7 @@ export class ModelCandidateFilter {
   private readonly targetHardware: VMHardwareProfile;
   private readonly requireToolCalling: boolean;
   private readonly minParameterCountBillions: number | undefined;
+  private readonly minActiveParametersBillions: number | undefined;
   private readonly requireInstructVariant: boolean;
   private readonly checkKnownFailures: boolean;
 
@@ -205,6 +214,7 @@ export class ModelCandidateFilter {
     this.targetHardware = options.targetHardwareProfile ?? DEFAULT_TARGET_HARDWARE;
     this.requireToolCalling = options.requireToolCalling ?? true;
     this.minParameterCountBillions = options.minParameterCountBillions;
+    this.minActiveParametersBillions = options.minActiveParametersBillions;
     this.requireInstructVariant = options.requireInstructVariant ?? false;
     this.checkKnownFailures = options.checkKnownFailures ?? true;
 
@@ -213,6 +223,7 @@ export class ModelCandidateFilter {
       targetGpu: `${this.targetHardware.gpuCount}x ${this.targetHardware.gpuType}`,
       requireToolCalling: this.requireToolCalling,
       minParameterCountBillions: this.minParameterCountBillions,
+      minActiveParametersBillions: this.minActiveParametersBillions,
       requireInstructVariant: this.requireInstructVariant,
     });
   }
@@ -267,6 +278,12 @@ export class ModelCandidateFilter {
       } else {
         warnings.push(paramResult);
       }
+    }
+
+    // Filter 5b: MoE active-parameter floor (WARN-only — see minActiveParametersBillions)
+    const activeResult = this.checkActiveParameterCount(model);
+    if (activeResult) {
+      warnings.push(activeResult);
     }
 
     // Filter 6: Instruct/chat variant (soft — capability signal, never hard-rejects)
@@ -557,6 +574,44 @@ export class ModelCandidateFilter {
         criterion: 'parameter_count',
         reason: `Model has ~${billions.toFixed(1)}B parameters; Agent Builder baseline requires >= ${this.minParameterCountBillions}B`,
         isHardRequirement: true,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * MoE active-parameter floor. WARN-only — never hard-rejects.
+   *
+   * Active params are read from the `-A{N}B` naming convention, which vendors
+   * reliably encode (Qwen3.6-35B-A3B, Qwen3-235B-A22B, Kimi-Linear-48B-A3B).
+   * The `A` is literal ("Active"), distinguishing per-token active count from
+   * total. Dense models have no marker → no warning (can't be below an active
+   * floor when every param is active). We don't compute from config.json here
+   * because `ModelInfo` doesn't carry `num_experts_per_tok`; the id marker is
+   * the authoritative signal and is present in every relevant HF model id.
+   *
+   * Why warn, not reject: Ornith-1.0-35B is the same ~3B-active arch as
+   * Qwen3.6-35B-A3B yet passes every security suite — capability beats count.
+   * The warning surfaces the risk pre-enqueue without blocking.
+   */
+  private checkActiveParameterCount(model: ModelInfo): FilterRejection | null {
+    if (this.minActiveParametersBillions === undefined || this.minActiveParametersBillions <= 0) {
+      return null;
+    }
+
+    const activeMatch = model.id.match(/-a(\d+(?:\.\d+)?)b\b/i);
+    if (!activeMatch?.[1]) {
+      // Dense model (no -A{N}B marker) or active count not disclosed — can't be below floor.
+      return null;
+    }
+
+    const activeBillions = parseFloat(activeMatch[1]);
+    if (activeBillions < this.minActiveParametersBillions) {
+      return {
+        criterion: 'active_parameter_count',
+        reason: `MoE model has ~${activeBillions.toFixed(1)}B active (per-token) parameters; Agent Builder baseline recommends >= ${this.minActiveParametersBillions}B — sparse MoE may underperform dense models of similar active count on agentic tool-calling (capability warning, not a hard gate)`,
+        isHardRequirement: false,
       };
     }
 

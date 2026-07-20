@@ -148,6 +148,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     };
   }
 
+  let baselineWarnings: string[] | undefined;
   if (config.agentBuilderBaseline.enabled && !force) {
     const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config, modelConfig ?? undefined);
     if (model && filter && !filter.passed) {
@@ -164,6 +165,9 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
         message:
           `Could not resolve model metadata for ${modelId} (Agent Builder baseline check). Use --force to enqueue anyway.`,
       };
+    }
+    if (filter && filter.warnings.length > 0) {
+      baselineWarnings = filter.warnings.map((w) => `${w.criterion}: ${w.reason}`);
     }
   }
 
@@ -196,6 +200,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
       reason ??
       `estimated ${dryRun.estimatedGb.toFixed(2)} GB / available ${dryRun.availableGb.toFixed(2)} GB`,
     skipPassedSuites: options.skipPassedSuites,
+    ...(baselineWarnings ? { baselineWarnings } : {}),
   });
 
   return {

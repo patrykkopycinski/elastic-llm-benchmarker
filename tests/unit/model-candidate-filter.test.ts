@@ -715,6 +715,71 @@ describe('ModelCandidateFilter', () => {
     });
   });
 
+  describe('active parameter count filter (MoE)', () => {
+    it('warns (never rejects) when a MoE model has below-floor active params', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minParameterCountBillions: 24,
+        minActiveParametersBillions: 8,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen3.6-35B-A3B',
+        parameterCount: 35_000_000_000,
+        architecture: 'qwen3_5_moe',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.passed).toBe(true);
+      expect(result.rejections.some((r) => r.criterion === 'active_parameter_count')).toBe(false);
+      expect(result.warnings.some((r) => r.criterion === 'active_parameter_count')).toBe(true);
+    });
+
+    it('does not warn for a MoE model at or above the active-param floor', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minActiveParametersBillions: 8,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen3-235B-A22B-Instruct',
+        parameterCount: 235_000_000_000,
+        architecture: 'qwen2_moe',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.warnings.some((r) => r.criterion === 'active_parameter_count')).toBe(false);
+    });
+
+    it('does not warn for a dense model (no -A{N}B marker)', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minActiveParametersBillions: 8,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen2.5-32B-Instruct',
+        parameterCount: 32_000_000_000,
+        architecture: 'qwen2',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.warnings.some((r) => r.criterion === 'active_parameter_count')).toBe(false);
+    });
+
+    it('does not warn when minActiveParametersBillions is 0 (disabled)', () => {
+      const filter = new ModelCandidateFilter('error', {
+        minActiveParametersBillions: 0,
+        requireInstructVariant: false,
+      });
+      const model = createModelCandidate({
+        id: 'Qwen/Qwen3.6-35B-A3B',
+        parameterCount: 35_000_000_000,
+        architecture: 'qwen3_5_moe',
+      });
+      const result = filter.evaluate(model);
+
+      expect(result.warnings.some((r) => r.criterion === 'active_parameter_count')).toBe(false);
+    });
+  });
+
   describe('instruct variant filter', () => {
     it('never hard-rejects on a missing instruct/chat name — warns instead when no parser is known', () => {
       const filter = new ModelCandidateFilter('error', { requireInstructVariant: true });
