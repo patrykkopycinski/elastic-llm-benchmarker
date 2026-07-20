@@ -1016,15 +1016,32 @@ program
         if (
           persistedStage2 &&
           persistedStage2.runId === prior.runId &&
-          persistedStage2.suiteResults &&
-          persistedStage2.suiteResults.some((sr) => sr.logPath)
+          persistedStage2.suiteResults
         ) {
+          // Resolve per-suite log paths. Prefer `logPath` on each suite result
+          // (persisted on save by the batch runner). Fall back to reading the
+          // batch summary JSON — older Stage 2 docs were saved without
+          // per-suite log paths but do carry `batchSummaryPath`, whose `results`
+          // array maps each suite to its `log_file`.
+          let suiteLogPaths = new Map<string, string>();
+          const hasLogPaths = persistedStage2.suiteResults.some((sr) => sr.logPath);
+          if (!hasLogPaths && persistedStage2.batchSummaryPath) {
+            try {
+              const summary = JSON.parse(readFileSync(persistedStage2.batchSummaryPath, 'utf8'));
+              for (const r of summary.results ?? []) {
+                if (r.suite && r.log_file) suiteLogPaths.set(r.suite, r.log_file);
+              }
+            } catch {
+              // summary unreadable — proceed with whatever logPath values exist
+            }
+          }
           const recomputedScores: Record<string, number> = {};
           const recomputedSuiteResults = persistedStage2.suiteResults.map((sr) => {
             let score = sr.score;
-            if (sr.status !== 'pass' && sr.logPath) {
+            const logPath = sr.logPath ?? suiteLogPaths.get(sr.suite);
+            if (sr.status !== 'pass' && logPath) {
               try {
-                const logContent = readFileSync(sr.logPath, 'utf8');
+                const logContent = readFileSync(logPath, 'utf8');
                 const rate = parsePlaywrightSpecPassRate(logContent);
                 if (rate !== undefined) score = rate;
               } catch {
@@ -1032,8 +1049,12 @@ program
               }
             }
             recomputedScores[sr.suite] = score ?? 0;
-            return { ...sr, score };
+            return { ...sr, logPath, score };
           });
+          if (!hasLogPaths && suiteLogPaths.size === 0) {
+            outputError(`No terminal CI eval builds found for run ${prior.runId}`, jsonOutput);
+            process.exit(1);
+          }
           perSuiteStage2.push({
             ...persistedStage2,
             scores: recomputedScores,

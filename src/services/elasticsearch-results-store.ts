@@ -877,6 +877,7 @@ export class ElasticsearchResultsStore {
         score: sr.score ?? null,
         duration_ms: sr.durationMs ?? null,
         error: sr.error ?? null,
+        log_path: sr.logPath ?? null,
         trace_id: null,
       })),
       batch_summary_path: result.batchSummaryPath ?? null,
@@ -950,6 +951,7 @@ export class ElasticsearchResultsStore {
           score: sr.score !== null && sr.score !== undefined ? Number(sr.score) : undefined,
           durationMs: sr.duration_ms !== null && sr.duration_ms !== undefined ? Number(sr.duration_ms) : undefined,
           error: sr.error ? String(sr.error) : undefined,
+          logPath: sr.log_path ? String(sr.log_path) : undefined,
         }),
       );
       return {
