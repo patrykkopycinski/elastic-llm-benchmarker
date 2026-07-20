@@ -173,6 +173,64 @@ describe('LocalBatchEvalRunner', () => {
     ]);
   });
 
+  it('derives specPassRate from the suite log for a fail-status suite so partial Playwright passes are not scored 0', async () => {
+    mockExecFileSuccess('[batch 10:00:00] >>> Summary: /tmp/matrix-output/batch-summary-3.json\n');
+    readFileMock.mockImplementation(async (path) => {
+      const p = String(path);
+      if (p.endsWith('batch-summary-3.json')) {
+        return JSON.stringify({
+          run_id: 'batch-3',
+          timestamp: '3',
+          overall_exit: 1,
+          log_dir: '/tmp/matrix-output/batch-logs',
+          results: [
+            {
+              suite: 'security-alert-triage',
+              model: 'my-org/my-model',
+              status: 'pass',
+              duration_ms: 100,
+              log_file: '/tmp/matrix-output/batch-logs/worker-1-security-alert-triage.log',
+              worker: 1,
+            },
+            {
+              suite: 'security-esql-generation-regression',
+              model: 'my-org/my-model',
+              status: 'fail',
+              duration_ms: 4200000,
+              log_file: '/tmp/matrix-output/batch-logs/worker-0-agent-builder.log',
+              worker: 0,
+            },
+          ],
+        });
+      }
+      if (p.endsWith('worker-0-agent-builder.log')) {
+        return '5 failed\n1 skipped\n24 passed (1.2h)\n';
+      }
+      throw new Error(`unexpected readFile path: ${p}`);
+    });
+
+    const runner = new LocalBatchEvalRunner(createConfig());
+    const result = await runner.run(baseOpts);
+
+    expect(result.suites).toEqual([
+      {
+        suite: 'security-alert-triage',
+        status: 'pass',
+        durationMs: 100,
+        logPath: '/tmp/matrix-output/batch-logs/worker-1-security-alert-triage.log',
+      },
+      {
+        suite: 'security-esql-generation-regression',
+        status: 'fail',
+        durationMs: 4200000,
+        logPath: '/tmp/matrix-output/batch-logs/worker-0-agent-builder.log',
+        // parsePlaywrightSpecPassRate sums passed+failed+flaky (24+5+0=29) — "skipped"
+        // specs aren't counted in the denominator, so this is 24/29, not 24/30.
+        specPassRate: 24 / 29,
+      },
+    ]);
+  });
+
   it('reports success only when every requested suite passed and exit code is 0', async () => {
     mockExecFileSuccess('[batch 10:00:00] >>> Summary: /tmp/matrix-output/batch-summary-2.json\n');
     readFileMock.mockResolvedValue(

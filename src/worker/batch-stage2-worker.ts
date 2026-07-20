@@ -40,7 +40,10 @@ function buildStage2FromBatch(
   const suiteResults = batchResult.suites.map((s) => ({
     suite: s.suite,
     status: s.status,
-    score: s.status === 'pass' ? 1 : 0,
+    // Playwright's exit code is binary — one failing spec marks the whole
+    // suite `fail` — so a `fail` status with a parsed `specPassRate` (e.g.
+    // 24/30 specs passed) reports that fractional score instead of a flat 0.
+    score: s.status === 'pass' ? 1 : s.specPassRate ?? 0,
     durationMs: s.durationMs,
     logPath: s.logPath,
   }));

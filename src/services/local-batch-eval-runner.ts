@@ -22,6 +22,16 @@ export interface LocalBatchEvalSuiteResult {
   durationMs: number;
   /** Path to this suite's `node scripts/evals run` log, if the summary reported one. */
   logPath?: string;
+  /**
+   * Fractional pass rate (0-1) derived from Playwright's own per-spec
+   * summary in `logPath` (e.g. "24 passed" / "5 failed" / "1 skipped").
+   * Playwright's process exit code is binary — any single failing spec
+   * marks the whole suite `status: 'fail'` — so without this, a suite
+   * that actually passed 24/30 specs would score 0% instead of 80%.
+   * Undefined when the log couldn't be read or had no parseable summary
+   * (falls back to the binary pass=1/fail=0 score).
+   */
+  specPassRate?: number;
 }
 
 export interface LocalBatchEvalResult {
@@ -90,6 +100,23 @@ function execFilePromise(
 function extractSummaryPath(stdout: string): string | undefined {
   const match = stdout.match(/Summary:\s+(\S+\.json)\s*$/m);
   return match?.[1];
+}
+
+/**
+ * Playwright's own exit code is binary (any single failing spec → exit 1),
+ * so `record_suite_result` in `run-security-evals-batch.sh` can only report
+ * `pass`/`fail` per suite. This parses Playwright's terminal summary lines
+ * (`"24 passed (1.2h)"`, `"5 failed"`, `"1 skipped"`) out of the suite's own
+ * log to recover the real fractional pass rate for a `fail`-status suite,
+ * so e.g. 24/30 specs passing scores 80% instead of 0%.
+ */
+export function parsePlaywrightSpecPassRate(logContent: string): number | undefined {
+  const passed = Number(logContent.match(/^\s*(\d+) passed\b/m)?.[1] ?? 0);
+  const failed = Number(logContent.match(/^\s*(\d+) failed\b/m)?.[1] ?? 0);
+  const flaky = Number(logContent.match(/^\s*(\d+) flaky\b/m)?.[1] ?? 0);
+  const total = passed + failed + flaky;
+  if (total === 0) return undefined;
+  return passed / total;
 }
 
 /**
@@ -268,6 +295,8 @@ export class LocalBatchEvalRunner {
       }
     }
 
+    suiteResults = await this.enrichWithSpecPassRates(suiteResults);
+
     const passCount = suiteResults.filter((s) => s.status === 'pass').length;
     const status: LocalBatchEvalResult['status'] =
       passCount === suiteResults.length && exitCode === 0
@@ -286,6 +315,36 @@ export class LocalBatchEvalRunner {
       stdoutLogPath,
       logPath: summaryPath,
     };
+  }
+
+  /**
+   * For each `fail`-status suite with a `logPath`, reads the log and derives
+   * `specPassRate` from Playwright's own per-spec summary — see
+   * {@link parsePlaywrightSpecPassRate}. Best-effort: a missing/unreadable
+   * log or a log with no parseable summary leaves `specPassRate` undefined,
+   * and the caller falls back to the binary pass=1/fail=0 score.
+   */
+  private async enrichWithSpecPassRates(
+    suiteResults: LocalBatchEvalSuiteResult[],
+  ): Promise<LocalBatchEvalSuiteResult[]> {
+    return Promise.all(
+      suiteResults.map(async (result) => {
+        if (result.status !== 'fail' || !result.logPath) return result;
+        try {
+          const logContent = await readFile(result.logPath, 'utf8');
+          const specPassRate = parsePlaywrightSpecPassRate(logContent);
+          if (specPassRate === undefined) return result;
+          return { ...result, specPassRate };
+        } catch (err) {
+          this.logger.warn('Local batch eval: could not read suite log for spec pass rate', {
+            suite: result.suite,
+            logPath: result.logPath,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return result;
+        }
+      }),
+    );
   }
 
   /**

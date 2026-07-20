@@ -165,6 +165,38 @@ describe('createBatchStage2Worker', () => {
     });
   });
 
+  it('uses specPassRate as a fractional score for a fail-status suite instead of flat 0', async () => {
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'ok' });
+    vi.mocked(batchRunner.run).mockResolvedValue(
+      createBatchResult({
+        status: 'partial',
+        suites: [
+          { suite: 'security-alert-triage', status: 'pass', durationMs: 1000 },
+          {
+            suite: 'agent-builder',
+            status: 'fail',
+            durationMs: 4200000,
+            specPassRate: 24 / 30,
+          },
+        ],
+      }),
+    );
+
+    const result = await worker.execute(createPipelineRun(), createStage1Result());
+
+    expect(result.scores).toEqual({
+      'security-alert-triage': 1,
+      'agent-builder': 24 / 30,
+    });
+    expect(result.suiteResults?.[1]).toEqual({
+      suite: 'agent-builder',
+      status: 'fail',
+      score: 24 / 30,
+      durationMs: 4200000,
+      logPath: undefined,
+    });
+  });
+
   it('logs a warning but still returns the result when saveStage2Result rejects', async () => {
     vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'ok' });
     vi.mocked(batchRunner.run).mockResolvedValue(createBatchResult());
