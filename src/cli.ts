@@ -36,7 +36,7 @@ import { Stage1WorkerImpl, Stage2WorkerImpl, Stage2Gate, Stage3WorkerImpl } from
 import { createBatchStage2Worker } from './worker/batch-stage2-worker.js';
 import { KibanaRepoService } from './services/kibana-repo-service.js';
 import { EvalSuiteRunner } from './services/eval-suite-runner.js';
-import { LocalBatchEvalRunner } from './services/local-batch-eval-runner.js';
+import { LocalBatchEvalRunner, parsePlaywrightSpecPassRate } from './services/local-batch-eval-runner.js';
 import {
   resolveEvalTierFromConfig,
   shouldUseLocalStage2,
@@ -1005,24 +1005,58 @@ program
         // ciResults are sorted @timestamp desc, so the first row per suite is the latest terminal one.
         if (!latestBySuite.has(suite)) latestBySuite.set(suite, r);
       }
-      if (latestBySuite.size === 0) {
-        outputError(`No terminal CI eval builds found for run ${prior.runId}`, jsonOutput);
-        process.exit(1);
-      }
-
       const perSuiteStage2: Stage2Result[] = [];
-      for (const [suite, rec] of latestBySuite) {
-        const buildResult: BuildkiteBuildResult = {
-          status: rec.status === 'passed' ? 'passed' : 'failed',
-          buildNumber: rec.buildkiteBuildNumber,
-          buildUrl: rec.buildkiteBuildUrl,
-          artifacts: rec.artifacts
-            ? Object.entries(rec.artifacts).map(([filename, url]) => ({ filename, url }))
-            : undefined,
-        };
-        perSuiteStage2.push(
-          mapBuildkiteResultToStage2(prior.runId, modelId, [suite], buildResult, undefined, prior.evaluatedAt),
-        );
+
+      if (latestBySuite.size === 0) {
+        // Batch/local-runner path: no per-suite CI eval builds persisted for
+        // this run, but a Stage 2 doc with per-suite `logPath` values may exist.
+        // Re-derive fractional scores from Playwright's own per-spec summary
+        // in each suite's log (same path the batch runner uses live).
+        const persistedStage2 = await store.getLatestStage2ForModel(modelId);
+        if (
+          persistedStage2 &&
+          persistedStage2.runId === prior.runId &&
+          persistedStage2.suiteResults &&
+          persistedStage2.suiteResults.some((sr) => sr.logPath)
+        ) {
+          const recomputedScores: Record<string, number> = {};
+          const recomputedSuiteResults = persistedStage2.suiteResults.map((sr) => {
+            let score = sr.score;
+            if (sr.status !== 'pass' && sr.logPath) {
+              try {
+                const logContent = readFileSync(sr.logPath, 'utf8');
+                const rate = parsePlaywrightSpecPassRate(logContent);
+                if (rate !== undefined) score = rate;
+              } catch {
+                // log missing/unreadable — keep persisted score
+              }
+            }
+            recomputedScores[sr.suite] = score ?? 0;
+            return { ...sr, score };
+          });
+          perSuiteStage2.push({
+            ...persistedStage2,
+            scores: recomputedScores,
+            suiteResults: recomputedSuiteResults,
+          });
+        } else {
+          outputError(`No terminal CI eval builds found for run ${prior.runId}`, jsonOutput);
+          process.exit(1);
+        }
+      } else {
+        for (const [suite, rec] of latestBySuite) {
+          const buildResult: BuildkiteBuildResult = {
+            status: rec.status === 'passed' ? 'passed' : 'failed',
+            buildNumber: rec.buildkiteBuildNumber,
+            buildUrl: rec.buildkiteBuildUrl,
+            artifacts: rec.artifacts
+              ? Object.entries(rec.artifacts).map(([filename, url]) => ({ filename, url }))
+              : undefined,
+          };
+          perSuiteStage2.push(
+            mapBuildkiteResultToStage2(prior.runId, modelId, [suite], buildResult, undefined, prior.evaluatedAt),
+          );
+        }
       }
       const stage2Result = mergeStage2Results(perSuiteStage2);
 
