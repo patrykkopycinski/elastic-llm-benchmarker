@@ -681,6 +681,36 @@
       .grid-main { grid-template-columns: 1fr; }
       .charts { grid-template-columns: 1fr; }
     }
+    /* ── Model detail drawer ── */
+    .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none;
+      transition: opacity .2s; z-index: 40; }
+    .scrim.open { opacity: 1; pointer-events: auto; }
+    .drawer { position: fixed; top: 0; right: 0; height: 100vh; width: min(880px, 95vw);
+      background: var(--bg); border-left: 1px solid var(--border-strong);
+      box-shadow: -20px 0 60px -20px #000; transform: translateX(100%);
+      transition: transform .24s cubic-bezier(.4,0,.2,1); z-index: 50; display: flex; flex-direction: column; }
+    .drawer.open { transform: none; }
+    tr.model-row { cursor: pointer; }
+    tr.model-row:hover td { background: var(--surface-elev); }
+    .drawer-head { padding: 18px 22px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .drawer-head h2 { margin: 0; font-size: 17px; }
+    .dh-sub { color: var(--text-soft); font-size: 12.5px; margin-top: 7px;
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .dh-sub .hf-link { font-weight: 600; }
+    .drawer-x { font: inherit; font-size: 22px; line-height: 1; color: var(--text-soft);
+      background: none; border: 0; cursor: pointer; padding: 2px 8px; }
+    .drawer-x:hover { color: var(--text); }
+    .drawer-body { overflow-y: auto; padding: 20px 22px 60px; }
+    .md-facts { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 8px; }
+    .md-fact { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 9px 12px; }
+    .md-fact .dlabel { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-soft); }
+    .md-fact .dval { font-size: 14px; font-weight: 600; margin-top: 4px; }
+    .md-section { margin-top: 24px; }
+    .md-sec-title { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+      color: var(--text-soft); font-weight: 600; margin-bottom: 10px;
+      padding-bottom: 7px; border-bottom: 1px solid var(--border); }
   </style>
 </head>
 <body>
@@ -896,6 +926,18 @@
     </div>
   </div>
 
+  <div class="scrim" id="model-scrim"></div>
+  <aside class="drawer" id="model-drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <div class="dh-titles">
+        <h2 id="md-title">Model</h2>
+        <div class="dh-sub" id="md-sub"></div>
+      </div>
+      <button class="drawer-x" id="md-close" type="button" aria-label="Close">&times;</button>
+    </div>
+    <div class="drawer-body" id="md-body"></div>
+  </aside>
+
   <script>
     "use strict";
 
@@ -903,6 +945,8 @@
     var state = {
       models: [],
       stats: null,
+      reports: [],
+      reportsByModel: {},
       sort: { key: "passRate", dir: "desc" },
     };
 
@@ -1106,7 +1150,7 @@
               ? '<span class="badge tool">' + Math.round(s.avgToolCallSuccessRate * 100) + '%</span>'
               : fmtPct(s.avgToolCallSuccessRate));
 
-        html += "<tr>" +
+        html += '<tr class="model-row" data-model-id="' + esc(m.modelId) + '" title="Click for full model detail">' +
           '<td class="model"><div class="name">' + esc(m.name || m.modelId) + "</div>" +
             (m.name && m.name !== m.modelId ? '<div class="id">' + esc(m.modelId) + "</div>" : "") + "</td>" +
           "<td>" + (m.architecture ? esc(m.architecture) : '<span class="muted">—</span>') + "</td>" +
@@ -1135,6 +1179,13 @@
             state.sort.dir = (key === "name" || key === "architecture") ? "asc" : "desc";
           }
           renderLeaderboard();
+        });
+      });
+
+      var rows = body.querySelectorAll("tr.model-row");
+      Array.prototype.forEach.call(rows, function (tr) {
+        tr.addEventListener("click", function () {
+          openModelDetail(tr.getAttribute("data-model-id"));
         });
       });
     }
@@ -1384,7 +1435,13 @@
       var url = "/api/recommendations?size=50&deployment=true";
       if (verdict) url += "&verdict=" + encodeURIComponent(verdict);
       return getJSON(url).then(function (d) {
-        renderRecommendations((d && d.reports) || []);
+        var reports = (d && d.reports) || [];
+        state.reports = reports;
+        state.reportsByModel = {};
+        reports.forEach(function (r) {
+          if (r.modelId != null) state.reportsByModel[r.modelId] = r;
+        });
+        renderRecommendations(reports);
       }).catch(function () {
         $("rec-body").innerHTML = '<div class="empty">Could not load recommendations.</div>';
       });
@@ -1705,6 +1762,90 @@
       btn.classList.toggle("open", !isOpen);
       txt.textContent = isOpen ? "Show details" : "Hide details";
     });
+
+    // ── Model detail drawer ────────────────────────────
+    function hfUrl(modelId) {
+      // HF repo ids are "org/name". Only linkable when it looks like a HF repo.
+      if (!modelId || modelId.indexOf("/") < 0) return null;
+      return "https://huggingface.co/" + modelId;
+    }
+
+    function openModelDetail(modelId) {
+      var m = null;
+      for (var i = 0; i < state.models.length; i++) {
+        if (state.models[i].modelId === modelId) { m = state.models[i]; break; }
+      }
+      if (!m) return;
+      var s = m.summary || {};
+      var r = state.reportsByModel[modelId] || null;
+
+      $("md-title").textContent = m.name || m.modelId;
+
+      var url = hfUrl(m.modelId);
+      var subBits = [];
+      if (r && r.verdict) subBits.push('<span class="badge ' + esc(r.verdict) + '">' + esc(r.verdict) + "</span>");
+      if (m.name && m.name !== m.modelId) subBits.push('<span class="model-id">' + esc(m.modelId) + "</span>");
+      if (url) subBits.push('<a class="hf-link" href="' + esc(url) + '" target="_blank" rel="noopener">↗ HuggingFace</a>');
+      $("md-sub").innerHTML = subBits.join("");
+
+      // Quick facts grid
+      var facts = [
+        { label: "Architecture", val: m.architecture || null },
+        { label: "Parameters", val: m.parameterCount ? fmtParams(m.parameterCount) : null },
+        { label: "Context", val: m.contextWindow ? fmtCtx(m.contextWindow) : null },
+        { label: "Tool calling", val: m.supportsToolCalling == null ? null : (m.supportsToolCalling ? "yes" : "no") },
+        { label: "Total runs", val: s.totalRuns ? fmtInt(s.totalRuns) : null },
+        { label: "Pass rate", val: passRateOf(s) == null ? null : Math.round(passRateOf(s) * 100) + "%" },
+        { label: "Avg throughput", val: s.avgThroughput ? fmtNum(s.avgThroughput, 0) + " tok/s" : null },
+        { label: "Avg ITL", val: s.avgItlMs ? fmtNum(s.avgItlMs, 1) + " ms" : null },
+        { label: "Last run", val: s.lastRunTimestamp ? fmtAgo(s.lastRunTimestamp) : null },
+      ];
+      var factsHtml = '<div class="md-facts">';
+      facts.forEach(function (f) {
+        if (f.val == null) return;
+        factsHtml += '<div class="md-fact"><div class="dlabel">' + esc(f.label) + '</div><div class="dval">' + esc(f.val) + "</div></div>";
+      });
+      factsHtml += "</div>";
+
+      var body = factsHtml;
+
+      if (r) {
+        // Reuse the recommendation evidence + deployment renderers (pipeline
+        // badges, Stage 1 perf table, security matrix suite scores, blocking
+        // issues) and the deployment block (vLLM command + config).
+        body += '<div class="md-section"><div class="md-sec-title">Evaluation evidence</div>' +
+          renderEvidenceDetail(r) + "</div>";
+        body += '<div class="md-section"><div class="md-sec-title">Deployment — exact vLLM command</div>' +
+          renderDeployDetail(r.deployment || null, r.vllmConfigUsed || null) + "</div>";
+      } else {
+        body += '<div class="md-section"><p class="empty">No recommendation report for this model yet. ' +
+          'Run a full benchmark (Stage 1 → 2 → 3) to capture evaluation evidence and the deployment command.</p></div>';
+      }
+
+      // Placeholder for Part B (full agent-eval conversation trace).
+      body += '<div class="md-section"><div class="md-sec-title">Full conversation trace</div>' +
+        '<p class="empty">Per-prompt conversation traces (reasoning, tool calls, results) are not captured yet. ' +
+        'Coming from the Stage 2 agent-eval harvester.</p></div>';
+
+      $("md-body").innerHTML = body;
+      openDrawer();
+    }
+
+    function openDrawer() {
+      $("model-drawer").classList.add("open");
+      $("model-drawer").setAttribute("aria-hidden", "false");
+      $("model-scrim").classList.add("open");
+      document.body.style.overflow = "hidden";
+    }
+    function closeModelDrawer() {
+      $("model-drawer").classList.remove("open");
+      $("model-drawer").setAttribute("aria-hidden", "true");
+      $("model-scrim").classList.remove("open");
+      document.body.style.overflow = "";
+    }
+    $("md-close").addEventListener("click", closeModelDrawer);
+    $("model-scrim").addEventListener("click", closeModelDrawer);
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeModelDrawer(); });
 
     // ── Boot ───────────────────────────────────────────
     $("refresh").addEventListener("click", function () { loadAll(); loadRecommendations($("rec-filter").value); });
