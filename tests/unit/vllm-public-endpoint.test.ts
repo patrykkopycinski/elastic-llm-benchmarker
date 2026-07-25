@@ -166,6 +166,7 @@ describe('VllmPublicEndpointResolver', () => {
   });
 
   it('falls back to direct URL when SSH forward fails', async () => {
+    vi.useFakeTimers();
     mockWaitUntilReady.mockResolvedValue(false);
 
     const tunnel: TunnelConfig = {
@@ -181,7 +182,11 @@ describe('VllmPublicEndpointResolver', () => {
 
     const resolver = new VllmPublicEndpointResolver({ ssh, tunnel });
     const directUrl = 'http://203.0.113.10:8000';
-    const result = await resolver.resolve(directUrl);
+    const promise = resolver.resolve(directUrl);
+    // Flush all retry attempts (20 × 2s delay) without real-time waiting.
+    await vi.advanceTimersByTimeAsync(60_000);
+    const result = await promise;
+    vi.useRealTimers();
 
     expect(result.endpointUrl).toBe(directUrl);
     expect(result.tunneled).toBe(false);

@@ -732,16 +732,22 @@ export class HealthCheckService {
           // docker explicitly reports the container has stopped — a real crash.
           return false;
         }
-        // "No such object" / "No such container" means the container was never
-        // created, was auto-removed on exit (--rm), or was already destroyed.
-        // This is definitively NOT running — returning false here lets the poll
-        // loop classify the crash immediately instead of spinning for the full
-        // health-check timeout (30 min) treating a dead container as
-        // "inconclusive".
+        // "No such object" / "No such container" — could be a transient race
+        // (stop-old/start-new during container restart) or permanent (--rm auto-removed).
+        // Retry to distinguish: if it persists across all retries, the container is gone.
         const stderr = result.stderr.trim();
         if (/No such (object|container)/i.test(stderr) || /not found/i.test(stderr)) {
+          if (attempt < MAX_SSH_ATTEMPTS) {
+            this.logger.warn(
+              `isContainerRunning: container not found (attempt ${attempt}/${MAX_SSH_ATTEMPTS}); retrying — could be restart race`,
+              { containerName, stderr },
+            );
+            await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+            continue;
+          }
+          // Persisted across all retries — container is genuinely gone.
           this.logger.warn(
-            `isContainerRunning: container does not exist (removed or never created)`,
+            `isContainerRunning: container does not exist after ${MAX_SSH_ATTEMPTS} attempts (removed or never created)`,
             { containerName, stderr },
           );
           return false;
