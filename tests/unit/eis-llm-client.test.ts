@@ -126,10 +126,12 @@ describe('EisLlmClient', () => {
 
       const result = await client.complete({ userPrompt: 'Say hello' });
 
-      expect(result.content).toBe('Hello');
-      expect(result.finishReason).toBe('stop');
-      expect(result.model).toBe('anthropic-claude-4.6-opus');
-      expect(result.usage).toEqual({
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toBe('Hello');
+      expect(result.data.finishReason).toBe('stop');
+      expect(result.data.model).toBe('anthropic-claude-4.6-opus');
+      expect(result.data.usage).toEqual({
         promptTokens: 10,
         completionTokens: 5,
         totalTokens: 15,
@@ -192,21 +194,28 @@ describe('EisLlmClient', () => {
         responseFormat: 'json',
       });
 
-      expect(result.content).toContain('suggestions');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toContain('suggestions');
     });
 
-    it('should throw when JSON response format requested but content is invalid', async () => {
+    it('should return failure when JSON response format requested but content is invalid', async () => {
       mockCcmActivation();
       mockStreamResponse(
         'event: message\ndata: {"choices":[{"delta":{"content":"not json","role":"assistant"}}]}\n\n',
       );
 
-      await expect(
-        client.complete({ userPrompt: 'Return JSON', responseFormat: 'json' }),
-      ).rejects.toThrow('EIS returned invalid JSON');
+      const result = await client.complete({
+        userPrompt: 'Return JSON',
+        responseFormat: 'json',
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('EIS returned invalid JSON');
     });
 
-    it('should wrap inference errors with model context', async () => {
+    it('should return failure when inference returns non-2xx', async () => {
       mockCcmActivation();
       fetchMock.mockResolvedValueOnce({
         ok: false,
@@ -214,24 +223,28 @@ describe('EisLlmClient', () => {
         text: async () => 'Service unavailable',
       });
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'EIS inference failed for eis/anthropic-claude-4.6-opus',
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('EIS inference failed for eis/anthropic-claude-4.6-opus');
     });
   });
 
   describe('CCM activation', () => {
-    it('should throw when CCM activation fails', async () => {
+    it('should return failure when CCM activation fails', async () => {
       // GET _all (no endpoints) → PUT _ccm rejects
       requestMock.mockResolvedValueOnce({ endpoints: [] });
       requestMock.mockRejectedValueOnce(new Error('Forbidden'));
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'EIS CCM activation failed: Forbidden',
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('EIS CCM activation failed');
     });
 
-    it('should throw when chat_completion endpoints never appear', async () => {
+    it('should return failure when chat_completion endpoints never appear', async () => {
       // initial check (empty) → PUT → 10× polls that never show chat_completion
       requestMock.mockResolvedValueOnce({ endpoints: [] });
       requestMock.mockResolvedValueOnce({});
@@ -242,9 +255,11 @@ describe('EisLlmClient', () => {
         });
       }
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'Timed out waiting for EIS chat_completion endpoints',
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('EIS CCM activation failed');
     }, 60_000);
   });
 
@@ -267,7 +282,9 @@ describe('EisLlmClient', () => {
 
       const result = await serverlessClient.complete({ userPrompt: 'Say hello' });
 
-      expect(result.content).toBe('Hello');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toBe('Hello');
       // Only the endpoint check — no PUT _ccm.
       expect(mock.requestMock).toHaveBeenCalledTimes(1);
       expect(mock.requestMock.mock.calls[0]![0].method).toBe('GET');
@@ -277,7 +294,7 @@ describe('EisLlmClient', () => {
       expect((init.headers as Record<string, string>).Authorization).toBe('ApiKey serverless-key');
     });
 
-    it('throws a clear error when no endpoints exist and no key is provided', async () => {
+    it('should return failure when no endpoints exist and no key is provided', async () => {
       const mock = createMockEsClient();
       const noKeyClient = new EisLlmClient(
         mock.client,
@@ -290,9 +307,11 @@ describe('EisLlmClient', () => {
 
       mock.requestMock.mockResolvedValueOnce({ endpoints: [] });
 
-      await expect(noKeyClient.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'EIS not available',
-      );
+      const result = await noKeyClient.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toContain('EIS not available');
     });
   });
 });

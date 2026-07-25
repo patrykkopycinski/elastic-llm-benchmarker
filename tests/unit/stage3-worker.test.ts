@@ -5,6 +5,8 @@ import type { AppConfig } from '../../src/types/config.js';
 import type { TraceQueryBuilder, TraceSummary } from '../../src/services/trace-query-builder.js';
 import type { ReasoningPromptBuilder } from '../../src/services/reasoning-prompt-builder.js';
 import type { LlmClient, LlmResponse } from '../../src/services/llm-client.js';
+import { ok, fail } from '../../src/types/service-result.js';
+import type { ServiceResult } from '../../src/types/service-result.js';
 import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
 
 function createMockConfig(): AppConfig {
@@ -105,12 +107,12 @@ function createTraceSummary(): TraceSummary {
   };
 }
 
-function createLlmResponse(content: string): LlmResponse {
-  return {
+function createLlmResponse(content: string): ServiceResult<LlmResponse> {
+  return ok({
     content,
     finishReason: 'stop',
     model: 'gpt-4o',
-  };
+  });
 }
 
 describe('Stage3WorkerImpl', () => {
@@ -209,13 +211,13 @@ describe('Stage3WorkerImpl', () => {
   });
 
   it('LLM failure: llmClient.complete rejects → returns error result', async () => {
-    vi.mocked(llmClient.complete).mockRejectedValue(new Error('LLM timeout'));
+    vi.mocked(llmClient.complete).mockResolvedValue(fail('LLM timeout', 'TIMEOUT'));
 
     const run = createPipelineRun();
     const result = await worker.execute(run);
 
     expect(result.status).toBe('error');
-    expect(result.error).toBe('LLM timeout');
+    expect(result.error).toContain('LLM timeout');
     expect(result.suggestions).toBeUndefined();
     expect(resultsStore.saveReasoningResult).not.toHaveBeenCalled();
   });

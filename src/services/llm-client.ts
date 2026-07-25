@@ -1,5 +1,7 @@
 import type { Logger } from 'winston';
 import type { AppConfig } from '../types/config.js';
+import type { ServiceResult } from '../types/service-result.js';
+import { ok, fail } from '../types/service-result.js';
 
 export interface LlmResponse {
   content: string;
@@ -16,16 +18,16 @@ export interface LlmClient {
     temperature?: number;
     maxTokens?: number;
     responseFormat?: 'json' | 'text';
-  }): Promise<LlmResponse>;
+  }): Promise<ServiceResult<LlmResponse>>;
 }
 
 export class LlmClientImpl implements LlmClient {
   constructor(private config: AppConfig, private logger?: Logger) {}
 
-  async complete(opts: Parameters<LlmClient['complete']>[0]): Promise<LlmResponse> {
+  async complete(opts: Parameters<LlmClient['complete']>[0]): Promise<ServiceResult<LlmResponse>> {
     if (!this.config.llmApiKey) {
       this.logger?.error('LLM API key is not configured');
-      throw new Error('LLM API key is not configured');
+      return fail('LLM API key is not configured', 'NO_API_KEY');
     }
 
     const baseUrl = this.config.llmBaseUrl ?? 'https://api.openai.com/v1';
@@ -70,7 +72,7 @@ export class LlmClientImpl implements LlmClient {
         const text = await response.text();
         const snippet = text.slice(0, 200);
         this.logger?.error(`LLM API error ${response.status}: ${snippet}`);
-        throw new Error(`LLM API error ${response.status}: ${snippet}`);
+        return fail(`LLM API error ${response.status}: ${snippet}`, 'API_ERROR');
       }
 
       const data = (await response.json()) as {
@@ -97,13 +99,13 @@ export class LlmClientImpl implements LlmClient {
           JSON.parse(content);
         } catch {
           this.logger?.error('LLM returned invalid JSON', { content: content.slice(0, 200) });
-          throw new Error(`LLM returned invalid JSON: ${content.slice(0, 200)}`);
+          return fail(`LLM returned invalid JSON: ${content.slice(0, 200)}`, 'INVALID_JSON');
         }
       }
 
       this.logger?.debug('LLM request completed', { model, finishReason });
 
-      return {
+      return ok({
         content,
         finishReason,
         model,
@@ -114,7 +116,7 @@ export class LlmClientImpl implements LlmClient {
               totalTokens: data.usage.total_tokens ?? 0,
             }
           : undefined,
-      };
+      });
     } finally {
       clearTimeout(timeoutId);
     }

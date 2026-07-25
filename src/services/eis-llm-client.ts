@@ -1,6 +1,8 @@
 import type { Client } from '@elastic/elasticsearch';
 import type { Logger } from 'winston';
 import type { LlmClient, LlmResponse } from './llm-client.js';
+import type { ServiceResult } from '../types/service-result.js';
+import { ok, fail } from '../types/service-result.js';
 
 interface EisStreamChunk {
   id?: string;
@@ -128,8 +130,14 @@ export class EisLlmClient implements LlmClient {
     private readonly logger?: Logger,
   ) {}
 
-  async complete(opts: Parameters<LlmClient['complete']>[0]): Promise<LlmResponse> {
-    await this.ensureCcmActivated();
+  async complete(opts: Parameters<LlmClient['complete']>[0]): Promise<ServiceResult<LlmResponse>> {
+    try {
+      await this.ensureCcmActivated();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger?.error('EIS CCM activation failed in complete()', { error: message });
+      return fail(`EIS CCM activation failed: ${message}`, 'CCM_ACTIVATION');
+    }
 
     const messages: Array<{ role: string; content: string }> = [];
     if (opts.systemPrompt) {
@@ -157,7 +165,7 @@ export class EisLlmClient implements LlmClient {
           this.logger?.error('EIS returned invalid JSON', {
             content: streamResult.content.slice(0, 200),
           });
-          throw new Error(`EIS returned invalid JSON: ${streamResult.content.slice(0, 200)}`);
+          return fail(`EIS returned invalid JSON: ${streamResult.content.slice(0, 200)}`, 'INVALID_JSON');
         }
       }
 
@@ -166,16 +174,16 @@ export class EisLlmClient implements LlmClient {
         finishReason: streamResult.finishReason,
       });
 
-      return {
+      return ok({
         content: streamResult.content,
         finishReason: streamResult.finishReason,
         model: streamResult.model || modelId,
         usage: streamResult.usage,
-      };
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger?.error('EIS inference request failed', { modelId, inferenceId, error: message });
-      throw new Error(`EIS inference failed for ${modelId}: ${message}`);
+      return fail(`EIS inference failed for ${modelId}: ${message}`, 'INFERENCE_FAILED');
     }
   }
 

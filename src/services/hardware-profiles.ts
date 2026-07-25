@@ -1,4 +1,6 @@
 import type { VMHardwareProfile } from '../types/config.js';
+import type { ServiceResult } from '../types/service-result.js';
+import { fail } from '../types/service-result.js';
 
 /**
  * A hardware profile with metadata for identification and display.
@@ -147,13 +149,14 @@ export class HardwareProfileRegistry {
    * Registers a new hardware profile or replaces an existing one.
    *
    * @param profile - The profile definition to register
-   * @throws {Error} If the profile ID is empty
+   * @returns ServiceResult indicating success or failure
    */
-  registerProfile(profile: HardwareProfileDefinition): void {
+  registerProfile(profile: HardwareProfileDefinition): ServiceResult<void> {
     if (!profile.id || profile.id.trim().length === 0) {
-      throw new Error('Hardware profile ID cannot be empty');
+      return fail('Hardware profile ID cannot be empty', 'EMPTY_PROFILE_ID');
     }
     this.profiles.set(profile.id, profile);
+    return { success: true, data: undefined };
   }
 
   /**

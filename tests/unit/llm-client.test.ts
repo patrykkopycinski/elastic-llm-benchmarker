@@ -76,10 +76,12 @@ describe('LlmClientImpl', () => {
 
       const result = await client.complete({ userPrompt: 'Say hello' });
 
-      expect(result.content).toBe('Hello world');
-      expect(result.finishReason).toBe('stop');
-      expect(result.model).toBe('gpt-4o');
-      expect(result.usage).toEqual({
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toBe('Hello world');
+      expect(result.data.finishReason).toBe('stop');
+      expect(result.data.model).toBe('gpt-4o');
+      expect(result.data.usage).toEqual({
         promptTokens: 10,
         completionTokens: 5,
         totalTokens: 15,
@@ -211,14 +213,16 @@ describe('LlmClientImpl', () => {
         responseFormat: 'json',
       });
 
-      expect(result.content).toBe('{"answer": 42}');
-      expect(result.finishReason).toBe('stop');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toBe('{"answer": 42}');
+      expect(result.data.finishReason).toBe('stop');
 
       const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
       expect(body.response_format).toEqual({ type: 'json_object' });
     });
 
-    it('should throw when API returns non-2xx status', async () => {
+    it('should return failure when API returns non-2xx status', async () => {
       const config = createMockConfig();
       const client = new LlmClientImpl(config);
 
@@ -228,22 +232,26 @@ describe('LlmClientImpl', () => {
         text: async () => 'Unauthorized: invalid api key',
       });
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'LLM API error 401: Unauthorized: invalid api key',
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toBe('LLM API error 401: Unauthorized: invalid api key');
     });
 
-    it('should throw when API key is missing', async () => {
+    it('should return failure when API key is missing', async () => {
       const config = createMockConfig({ llmApiKey: undefined });
       const client = new LlmClientImpl(config);
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        'LLM API key is not configured',
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toBe('LLM API key is not configured');
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('should throw when response_format=json but API returns non-JSON', async () => {
+    it('should return failure when response_format=json but API returns non-JSON', async () => {
       const config = createMockConfig();
       const client = new LlmClientImpl(config);
 
@@ -260,9 +268,14 @@ describe('LlmClientImpl', () => {
         }),
       });
 
-      await expect(
-        client.complete({ userPrompt: 'Return JSON', responseFormat: 'json' }),
-      ).rejects.toThrow('LLM returned invalid JSON: not valid json');
+      const result = await client.complete({
+        userPrompt: 'Return JSON',
+        responseFormat: 'json',
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toBe('LLM returned invalid JSON: not valid json');
     });
 
     it('should handle responses without usage', async () => {
@@ -278,10 +291,12 @@ describe('LlmClientImpl', () => {
       });
 
       const result = await client.complete({ userPrompt: 'Hello' });
-      expect(result.usage).toBeUndefined();
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.usage).toBeUndefined();
     });
 
-    it('should handle empty choices array', async () => {
+    it('should handle empty Choices array', async () => {
       const config = createMockConfig();
       const client = new LlmClientImpl(config);
 
@@ -294,8 +309,10 @@ describe('LlmClientImpl', () => {
       });
 
       const result = await client.complete({ userPrompt: 'Hello' });
-      expect(result.content).toBe('');
-      expect(result.finishReason).toBe('unknown');
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      expect(result.data.content).toBe('');
+      expect(result.data.finishReason).toBe('unknown');
     });
 
     it('should handle truncated error text to 200 chars', async () => {
@@ -309,9 +326,10 @@ describe('LlmClientImpl', () => {
         text: async () => longError,
       });
 
-      await expect(client.complete({ userPrompt: 'Hello' })).rejects.toThrow(
-        `LLM API error 500: ${longError.slice(0, 200)}`,
-      );
+      const result = await client.complete({ userPrompt: 'Hello' });
+      expect(result.success).toBe(false);
+      if (result.success) return;
+      expect(result.error).toBe(`LLM API error 500: ${longError.slice(0, 200)}`);
     });
   });
 

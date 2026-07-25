@@ -56,11 +56,27 @@ export class Stage3WorkerImpl implements Stage3Worker {
       });
 
       const systemPrompt = 'You are a vLLM performance optimization expert. Return ONLY valid JSON.';
-      const llmResponse = await this.deps.llmClient.complete({
+      const llmResult = await this.deps.llmClient.complete({
         systemPrompt,
         userPrompt: prompt,
         responseFormat: 'json',
       });
+
+      if (!llmResult.success) {
+        this.deps.logger?.error('Stage 3 LLM call failed', { error: llmResult.error, code: llmResult.code });
+        const result: Stage3Result = {
+          runId,
+          modelId,
+          status: 'error',
+          error: `LLM call failed: ${llmResult.error}`,
+          traceSummary,
+          startedAt,
+          completedAt: new Date().toISOString(),
+        };
+        return result;
+      }
+
+      const llmResponse = llmResult.data;
 
       let suggestions: Stage3Suggestion[] | undefined;
       try {
