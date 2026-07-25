@@ -155,7 +155,15 @@ function sha256(input: string): string {
 }
 
 function sanitizeForLog(value: string): string {
-  return value.replace(/[<>&"']/g, '');
+  // HTML-entity-encode for safe rendering in dashboard HTML, preserving
+  // the original characters in log output (unlike the old strip approach
+  // which silently deleted angle brackets, ampersands, and quotes).
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**

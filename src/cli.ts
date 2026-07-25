@@ -386,12 +386,10 @@ program
       const modelId = opts['model'] as string | undefined;
 
       if (showSummary) {
-        const modelIds = modelId ? [modelId] : await store.getEvaluatedModelIds();
-        const summaries: ModelBenchmarkSummary[] = [];
-        for (const id of modelIds) {
-          const s = await store.getModelSummary(id);
-          if (s) summaries.push(s);
-        }
+        // Batch fetch in a single ES query (avoids N+1: one getModelSummary per model)
+        const summaries: ModelBenchmarkSummary[] = modelId
+          ? ((await store.getModelSummary(modelId)) ? [(await store.getModelSummary(modelId))!] : [])
+          : await store.getAllModelSummaries();
 
         if (jsonOutput) {
           output({ total: summaries.length, data: summaries }, true);

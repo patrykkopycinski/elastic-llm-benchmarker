@@ -576,6 +576,82 @@ export class ElasticsearchResultsStore {
     };
   }
 
+  /**
+   * Batch-fetch summaries for all evaluated models in a single ES query.
+   * Replaces the N+1 pattern of looping getModelSummary over modelIds.
+   * Uses a terms aggregation on model_id with sub-aggregations.
+   */
+  async getAllModelSummaries(): Promise<ModelBenchmarkSummary[]> {
+    const resp = await this.esClient.search({
+      index: INDEX_NAMES.BENCHMARKER_RESULTS,
+      size: 0,
+      query: { match_all: {} },
+      aggs: {
+        models: {
+          terms: { field: 'model_id', size: 10_000 },
+          aggs: {
+            passed_count: {
+              filter: { term: { passed: true } },
+              aggs: { count: { value_count: { field: 'model_id' } } },
+            },
+            last_run: { max: { field: '@timestamp' } },
+            latest_passed: {
+              top_hits: {
+                size: 1,
+                sort: [{ '@timestamp': { order: 'desc' } }],
+                _source: ['passed'],
+              },
+            },
+            nested_metrics: {
+              nested: { path: 'benchmark_metrics' },
+              aggs: {
+                avg_itl: { avg: { field: 'benchmark_metrics.itl_ms' } },
+                avg_throughput: { avg: { field: 'benchmark_metrics.throughput_tokens_per_sec' } },
+              },
+            },
+            avg_tool_success: { avg: { field: 'tool_call_results.success_rate' } },
+          },
+        },
+      },
+    });
+
+    const buckets =
+      (resp.aggregations?.models as { buckets: Array<Record<string, unknown>> })?.buckets ?? [];
+
+    return buckets.map((b) => {
+      const key = b.key as string;
+      const total = b.doc_count as number;
+      const passedVal =
+        (b.passed_count as { count: { value: number } })?.count?.value ?? 0;
+      const lastRunAgg = b.last_run as { value: number | null; value_as_string?: string } | undefined;
+      const lastRun =
+        lastRunAgg?.value_as_string ??
+        (lastRunAgg?.value ? new Date(lastRunAgg.value).toISOString() : null);
+      const latestHits =
+        (b.latest_passed as { hits: { hits: { _source?: { passed: boolean } }[] } })?.hits?.hits ?? [];
+      const lastPassed = latestHits[0]?._source?.passed ?? false;
+      const nestedMetrics = b.nested_metrics as {
+        avg_itl: { value: number | null };
+        avg_throughput: { value: number | null };
+      } | undefined;
+      const avgItl = nestedMetrics?.avg_itl?.value ?? null;
+      const avgThroughput = nestedMetrics?.avg_throughput?.value ?? null;
+      const avgToolSuccess = (b.avg_tool_success as { value: number | null })?.value ?? null;
+
+      return {
+        modelId: key,
+        totalRuns: total,
+        passedRuns: passedVal,
+        failedRuns: total - passedVal,
+        lastRunTimestamp: lastRun ?? '',
+        lastPassed,
+        avgItlMs: avgItl,
+        avgThroughput,
+        avgToolCallSuccessRate: avgToolSuccess,
+      };
+    });
+  }
+
   async getStats(): Promise<{ total: number; passed: number; failed: number }> {
     const resp = await this.esClient.search({
       index: INDEX_NAMES.BENCHMARKER_RESULTS,

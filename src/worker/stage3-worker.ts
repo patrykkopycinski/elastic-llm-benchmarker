@@ -64,17 +64,24 @@ export class Stage3WorkerImpl implements Stage3Worker {
 
       let suggestions: Stage3Suggestion[] | undefined;
       try {
-        const parsed = JSON.parse(this.extractJson(llmResponse.content));
-        suggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : undefined;
-        if (suggestions) {
-          suggestions = suggestions.map((s: any) => ({
-            category: ['config', 'quantization', 'hardware', 'other'].includes(s.category)
-              ? s.category
+        const parsed = JSON.parse(this.extractJson(llmResponse.content)) as {
+          suggestions?: Array<{
+            category?: string;
+            title?: string;
+            description?: string;
+            estimatedImpact?: string;
+          }>;
+        };
+        const rawSuggestions = Array.isArray(parsed.suggestions) ? parsed.suggestions : [];
+        if (rawSuggestions.length > 0) {
+          suggestions = rawSuggestions.map((s) => ({
+            category: (['config', 'quantization', 'hardware', 'other'] as const).includes(s.category as 'config')
+              ? (s.category as 'config' | 'quantization' | 'hardware' | 'other')
               : 'other',
             title: String(s.title || ''),
             description: String(s.description || ''),
-            estimatedImpact: ['high', 'medium', 'low'].includes(s.estimatedImpact)
-              ? s.estimatedImpact
+            estimatedImpact: (['high', 'medium', 'low'] as const).includes(s.estimatedImpact as 'high')
+              ? (s.estimatedImpact as 'high' | 'medium' | 'low')
               : 'medium',
           }));
         }

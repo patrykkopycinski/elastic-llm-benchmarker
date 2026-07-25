@@ -41,7 +41,9 @@ export class LlmClientImpl implements LlmClient {
       model: opts.model ?? this.config.llmModel,
       messages,
       temperature: opts.temperature ?? this.config.llmTemperature,
-      max_tokens: opts.maxTokens ?? this.config.llmMaxTokens,
+      // max_completion_tokens is the current OpenAI parameter name;
+      // max_tokens is deprecated but still accepted by most OpenAI-compatible backends.
+      max_completion_tokens: opts.maxTokens ?? this.config.llmMaxTokens,
     };
 
     if (opts.responseFormat === 'json') {

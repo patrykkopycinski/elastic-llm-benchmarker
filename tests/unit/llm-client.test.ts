@@ -96,7 +96,7 @@ describe('LlmClientImpl', () => {
       expect(body.model).toBe('gpt-4o');
       expect(body.messages).toEqual([{ role: 'user', content: 'Say hello' }]);
       expect(body.temperature).toBe(0.3);
-      expect(body.max_tokens).toBe(4096);
+      expect(body.max_completion_tokens).toBe(4096);
       expect(body.response_format).toBeUndefined();
     });
 
@@ -164,7 +164,7 @@ describe('LlmClientImpl', () => {
       const body = JSON.parse(mockFetch.mock.calls[0]![1].body);
       expect(body.model).toBe('custom-model');
       expect(body.temperature).toBe(0.7);
-      expect(body.max_tokens).toBe(512);
+      expect(body.max_completion_tokens).toBe(512);
     });
 
     it('should use custom baseUrl when configured', async () => {
