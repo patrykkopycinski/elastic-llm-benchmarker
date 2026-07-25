@@ -87,6 +87,16 @@ export class SshPortForward {
         this.logger.debug('SSH port forward stderr', { message: msg });
       }
     });
+    this.proc.on('error', (err: NodeJS.ErrnoException) => {
+      // Emitted when the process can't be spawned (ENOENT — ssh not installed).
+      // Without this listener Node.js would throw an uncaughtException and crash.
+      this.logger.error('SSH port forward spawn failed', {
+        error: err.message,
+        code: err.code,
+        localPort,
+      });
+      this.proc = null;
+    });
     this.proc.on('exit', (code) => {
       if (code !== 0 && code !== null) {
         this.logger.warn('SSH port forward exited unexpectedly', { code, localPort });

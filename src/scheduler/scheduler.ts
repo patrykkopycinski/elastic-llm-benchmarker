@@ -74,6 +74,31 @@ export class Scheduler {
    */
   private readonly modelFailureTracker: Map<string, { count: number; lastErrorType: string; lastAt: number }> = new Map();
   private readonly modelCooldown: Map<string, number> = new Map(); // modelId -> expireAt timestamp
+  /** Max entries to prevent unbounded growth. Stale entries are pruned periodically. */
+  private static readonly MAX_TRACKED_FAILURES = 200;
+  private static readonly MAX_COOLDOWN_ENTRIES = 200;
+
+  /** Prune stale entries from the failure tracker and cooldown maps to bound memory. */
+  private pruneStaleModelEntries(): void {
+    const now = Date.now();
+    const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+
+    // Prune failure tracker: remove entries older than 6h (cooldown window)
+    if (this.modelFailureTracker.size > Scheduler.MAX_TRACKED_FAILURES) {
+      for (const [key, val] of this.modelFailureTracker) {
+        if (now - val.lastAt > SIX_HOURS_MS) {
+          this.modelFailureTracker.delete(key);
+        }
+      }
+    }
+
+    // Prune expired cooldown entries
+    for (const [key, expireAt] of this.modelCooldown) {
+      if (now >= expireAt) {
+        this.modelCooldown.delete(key);
+      }
+    }
+  }
 
   private recordModelFailure(modelId: string, errorType: string): void {
     const now = Date.now();
@@ -101,6 +126,14 @@ export class Scheduler {
     }
 
     this.modelFailureTracker.set(modelId, existing);
+
+    // Opportunistic pruning — runs only when maps exceed threshold
+    if (
+      this.modelFailureTracker.size > Scheduler.MAX_TRACKED_FAILURES ||
+      this.modelCooldown.size > Scheduler.MAX_COOLDOWN_ENTRIES
+    ) {
+      this.pruneStaleModelEntries();
+    }
   }
 
   private isModelCooldown(modelId: string): boolean {
