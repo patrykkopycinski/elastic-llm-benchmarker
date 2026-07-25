@@ -323,6 +323,66 @@ export function createQueueServer(config: QueueServerConfig & {
     }
   });
 
+  // ─── Shared Route Handlers ──────────────────────────────────────────
+  // Factory functions used by both /api and /api/v1 routes to avoid duplication.
+
+  /** DELETE /queue/:id — cancel a pending queue entry. */
+  function makeDeleteEntryHandler() {
+    return async (req: express.Request, res: express.Response) => {
+      try {
+        const id = req.params.id;
+        if (!id || typeof id !== 'string') {
+          res.status(400).json({ error: 'Invalid id parameter' });
+          return;
+        }
+        const cancelled = await queueService.cancel(id);
+        if (cancelled === null) {
+          res.status(404).json({ error: 'Queue entry not found' });
+        } else if (cancelled) {
+          res.status(200).json({ ok: true });
+        } else {
+          res.status(409).json({ error: 'Entry not in pending status' });
+        }
+      } catch (err) {
+        logger.error(`DELETE queue/${sanitizeForLog(String(req.params.id ?? ''))} failed`, { err });
+        res.status(500).json({ error: 'Internal server error' });
+      }
+    };
+  }
+
+  /** GET /queue/events — SSE stream with progress enrichment. */
+  function makeQueueEventHandler() {
+    return (req: express.Request, res: express.Response) => {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
+
+      const sendState = async () => {
+        try {
+          const [entries, currentRaw] = await Promise.all([
+            queueService.getQueue(),
+            queueService.getCurrent(),
+          ]);
+          const current = await enrichQueueEntryProgress(currentRaw, {
+            skillDevPluginDir: resolveSkillDevPluginDir(),
+            defaultEvalSuites: DEFAULT_STAGE2_EVAL_SUITES,
+          });
+          res.write(`data: ${JSON.stringify({ entries, current })}\n\n`);
+        } catch (err) {
+          logger.error('SSE state fetch failed', { err });
+        }
+      };
+
+      sendState();
+      const interval = setInterval(sendState, 5000);
+
+      req.on('close', () => {
+        clearInterval(interval);
+      });
+    };
+  }
+
   // ─── v1 Routes ────────────────────────────────────────────────────
   const v1 = express.Router();
   v1.use(middleware.auth);
@@ -440,54 +500,10 @@ export function createQueueServer(config: QueueServerConfig & {
   });
 
   // DELETE /api/v1/queue/:id  → cancel a pending evaluation
-  v1.delete('/queue/:id', async (req, res) => {
-    try {
-      const id = req.params.id;
-      if (!id || typeof id !== 'string') {
-        res.status(400).json({ error: 'Invalid id parameter' });
-        return;
-      }
-      const cancelled = await queueService.cancel(id);
-      if (cancelled === null) {
-        res.status(404).json({ error: 'Queue entry not found' });
-      } else if (cancelled) {
-        res.status(200).json({ ok: true });
-      } else {
-        res.status(409).json({ error: 'Entry not in pending status' });
-      }
-    } catch (err) {
-      logger.error(`DELETE /api/v1/queue/${sanitizeForLog(req.params.id)} failed`, { err });
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
+  v1.delete('/queue/:id', makeDeleteEntryHandler());
 
   // GET /api/v1/queue/events  → SSE stream
-  v1.get('/queue/events', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Content', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const sendState = async () => {
-      try {
-        const [entries, current, pendingCount] = await Promise.all([
-          queueService.getQueue(),
-          queueService.getCurrent(),
-          queueService.getPending(),
-        ]);
-        res.write(`data: ${JSON.stringify({ entries, current, pendingCount })}\n\n`);
-      } catch (err) {
-        logger.error('SSE state fetch failed', { err });
-      }
-    };
-
-    sendState();
-    const interval = setInterval(sendState, 5000);
-
-    req.on('close', () => {
-      clearInterval(interval);
-    });
-  });
+  v1.get('/queue/events', makeQueueEventHandler());
 
   app.use('/api/v1', v1);
 
@@ -790,56 +806,9 @@ export function createQueueServer(config: QueueServerConfig & {
     }
   });
 
-  app.delete('/api/queue/:id', async (req, res) => {
-    try {
-      const id = req.params.id;
-      if (!id || typeof id !== 'string') {
-        res.status(400).json({ error: 'Invalid id parameter' });
-        return;
-      }
-      const cancelled = await queueService.cancel(id);
-      if (cancelled === null) {
-        res.status(404).json({ error: 'Queue entry not found' });
-      } else if (cancelled) {
-        res.status(200).json({ ok: true });
-      } else {
-        res.status(409).json({ error: 'Entry not in pending status' });
-      }
-    } catch (err) {
-      logger.error(`DELETE /api/queue/${sanitizeForLog(req.params.id)} failed`, { err });
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
+  app.delete('/api/queue/:id', makeDeleteEntryHandler());
 
-  app.get('/api/queue/events', (req, res) => {
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
-    res.flushHeaders();
-
-    const sendState = async () => {
-      try {
-        const [entries, currentRaw] = await Promise.all([
-          queueService.getQueue(),
-          queueService.getCurrent(),
-        ]);
-        const current = await enrichQueueEntryProgress(currentRaw, {
-          skillDevPluginDir: resolveSkillDevPluginDir(),
-          defaultEvalSuites: DEFAULT_STAGE2_EVAL_SUITES,
-        });
-        res.write(`data: ${JSON.stringify({ entries, current })}\n\n`);
-      } catch (err) {
-        logger.error('SSE state fetch failed', { err });
-      }
-    };
-
-    sendState();
-    const interval = setInterval(sendState, 5000);
-
-    req.on('close', () => {
-      clearInterval(interval);
-    });
-  });
+  app.get('/api/queue/events', makeQueueEventHandler());
 
   // ─── Monitoring endpoints ────────────────────────────────────────
   // Prometheus scrape target
