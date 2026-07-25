@@ -1,0 +1,21 @@
+schema: spec-driven
+
+context: |
+  Tech stack: TypeScript (Node.js ESM), Vitest, Elasticsearch (Serverless), Docker, SSH2.
+  Architecture: Autonomous LLM benchmarking daemon — scheduler dequeues model entries from ES,
+  deploys vLLM containers on a GPU VM via SSH, runs Stage 1 (latency/throughput) benchmarks,
+  Stage 2 (Kibana evals via Buildkite/local Playwright), and Stage 3 (LLM reasoning analysis via EIS).
+  Services must never throw — return structured { success, error, data } results per AGENTS.md rules.
+  No `any` types — use `unknown` with proper narrowing. 1168 tests across 77 files.
+  Queue API on :3456 (i9 daemon). Worker daemon supervised by launchd.
+
+rules:
+  proposal:
+    - Keep proposals under 500 words
+    - Always include a "Non-goals" section
+    - Reference specific file paths and line numbers
+  tasks:
+    - Break tasks into chunks of max 2 hours
+    - Each task must include verification steps (tsc + vitest)
+    - Mark tasks with [P0], [P1], or [P2] priority
+
