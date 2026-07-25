@@ -1,5 +1,7 @@
 import { createLogger } from '../utils/logger.js';
 import type { Logger } from 'winston';
+import type { ServiceResult } from '../types/service-result.js';
+import { ok, fail } from '../types/service-result.js';
 
 export interface BuildkiteConfig {
   apiToken: string;
@@ -96,18 +98,18 @@ export function buildResultStatusFromBuildkiteState(
 }
 
 export interface BuildkiteEvalTrigger {
-  triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult>;
+  triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteBuildResult>>;
   /** Create a build without waiting for completion. */
-  createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
+  createOnDemandBuild(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>>;
   /**
    * Adopt a matching in-flight Benchmarker build, wait for pipeline idle, then create if needed.
    */
-  createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild>;
+  createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>>;
   /**
    * Trigger a single weekly pipeline build with all suites running as parallel matrix steps.
    * Returns immediately with the build reference for polling.
    */
-  createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<BuildkiteTriggeredBuild>;
+  createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>>;
   /** Poll an existing build until terminal state or timeout. */
   waitForBuild(
     pipelineSlug: string,
@@ -150,21 +152,28 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     this.pollTimeoutMs = config.pollTimeoutMs ?? 3_600_000;
   }
 
-  async createOnDemandBuild(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild> {
-    const build = await this.createBuild(
+  async createOnDemandBuild(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>> {
+    const envResult = this.buildOnDemandEnv(options);
+    if (!envResult.success) {
+      return fail(envResult.error, envResult.code);
+    }
+    const buildResult = await this.createBuild(
       this.config.onDemandPipelineSlug,
       `${BENCHMARKER_BUILD_MESSAGE_PREFIX} ${options.modelId} on-demand eval`,
-      this.buildOnDemandEnv(options),
+      envResult.data,
     );
-    return {
+    if (!buildResult.success) {
+      return fail(buildResult.error, buildResult.code);
+    }
+    return ok({
       pipelineSlug: this.config.onDemandPipelineSlug,
-      buildNumber: build.number,
-      buildUrl: build.web_url,
+      buildNumber: buildResult.data.number,
+      buildUrl: buildResult.data.web_url,
       adopted: false,
-    };
+    });
   }
 
-  async createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<BuildkiteTriggeredBuild> {
+  async createOnDemandBuildOrAdopt(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>> {
     if (this.config.adoptRunningBuild !== false) {
       const adopted = await this.findAdoptableRunningBuild(options);
       if (adopted) {
@@ -174,22 +183,28 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
           suite: options.evalSuiteIds[0],
           connectorId: options.connectorId,
         });
-        return adopted;
+        return ok(adopted);
       }
     }
 
     if (this.config.waitForPipelineIdle !== false) {
-      await this.waitForPipelineIdle();
+      const idleResult = await this.waitForPipelineIdle();
+      if (!idleResult.success) {
+        return fail(idleResult.error, idleResult.code);
+      }
     }
 
     return this.createOnDemandBuild(options);
   }
 
-  async createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<BuildkiteTriggeredBuild> {
+  async createWeeklyMatrixBuild(options: TriggerWeeklyMatrixOptions): Promise<ServiceResult<BuildkiteTriggeredBuild>> {
     const pipelineSlug = this.config.weeklyPipelineSlug ?? 'kibana-evals-weekly-llm-evals';
 
     if (this.config.waitForPipelineIdle !== false) {
-      await this.waitForPipelineIdleOnSlug(pipelineSlug);
+      const idleResult = await this.waitForPipelineIdleOnSlug(pipelineSlug);
+      if (!idleResult.success) {
+        return fail(idleResult.error, idleResult.code);
+      }
     }
 
     const env: Record<string, string> = {
@@ -205,25 +220,28 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       env['KIBANA_BRANCH'] = this.config.kibanaBranch;
     }
 
-    const build = await this.createBuild(
+    const buildResult = await this.createBuild(
       pipelineSlug,
       `${BENCHMARKER_BUILD_MESSAGE_PREFIX} ${options.modelId} weekly matrix eval`,
       env,
     );
+    if (!buildResult.success) {
+      return fail(buildResult.error, buildResult.code);
+    }
 
     this.logger.info('Buildkite: weekly matrix build created', {
       pipelineSlug,
-      buildNumber: build.number,
+      buildNumber: buildResult.data.number,
       suites: options.evalSuiteIds,
       modelId: options.modelId,
     });
 
-    return {
+    return ok({
       pipelineSlug,
-      buildNumber: build.number,
-      buildUrl: build.web_url,
+      buildNumber: buildResult.data.number,
+      buildUrl: buildResult.data.web_url,
       adopted: false,
-    };
+    });
   }
 
   async waitForBuild(
@@ -251,26 +269,31 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     return build?.state;
   }
 
-  async triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<BuildkiteBuildResult> {
-    const triggered = await this.createOnDemandBuildOrAdopt(options);
+  async triggerOnDemandEval(options: TriggerOnDemandOptions): Promise<ServiceResult<BuildkiteBuildResult>> {
+    const triggeredResult = await this.createOnDemandBuildOrAdopt(options);
+    if (!triggeredResult.success) {
+      return fail(triggeredResult.error, triggeredResult.code);
+    }
+    const triggered = triggeredResult.data;
     if (this.config.detachPoll) {
-      return {
+      return ok({
         buildUrl: triggered.buildUrl,
         buildNumber: triggered.buildNumber,
         status: 'running',
-      };
+      });
     }
-    return this.waitForBuild(
+    const result = await this.waitForBuild(
       triggered.pipelineSlug,
       triggered.buildNumber,
       triggered.buildUrl,
     );
+    return ok(result);
   }
 
-  private buildOnDemandEnv(options: TriggerOnDemandOptions): Record<string, string> {
+  private buildOnDemandEnv(options: TriggerOnDemandOptions): ServiceResult<Record<string, string>> {
     const evalSuiteId = options.evalSuiteIds[0];
     if (!evalSuiteId) {
-      throw new Error('At least one eval suite id is required for on-demand Buildkite eval');
+      return fail('At least one eval suite id is required for on-demand Buildkite eval', 'NO_EVAL_SUITE');
     }
     if (options.evalSuiteIds.length > 1) {
       this.logger.warn('On-demand Buildkite eval supports one suite per build; using first', {
@@ -281,7 +304,7 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
 
     const connectorId = options.connectorId;
     if (!connectorId) {
-      throw new Error('connectorId is required for on-demand Buildkite eval');
+      return fail('connectorId is required for on-demand Buildkite eval', 'NO_CONNECTOR_ID');
     }
 
     const env: Record<string, string> = {
@@ -299,7 +322,7 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
       env['KIBANA_BRANCH'] = this.config.kibanaBranch;
     }
 
-    return env;
+    return ok(env);
   }
 
   private matchesBenchmarkerOptions(
@@ -355,11 +378,11 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     return undefined;
   }
 
-  private async waitForPipelineIdle(): Promise<void> {
+  private async waitForPipelineIdle(): Promise<ServiceResult<void>> {
     return this.waitForPipelineIdleOnSlug(this.config.onDemandPipelineSlug);
   }
 
-  private async waitForPipelineIdleOnSlug(pipelineSlug: string): Promise<void> {
+  private async waitForPipelineIdleOnSlug(pipelineSlug: string): Promise<ServiceResult<void>> {
     const idleWaitMs = this.config.pipelineIdleWaitMs ?? this.pollTimeoutMs;
     const idlePollMs = this.config.pipelineIdlePollMs ?? this.pollIntervalMs;
     const deadline = Date.now() + idleWaitMs;
@@ -367,7 +390,7 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     while (Date.now() < deadline) {
       const active = await this.listActivePipelineBuilds(pipelineSlug);
       if (active.length === 0) {
-        return;
+        return ok(undefined);
       }
 
       this.logger.info('Buildkite: waiting for pipeline to become idle', {
@@ -384,8 +407,9 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     }
 
     const stillActive = await this.listActivePipelineBuilds(pipelineSlug);
-    throw new Error(
+    return fail(
       `Buildkite pipeline ${pipelineSlug} still has ${stillActive.length} active build(s) after ${idleWaitMs}ms`,
+      'PIPELINE_NOT_IDLE',
     );
   }
 
@@ -468,17 +492,18 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
     pipelineSlug: string,
     message: string,
     env: Record<string, string>,
-  ): Promise<BuildkiteBuildResponse> {
+  ): Promise<ServiceResult<BuildkiteBuildResponse>> {
     // Local-first guardrail: Buildkite triggers are reserved for sanctioned promotion
     // runs off `main` only. Iteration/verification must happen via the local Stage-2
     // path (kbn-evals / run-local-matrix-suite.sh) instead of feature-branch CI builds.
     // Use `config/promote-weekly.json` (kibanaBranch: main) for an actual promotion.
     if (this.config.kibanaBranch && this.config.kibanaBranch !== 'main') {
-      throw new Error(
+      return fail(
         `Refusing to trigger Buildkite pipeline "${pipelineSlug}" against branch ` +
           `"${this.config.kibanaBranch}". Buildkite is opt-in and reserved for promotion ` +
           `runs off main only — use the local Stage-2 path (config/local.json, ` +
           `run-local-matrix-suite.sh) for iteration and verification instead.`,
+        'BRANCH_NOT_ALLOWED',
       );
     }
 
@@ -513,15 +538,13 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
 
         if (!response.ok) {
           const text = await response.text();
-          // 4xx (except 408/429) are not transient — surface immediately.
-          if (response.status >= 400 && response.status < 500 &&
-              response.status !== 408 && response.status !== 429) {
-            throw new Error(`Buildkite build creation failed (${response.status}): ${text}`);
-          }
-          throw new Error(`Buildkite build creation failed (${response.status}): ${text}`);
+          return fail(
+            `Buildkite build creation failed (${response.status}): ${text}`,
+            'BUILD_CREATE_FAILED',
+          );
         }
 
-        return (await response.json()) as BuildkiteBuildResponse;
+        return ok((await response.json()) as BuildkiteBuildResponse);
       } catch (err) {
         lastErr = err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -530,7 +553,10 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
           msg.includes('ENOTFOUND') || msg.includes('network') ||
           /failed \(4[08]0\)/.test(msg) || /failed \(5\d\d\)/.test(msg);
         if (!transient || attempt === MAX_ATTEMPTS) {
-          throw err;
+          return fail(
+            `Buildkite build creation failed: ${msg}`,
+            'BUILD_CREATE_FAILED',
+          );
         }
         const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1);
         this.logger.warn('Buildkite createBuild: transient error, retrying', {
@@ -539,7 +565,8 @@ export class BuildkiteEvalTriggerImpl implements BuildkiteEvalTrigger {
         await new Promise((r) => setTimeout(r, delay));
       }
     }
-    throw lastErr instanceof Error ? lastErr : new Error('createBuild exhausted retries');
+    const errMsg = lastErr instanceof Error ? lastErr.message : 'createBuild exhausted retries';
+    return fail(errMsg, 'BUILD_CREATE_FAILED');
   }
 
   private async pollBuild(

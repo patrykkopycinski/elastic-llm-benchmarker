@@ -1189,12 +1189,30 @@ export class Scheduler {
         let evalRetried = false;
 
         for (;;) {
-          const triggered = await buildkiteTrigger.createOnDemandBuildOrAdopt({
+          const triggeredResult = await buildkiteTrigger.createOnDemandBuildOrAdopt({
             connectorJson,
             connectorId,
             evalSuiteIds: [suite],
             modelId: run.modelId,
           });
+          if (!triggeredResult.success) {
+            // Fatal: the trigger itself rejected the request (bad branch, missing
+            // connectorId, pipeline never went idle, createBuild exhausted retries).
+            // Surface the error and stop retrying this suite.
+            this.logger.error('CI Evals: createOnDemandBuildOrAdopt failed', {
+              modelId: run.modelId,
+              suite,
+              error: triggeredResult.error,
+              code: triggeredResult.code,
+            });
+            return {
+              buildUrl: '',
+              buildNumber: 0,
+              status: 'failed' as const,
+              terminalState: 'failed',
+            };
+          }
+          const triggered = triggeredResult.data;
 
           await persistOnDemandResult(
             { buildUrl: triggered.buildUrl, buildNumber: triggered.buildNumber, status: 'running' },

@@ -76,8 +76,11 @@ describe('BuildkiteEvalTriggerImpl', () => {
       { ...baseConfig, waitForPipelineIdle: false },
       'error',
     );
-    const build = await trigger.createOnDemandBuild(triggerOptions);
+    const result = await trigger.createOnDemandBuild(triggerOptions);
 
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    const build = result.data;
     expect(build.buildNumber).toBe(42);
     expect(build.adopted).toBe(false);
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -133,10 +136,12 @@ describe('BuildkiteEvalTriggerImpl', () => {
       { ...baseConfig, waitForPipelineIdle: false },
       'error',
     );
-    const build = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
+    const result = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
 
-    expect(build.buildNumber).toBe(99);
-    expect(build.adopted).toBe(true);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.buildNumber).toBe(99);
+    expect(result.data.adopted).toBe(true);
   });
 
   it('createOnDemandBuildOrAdopt waits for foreign running build then creates', async () => {
@@ -177,10 +182,12 @@ describe('BuildkiteEvalTriggerImpl', () => {
     });
 
     const trigger = new BuildkiteEvalTriggerImpl(baseConfig, 'error');
-    const build = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
+    const result = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
 
-    expect(build.buildNumber).toBe(42);
-    expect(build.adopted).toBe(false);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.buildNumber).toBe(42);
+    expect(result.data.adopted).toBe(false);
     expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 
@@ -230,9 +237,11 @@ describe('BuildkiteEvalTriggerImpl', () => {
       { ...baseConfig, adoptRunningBuild: false, pipelineIdlePollMs: 5, pipelineIdleWaitMs: 200 },
       'error',
     );
-    const build = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
+    const result = await trigger.createOnDemandBuildOrAdopt(triggerOptions);
 
-    expect(build.buildNumber).toBe(42);
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.buildNumber).toBe(42);
     // POST must only fire after the scheduled build cleared (2nd scheduled poll).
     expect(scheduledCalls).toBeGreaterThanOrEqual(2);
     expect(postCalls).toBe(1);
@@ -283,7 +292,9 @@ describe('BuildkiteEvalTriggerImpl', () => {
 
     const result = await trigger.triggerOnDemandEval(triggerOptions);
 
-    expect(result.status).toBe('running');
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.data.status).toBe('running');
     expect(fetch).toHaveBeenCalledTimes(2);
   });
 
@@ -341,9 +352,11 @@ describe('BuildkiteEvalTriggerImpl', () => {
       modelId: 'Qwen/Qwen2.5-1.5B-Instruct',
     });
 
-    expect(build.buildNumber).toBe(42);
-    expect(build.adopted).toBe(false);
-    expect(build.pipelineSlug).toBe('kibana-evals-weekly-llm-evals');
+    expect(build.success).toBe(true);
+    if (!build.success) return;
+    expect(build.data.buildNumber).toBe(42);
+    expect(build.data.adopted).toBe(false);
+    expect(build.data.pipelineSlug).toBe('kibana-evals-weekly-llm-evals');
 
     const postCall = (fetch as ReturnType<typeof vi.fn>).mock.calls.find(
       (call) => call[1]?.method === 'POST',
@@ -404,7 +417,9 @@ describe('BuildkiteEvalTriggerImpl', () => {
       modelId: 'test/model',
     });
 
-    expect(build.buildNumber).toBe(55);
+    expect(build.success).toBe(true);
+    if (!build.success) return;
+    expect(build.data.buildNumber).toBe(55);
     expect(listCalls).toBeGreaterThanOrEqual(2);
   });
 });
