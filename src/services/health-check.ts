@@ -732,14 +732,25 @@ export class HealthCheckService {
           // docker explicitly reports the container has stopped — a real crash.
           return false;
         }
-        // Ambiguous: non-zero exit (e.g. "No such container" during the
-        // stop-old/start-new race, a permission/daemon hiccup) or unexpected
-        // stdout. exec() does NOT throw on non-zero exit, so without this the
-        // `out === 'true'` check would silently return false and fabricate a
-        // container_crash while vLLM is still starting. Route into the retry/
-        // assume-running guard instead of declaring a crash.
+        // "No such object" / "No such container" means the container was never
+        // created, was auto-removed on exit (--rm), or was already destroyed.
+        // This is definitively NOT running — returning false here lets the poll
+        // loop classify the crash immediately instead of spinning for the full
+        // health-check timeout (30 min) treating a dead container as
+        // "inconclusive".
+        const stderr = result.stderr.trim();
+        if (/No such (object|container)/i.test(stderr) || /not found/i.test(stderr)) {
+          this.logger.warn(
+            `isContainerRunning: container does not exist (removed or never created)`,
+            { containerName, stderr },
+          );
+          return false;
+        }
+        // Genuinely ambiguous: non-zero exit from a permission/daemon hiccup or
+        // unexpected stdout. Retry before assuming running to avoid false
+        // container_crash while vLLM is still starting.
         throw new Error(
-          `docker inspect ambiguous (success=${result.success}, stdout="${out}", stderr="${result.stderr.trim()}")`,
+          `docker inspect ambiguous (success=${result.success}, stdout="${out}", stderr="${stderr}")`,
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

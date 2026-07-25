@@ -22,6 +22,11 @@ export interface AcquireResult {
   success: boolean;
   /** Present when the lease is held by a different, still-alive daemon. */
   heldBy?: LeaseHolder;
+  /** Age (ms) of the holder heartbeat at refusal time — lets an operator tell
+   *  a live daemon (small age) from a stale lease (age >= staleAfterMs). */
+  heldByAgeMs?: number;
+  /** The staleness threshold this lease uses, for the same diagnosis. */
+  staleAfterMs?: number;
   /** Populated on unexpected Elasticsearch errors. */
   error?: string;
 }
@@ -141,7 +146,12 @@ export class GpuVmLeaseService {
       if (existing) {
         const holder = toHolder(existing.source);
         if (this.isFresh(holder) && !this.isMine(holder)) {
-          return { success: false, heldBy: holder };
+          return {
+            success: false,
+            heldBy: holder,
+            heldByAgeMs: this.now() - Date.parse(holder.heartbeatAt),
+            staleAfterMs: this.staleAfterMs,
+          };
         }
         // Stale, or already ours: take/refresh it, guarding the rare race with
         // optimistic concurrency so a simultaneous takeover is detected.
@@ -194,7 +204,12 @@ export class GpuVmLeaseService {
     if (current) {
       const holder = toHolder(current.source);
       if (this.isFresh(holder) && !this.isMine(holder)) {
-        return { success: false, heldBy: holder };
+        return {
+          success: false,
+          heldBy: holder,
+          heldByAgeMs: this.now() - Date.parse(holder.heartbeatAt),
+          staleAfterMs: this.staleAfterMs,
+        };
       }
     }
     return { success: false, error: 'lease contended (version conflict)' };

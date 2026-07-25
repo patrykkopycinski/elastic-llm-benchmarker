@@ -94,3 +94,14 @@ deploy/*.plist
 
 # Ad-hoc screenshots dropped at repo root during manual UI verification
 /*.png
+
+# Design mockups (visual source-of-truth scratch, not committed)
+.design/
+
+# Operator runtime artifacts
+.benchmarker-queue.lock
+.daemon-pid
+.env.save
+config/local.json.bak
+.smoke-logs/
+

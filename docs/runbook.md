@@ -684,3 +684,34 @@ curl -X POST "$ELASTICSEARCH_URL/benchmarker-queue/_update_by_query" \
     "script": { "source": "ctx._source.status = \"pending\"; ctx._source.started_at = null" }
   }'
 ```
+
+
+## Single-owner rule (kibana-i9 ONLY)
+
+The benchmarker worker daemon (`com.elastic-llm-benchmarker.worker` LaunchAgent)
+runs on **kibana-i9 ONLY**. Never install or enable it on any other host (M4,
+laptops, etc.).
+
+**Why:** all daemons share one Elasticsearch cluster and one GPU VM. Concurrency is
+enforced by a cross-host **GPU VM lease** (ES doc `benchmarker-daemon-lease`, id
+`vm:<host>`). A second daemon on another machine will grab that lease and block the
+primary i9 daemon indefinitely — the i9 daemon logs *"GPU VM lease held by another
+benchmarker daemon — refusing to start"* and exits.
+
+The refusal log now includes `heartbeatAgeSeconds` + `staleAfterSeconds` + a
+`diagnosis` field:
+- **small age (< staleAfterSeconds)** → a LIVE daemon legitimately holds the VM.
+  Fix: stop the other host's worker (`launchctl bootout gui/$(id -u) \
+  ~/Library/LaunchAgents/com.elastic-llm-benchmarker.worker.plist` and remove the
+  plist so it doesn't respawn), then restart the i9 daemon.
+- **age >= staleAfterSeconds** → a stale lease that should have been reclaimed;
+  investigate the writer or delete the `benchmarker-daemon-lease` doc.
+
+## ES API key rotation
+
+The daemon authenticates to the Cloud ES cluster with `ES_API_KEY` in `.env`. Keys
+expire. Symptom: startup fails with `401 security_exception` (`unable to
+authenticate` / `token expired`). Fix:
+1. Elastic Cloud → deployment → **Security → API keys → Create API key**.
+2. Update `ES_API_KEY=` in `~/Projects/elastic-llm-benchmarker/.env`.
+3. Restart the daemon.

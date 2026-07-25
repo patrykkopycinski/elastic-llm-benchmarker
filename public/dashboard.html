@@ -874,6 +874,16 @@
       </div>
     </div>
 
+    <div class="panel" style="margin-top:20px" id="reports">
+      <div class="panel-head">
+        <h2>Per-model full-eval reports</h2>
+        <span class="caption" id="reports-caption">persona-matrix · agent_eval_full</span>
+      </div>
+      <div class="panel-body" id="reports-body">
+        <div class="empty">Loading reports…</div>
+      </div>
+    </div>
+
     <div class="charts">
       <div class="panel">
         <div class="panel-head">
@@ -985,11 +995,15 @@
       var p3 = getJSON("/api/models?summaries=true").then(function (d) {
         state.models = (d && d.models) || [];
       }).catch(function () {});
-      return Promise.all([p1, p2, p3]).then(function () {
+      var p4 = getJSON("/api/reports").then(function (d) {
+        state.reports = (d && d.reports) || [];
+      }).catch(function () { state.reports = []; });
+      return Promise.all([p1, p2, p3, p4]).then(function () {
         renderKpis();
         renderLeaderboard();
         renderThroughput();
         renderOutcomes();
+        renderReports();
         $("updated").textContent = "Updated " + new Date().toLocaleTimeString("en-US");
       });
     }
@@ -1011,6 +1025,31 @@
         el.classList.add("bad");
         txt.textContent = "API unreachable";
       }
+    }
+
+    // ── Per-model reports ──────────────────────────────
+    function renderReports() {
+      var body = $("reports-body");
+      var reports = (state.reports) || [];
+      if (!reports.length) {
+        body.innerHTML = '<div class="empty">No per-model reports yet. ' +
+          'Run <code>generate_reports.ts --model &lt;id&gt;</code> after a persona-matrix eval.</div>';
+        return;
+      }
+      var rows = reports.map(function (r) {
+        var links = '<a href="' + r.agentEvalUrl + '" target="_blank" rel="noopener">agent_eval_full</a>';
+        if (r.tokenUsageUrl) {
+          links += ' · <a href="' + r.tokenUsageUrl + '" target="_blank" rel="noopener">token_usage</a>';
+        }
+        return '<tr><td class="model" style="font-weight:600">' + r.slug + '</td>' +
+               '<td>' + links + '</td></tr>';
+      }).join("");
+      body.innerHTML =
+        '<table style="width:100%;border-collapse:collapse"><thead><tr>' +
+        '<th style="text-align:left;padding:8px 10px;color:var(--muted);font-size:12px;text-transform:uppercase">Model</th>' +
+        '<th style="text-align:left;padding:8px 10px;color:var(--muted);font-size:12px;text-transform:uppercase">Reports</th>' +
+        '</tr></thead><tbody>' + rows + '</tbody></table>';
+      $("reports-caption").textContent = reports.length + ' model' + (reports.length === 1 ? '' : 's');
     }
 
     // ── KPIs ───────────────────────────────────────────

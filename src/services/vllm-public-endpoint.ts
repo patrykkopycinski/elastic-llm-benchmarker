@@ -48,7 +48,7 @@ async function ensureSshForwardHealthy(
   sshForward: SshPortForward,
   localPort: number,
   logger: Logger,
-  maxAttempts = 3,
+  maxAttempts = 20,
 ): Promise<boolean> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (!sshForward.isRunning) {

@@ -18,6 +18,7 @@ import {
   parseEvalArtifactJson,
 } from '../services/ci-eval-stage2-mapper.js';
 import type { Stage2Result } from './pipeline-state.js';
+import { checkModelFormatCompatibility } from '../utils/model-format-validator.js';
 import type { Logger } from 'winston';
 import { createLogger } from '../utils/logger.js';
 import { classifyFailure } from '../utils/failure-classifier.js';
@@ -62,6 +63,59 @@ interface CIEvalRunResult {
 }
 
 export class Scheduler {
+
+  /**
+   * Track Stage 2 failures per model. After 3 consecutive failures of the same type,
+   * mark the model as blacklisted for 6 hours to avoid retry churn (P0-2).
+   * 
+   * Key insight: retrying the exact same model with the exact same infra/config
+   * rarely succeeds. Only retry if the infrastructure was fixed (e.g., vLLM restarted,
+   * Kibana reconnected, connector updated).
+   */
+  private readonly modelFailureTracker: Map<string, { count: number; lastErrorType: string; lastAt: number }> = new Map();
+  private readonly modelCooldown: Map<string, number> = new Map(); // modelId -> expireAt timestamp
+
+  private recordModelFailure(modelId: string, errorType: string): void {
+    const now = Date.now();
+    const existing = this.modelFailureTracker.get(modelId) || { count: 0, lastErrorType: '', lastAt: 0 };
+
+    // Reset counter if error type changed (different failure root cause)
+    if (existing.lastErrorType && existing.lastErrorType !== errorType) {
+      existing.count = 1;
+    } else {
+      existing.count++;
+    }
+
+    existing.lastErrorType = errorType;
+    existing.lastAt = now;
+
+    // After 3 consecutive failures of the same type, auto-blacklist for 6 hours
+    if (existing.count >= 3) {
+      const expireAt = now + 6 * 60 * 60 * 1000; // 6 hours
+      this.modelCooldown.set(modelId, expireAt);
+      this.logger.warn(
+        `Scheduler: auto-blacklisted ${modelId} for 6h — 3 consecutive Stage 2 failures (${errorType})`,
+        { modelId, failureCount: existing.count, expireAt: new Date(expireAt).toISOString() }
+      );
+      existing.count = 0; // Reset for next cycle
+    }
+
+    this.modelFailureTracker.set(modelId, existing);
+  }
+
+  private isModelCooldown(modelId: string): boolean {
+    const expireAt = this.modelCooldown.get(modelId);
+    if (!expireAt) return false;
+
+    const now = Date.now();
+    if (now >= expireAt) {
+      this.modelCooldown.delete(modelId);
+      return false;
+    }
+
+    return true;
+  }
+
   private timer: ReturnType<typeof setInterval> | null = null;
   private activeRuns = 0;
   private shuttingDown = false;
@@ -383,6 +437,34 @@ export class Scheduler {
     // this method returns — is fenced with it, so a zombie daemon can't clobber
     // us. Captured here because `entryLeases` is released once this returns.
     const leaseToken = this.entryLeases.get(entry.id);
+
+    // === Format compatibility check (P0-1) ===
+    // Reject models with unsupported formats that waste GPU time on vLLM health checks.
+    const formatCheck = checkModelFormatCompatibility(entry.modelId);
+    if (!formatCheck.compatible) {
+      this.logger.error('Scheduler: rejecting queue entry — unsupported model format', {
+        modelId: entry.modelId,
+        reason: formatCheck.reason,
+      });
+      await this.failEntry(entry, `Format incompatible: ${formatCheck.reason}`, leaseToken);
+      return;
+    }
+    if (formatCheck.warning) {
+      this.logger.warn("Scheduler: model format warning", { modelId: entry.modelId, warning: formatCheck.warning });
+    }
+
+    // === Retry cooldown check (P0-2) ===
+    // Skip models currently blacklisted due to repeated infrastructure failures.
+    if (this.isModelCooldown(entry.modelId)) {
+      const expireAt = this.modelCooldown.get(entry.modelId) || Date.now() + 6 * 60 * 60 * 1000;
+      this.logger.warn('Scheduler: skipping model on cooldown', {
+        modelId: entry.modelId,
+        expireAt: new Date(expireAt).toISOString(),
+      });
+      // Mark as cancelled (not failed) so it doesn't clog the queue.
+      await this.queueService.updateStatus(entry.id, 'cancelled');
+      return;
+    }
 
     let releasePublicEndpoint: (() => Promise<void>) | undefined;
     let deferInfrastructureTeardown = false;
@@ -745,6 +827,11 @@ export class Scheduler {
       // this entry now. Do NOT re-enqueue: that would duplicate the model.
       return;
     }
+
+    // Record the failure for the 3-strike cooldown (P0-2). Same-category
+    // repeats trip the 6h auto-blacklist so we stop burning GPU time on a
+    // model whose failures are infrastructure-shaped, not model-shaped.
+    this.recordModelFailure(entry.modelId, classification.category);
 
     if (willRetry) {
       try {

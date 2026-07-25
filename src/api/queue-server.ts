@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import dotenv from 'dotenv';
 import express from 'express';
@@ -494,6 +494,63 @@ export function createQueueServer(config: QueueServerConfig & {
   };
   app.get('/', serveDashboard);
   app.get('/dashboard', serveDashboard);
+
+  // ─── Per-model full-eval reports (agent_eval_full.html etc.) ────────
+  // Serves the per-model report bundle written by the persona-matrix
+  // generate_reports.ts (`--model <id>` → matrix-output/<slug>/*.html).
+  // Path: /reports/<model-slug>/<file>.html
+  const REPORT_SLUG_PATTERN = /^[a-z0-9-]+$/;
+  const REPORT_FILE_PATTERN = /^[a-zA-Z0-9._-]+\.html$/;
+  app.get('/reports/:slug/:file', (req, res) => {
+    const { slug, file } = req.params;
+    if (!REPORT_SLUG_PATTERN.test(slug) || !REPORT_FILE_PATTERN.test(file)) {
+      res.status(400).type('text/plain').send('Invalid report path');
+      return;
+    }
+    const matrixOutputDir = resolveMatrixOutputDir();
+    if (!matrixOutputDir) {
+      res.status(503).type('text/plain').send('MATRIX_OUTPUT_DIR not configured');
+      return;
+    }
+    const filePath = join(matrixOutputDir, slug, file);
+    // Defense-in-depth: ensure the resolved path stays under matrixOutputDir.
+    const resolvedBase = resolve(matrixOutputDir);
+    const resolvedTarget = resolve(filePath);
+    if (!resolvedTarget.startsWith(resolvedBase + '/')) {
+      res.status(400).type('text/plain').send('Invalid report path');
+      return;
+    }
+    if (!existsSync(resolvedTarget)) {
+      res.status(404).type('text/plain').send('Report not found — run generate_reports.ts --model <id>');
+      return;
+    }
+    res.sendFile(resolvedTarget);
+  });
+
+  // GET /api/reports → list per-model report bundles available on disk
+  app.get('/api/reports', (_req, res) => {
+    try {
+      const matrixOutputDir = resolveMatrixOutputDir();
+      if (!matrixOutputDir || !existsSync(matrixOutputDir)) {
+        res.json({ reports: [] });
+        return;
+      }
+      const entries = readdirSync(matrixOutputDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && REPORT_SLUG_PATTERN.test(d.name))
+        .filter((d) => existsSync(join(matrixOutputDir, d.name, 'agent_eval_full.html')))
+        .map((d) => ({
+          slug: d.name,
+          agentEvalUrl: `/reports/${d.name}/agent_eval_full.html`,
+          tokenUsageUrl: existsSync(join(matrixOutputDir, d.name, 'token_usage_overview_matrix.html'))
+            ? `/reports/${d.name}/token_usage_overview_matrix.html`
+            : null,
+        }));
+      res.json({ reports: entries });
+    } catch (err) {
+      logger.error('GET /api/reports failed', { err });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
 
   // ─── Read-only data routes for the dashboard ────────────────────────
   // Unauthenticated, consistent with the legacy /api/queue internal-UI routes.

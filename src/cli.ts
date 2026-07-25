@@ -1599,11 +1599,21 @@ if (isQueueCliInvocation()) {
       const leaseResult = await gpuVmLease.acquire();
       if (!leaseResult.success) {
         const held = leaseResult.heldBy;
+        const ageMs = leaseResult.heldByAgeMs;
+        const staleMs = leaseResult.staleAfterMs;
         logger.error('GPU VM lease held by another benchmarker daemon — refusing to start', {
           vmHost: config.ssh.host,
           heldBy: held
             ? `${held.ownerHostname} (pid ${held.ownerPid}, heartbeat ${held.heartbeatAt})`
             : (leaseResult.error ?? 'unknown'),
+          heartbeatAgeSeconds: ageMs != null ? Math.round(ageMs / 1000) : undefined,
+          staleAfterSeconds: staleMs != null ? Math.round(staleMs / 1000) : undefined,
+          diagnosis:
+            ageMs != null && staleMs != null
+              ? ageMs < staleMs
+                ? 'live daemon holds the lease (single-owner rule: benchmarker runs on kibana-i9 ONLY)'
+                : 'stale lease past threshold — safe to reclaim'
+              : undefined,
         });
         lockfile.release();
         await resultsStore.close();
