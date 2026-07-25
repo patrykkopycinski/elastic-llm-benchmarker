@@ -1,7 +1,9 @@
 import winston from 'winston';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 const SERVICE_NAME = 'elastic-llm-benchmarker';
-const DEFAULT_APP_LOG_FILE = '/var/log/benchmarker/app.jsonl';
+const DEFAULT_APP_LOG_FILE = join(homedir(), '.elastic-llm-benchmarker', 'logs', 'app.jsonl');
 
 /** ECS-style JSON format for file transport (Elastic Agent / Elasticsearch) */
 const jsonFileFormat = winston.format((info) => {

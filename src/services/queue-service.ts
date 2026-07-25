@@ -341,8 +341,8 @@ export class QueueService {
       }
 
       return toEntry(res._id!, res._source);
-    } catch (err: any) {
-      if (err.statusCode === 404 || err.meta?.statusCode === 404) {
+    } catch (err: unknown) {
+      if (isStatusCode(err, 404)) {
         return null;
       }
       throw err;

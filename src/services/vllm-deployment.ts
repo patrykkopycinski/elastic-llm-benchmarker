@@ -906,7 +906,7 @@ export class VllmDeploymentService {
     containerName: string,
     modelId: string,
   ): Promise<number | null> {
-    if (this.options.maxModelLen !== null) {
+    if (this.options.maxModelLen !== null && this.options.maxModelLen !== undefined) {
       return this.options.maxModelLen;
     }
 

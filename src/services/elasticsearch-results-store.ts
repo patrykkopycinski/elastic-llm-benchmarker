@@ -371,7 +371,7 @@ export class ElasticsearchResultsStore {
         const settings = this.sanitizeSettings(config.settings, serverless);
         await this.esClient.indices.create({
           index: indexName,
-          mappings: config.mappings as any,
+          mappings: config.mappings as Record<string, unknown>,
           ...(settings ? { settings } : {}),
         });
         this.logger.info(`Created index: ${indexName}`, { serverless });

@@ -1966,6 +1966,9 @@ if (isQueueCliInvocation()) {
         discoveryScheduler?.stop();
         maintenanceScheduler?.stop();
         await scheduler.stop();
+        // Close SSH pool before releasing the lease — the pool holds idle connections
+        // with 5-min idle timers that leak on every restart if not explicitly closed.
+        sshPool.close();
         await gpuVmLease.release();
         lockfile.release();
         await resultsStore.close();
