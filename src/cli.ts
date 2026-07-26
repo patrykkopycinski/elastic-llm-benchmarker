@@ -896,8 +896,16 @@ program
 
     const logger = createLogger(config.logLevel ?? 'info');
     const repoService = new KibanaRepoService({ config, logger });
-    await repoService.cloneOrPull();
-    await repoService.bootstrap();
+    const cloneResult = await repoService.cloneOrPull();
+    if (!cloneResult.success) {
+      logger.error(`Failed to clone/pull Kibana repo: ${cloneResult.error}`);
+      throw new CliError(`Failed to clone/pull Kibana repo: ${cloneResult.error}`, 1);
+    }
+    const bootstrapResult = await repoService.bootstrap();
+    if (!bootstrapResult.success) {
+      logger.error(`Failed to bootstrap Kibana repo: ${bootstrapResult.error}`);
+      throw new CliError(`Failed to bootstrap Kibana repo: ${bootstrapResult.error}`, 1);
+    }
     logger.info(`Kibana ready at ${repoService.getRepoPath()}`);
   });
 
@@ -1181,6 +1189,17 @@ if (isQueueCliInvocation()) {
 }
 
 // ─── Parse and Execute ─────────────────────────────────────────────────────────
+
+// Uniform handling for CliError thrown from any async command action.
+// Commander does not await action handlers, so a rejected promise surfaces
+// here rather than via a per-command try/catch.
+process.on('unhandledRejection', (reason) => {
+  if (reason instanceof CliError) {
+    if (reason.message) console.error(`Error: ${reason.message}`);
+    process.exit(reason.exitCode);
+  }
+  throw reason;
+});
 
 program.parse(process.argv);
 

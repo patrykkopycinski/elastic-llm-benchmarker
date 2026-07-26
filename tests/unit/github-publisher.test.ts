@@ -26,8 +26,9 @@ describe('GitHubPublisher', () => {
       issueUrl: 'https://github.com/elastic/security-team/issues/15545',
     });
 
-    await publisher.publish('# Test Report');
+    const result = await publisher.publish('# Test Report');
 
+    expect(result.success).toBe(true);
     expect(execAsync).toHaveBeenCalledWith(expect.stringContaining('gh issue comment'));
   });
 
@@ -39,7 +40,22 @@ describe('GitHubPublisher', () => {
       token: 'ghp_test',
     });
 
-    await publisher.publish('# Test Report');
-    // Should not throw
+    const result = await publisher.publish('# Test Report');
+    expect(result.success).toBe(true);
   });
+
+  it('returns a failed ServiceResult when no auth is available', async () => {
+    vi.mocked(execAsync).mockRejectedValue(new Error('gh not found'));
+
+    const publisher = new GitHubPublisher({
+      issueUrl: 'https://github.com/elastic/security-team/issues/15545',
+    });
+
+    const result = await publisher.publish('# Test Report');
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error).toContain('No GitHub auth available');
+    }
+  }, 15000);
 });

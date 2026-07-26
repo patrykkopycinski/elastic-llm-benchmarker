@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import { writeFile, unlink } from 'fs/promises';
 import { createLogger } from '../utils/logger.js';
 import retry from 'async-retry';
+import { type ServiceResult, ok, fail } from '../types/service-result.js';
 
 const execAsync = promisify(exec);
 
@@ -30,32 +31,37 @@ export class GitHubPublisher {
     }
   }
 
-  async publish(markdown: string): Promise<void> {
-    await retry(
-      async () => {
-        if (await this.isGhCliAvailable()) {
-          await this.publishViaGhCli(markdown);
-          return;
-        }
+  async publish(markdown: string): Promise<ServiceResult<void>> {
+    try {
+      await retry(
+        async () => {
+          if (await this.isGhCliAvailable()) {
+            await this.publishViaGhCli(markdown);
+            return;
+          }
 
-        if (this.token) {
-          await this.publishViaApi(markdown);
-          return;
-        }
+          if (this.token) {
+            await this.publishViaApi(markdown);
+            return;
+          }
 
-        throw new Error('No GitHub auth available (gh CLI or GITHUB_TOKEN)');
-      },
-      {
-        retries: 3,
-        minTimeout: 1000,
-        maxTimeout: 10000,
-        onRetry: (error, attempt) => {
-          this.logger.warn(`GitHub publish attempt ${attempt} failed, retrying...`, {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          throw new Error('No GitHub auth available (gh CLI or GITHUB_TOKEN)');
         },
-      }
-    );
+        {
+          retries: 3,
+          minTimeout: 1000,
+          maxTimeout: 10000,
+          onRetry: (error, attempt) => {
+            this.logger.warn(`GitHub publish attempt ${attempt} failed, retrying...`, {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          },
+        }
+      );
+      return ok(undefined);
+    } catch (err) {
+      return fail(err instanceof Error ? err.message : String(err));
+    }
   }
 
   private async isGhCliAvailable(): Promise<boolean> {

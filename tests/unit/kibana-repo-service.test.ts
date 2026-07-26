@@ -33,7 +33,7 @@ vi.mock('../../src/utils/logger.js', () => ({
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
-import { KibanaRepoService, KibanaRepoError } from '../../src/services/kibana-repo-service.js';
+import { KibanaRepoService } from '../../src/services/kibana-repo-service.js';
 
 const execFileMock = vi.mocked(execFile);
 const existsSyncMock = vi.mocked(fs.existsSync);
@@ -146,40 +146,31 @@ describe('KibanaRepoService', () => {
       expect(gitCalls[2]?.[1]).toEqual(['pull', '--ff-only', 'origin', 'main']);
     });
 
-    it('throws KibanaRepoError when clone fails', async () => {
+    it('returns a failed ServiceResult when clone fails', async () => {
       existsSyncMock.mockReturnValue(false);
       mockExecFileFailure('network error');
 
       const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
-      await expect(service.cloneOrPull()).rejects.toThrow(KibanaRepoError);
-      await expect(service.cloneOrPull()).rejects.toThrow('network error');
-    });
+      const result = await service.cloneOrPull();
 
-    it('throws KibanaRepoError with type clone on clone failure', async () => {
-      existsSyncMock.mockReturnValue(false);
-      mockExecFileFailure('network error');
-
-      const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
-      try {
-        await service.cloneOrPull();
-        expect.fail('should have thrown');
-      } catch (err: unknown) {
-        expect(err).toBeInstanceOf(KibanaRepoError);
-        expect((err as KibanaRepoError).type).toBe('clone');
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBe('network error');
+        expect(result.code).toBe('clone');
       }
     });
 
-    it('throws KibanaRepoError with type checkout on pull failure', async () => {
+    it('returns a failed ServiceResult with code checkout on pull failure', async () => {
       existsSyncMock.mockReturnValue(true);
       mockExecFileFailure('merge conflict');
 
       const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
-      try {
-        await service.cloneOrPull();
-        expect.fail('should have thrown');
-      } catch (err: unknown) {
-        expect(err).toBeInstanceOf(KibanaRepoError);
-        expect((err as KibanaRepoError).type).toBe('checkout');
+      const result = await service.cloneOrPull();
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBe('merge conflict');
+        expect(result.code).toBe('checkout');
       }
     });
   });
@@ -239,7 +230,7 @@ describe('KibanaRepoService', () => {
       expect(writeFileSyncMock).toHaveBeenCalled();
     });
 
-    it('throws KibanaRepoError with type bootstrap on bootstrap failure', async () => {
+    it('returns a failed ServiceResult with code bootstrap on bootstrap failure', async () => {
       existsSyncMock.mockImplementation((p) => {
         if (typeof p === 'string' && p.endsWith('.bootstrap-complete')) return false;
         return true;
@@ -247,12 +238,12 @@ describe('KibanaRepoService', () => {
       mockExecFileFailure('bootstrap timeout');
 
       const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
-      try {
-        await service.bootstrap();
-        expect.fail('should have thrown');
-      } catch (err: unknown) {
-        expect(err).toBeInstanceOf(KibanaRepoError);
-        expect((err as KibanaRepoError).type).toBe('bootstrap');
+      const result = await service.bootstrap();
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toBe('bootstrap timeout');
+        expect(result.code).toBe('bootstrap');
       }
     });
   });

@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import type { AppConfig } from '../types/config.js';
 import { createLogger } from '../utils/logger.js';
 import type winston from 'winston';
+import { type ServiceResult, ok, fail } from '../types/service-result.js';
 
 // ─── Errors ───────────────────────────────────────────────────────────────────
 
@@ -57,7 +58,7 @@ export class KibanaRepoService {
     return this.config.cacheDir ?? this.config.clonePath;
   }
 
-  async cloneOrPull(): Promise<void> {
+  async cloneOrPull(): Promise<ServiceResult<void>> {
     const repoPath = this.getRepoPath();
     const branch = this.config.branch;
 
@@ -75,9 +76,9 @@ export class KibanaRepoService {
         ]);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        throw new KibanaRepoError('clone', message);
+        return fail(message, 'clone');
       }
-      return;
+      return ok(undefined);
     }
 
     this.logger.info(`Pulling latest changes for Kibana repo at ${repoPath}`, { branch });
@@ -96,7 +97,7 @@ export class KibanaRepoService {
       }
       if (remoteHead && localHead === remoteHead) {
         this.logger.info('Kibana repo already up to date — skipping fetch', { branch, commit: localHead.slice(0, 8) });
-        return;
+        return ok(undefined);
       }
 
       // --depth 1 matches the initial clone() above. Without it, fetching a
@@ -114,13 +115,14 @@ export class KibanaRepoService {
         timeout: 120_000,
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
       });
+      return ok(undefined);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new KibanaRepoError('checkout', message);
+      return fail(message, 'checkout');
     }
   }
 
-  async bootstrap(): Promise<void> {
+  async bootstrap(): Promise<ServiceResult<void>> {
     const repoPath = this.getRepoPath();
     const markerPath = path.join(repoPath, 'node_modules', '.bootstrap-complete');
     const packageJsonPath = path.join(repoPath, 'package.json');
@@ -130,7 +132,7 @@ export class KibanaRepoService {
       const packageStat = fs.statSync(packageJsonPath);
       if (packageStat.mtimeMs <= markerStat.mtimeMs) {
         this.logger.info('Bootstrap marker exists and package.json is unchanged, skipping bootstrap');
-        return;
+        return ok(undefined);
       }
     }
 
@@ -142,10 +144,11 @@ export class KibanaRepoService {
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new KibanaRepoError('bootstrap', message);
+      return fail(message, 'bootstrap');
     }
 
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString());
+    return ok(undefined);
   }
 }

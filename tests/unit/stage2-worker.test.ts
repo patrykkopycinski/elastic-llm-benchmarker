@@ -89,8 +89,8 @@ describe('Stage2WorkerImpl', () => {
     } as unknown as Stage2Gate;
 
     repoService = {
-      cloneOrPull: vi.fn().mockResolvedValue(undefined),
-      bootstrap: vi.fn().mockResolvedValue(undefined),
+      cloneOrPull: vi.fn().mockResolvedValue({ success: true, data: undefined }),
+      bootstrap: vi.fn().mockResolvedValue({ success: true, data: undefined }),
       getRepoPath: vi.fn().mockReturnValue('/tmp/kibana'),
     } as unknown as KibanaRepoService;
 
@@ -235,17 +235,17 @@ describe('Stage2WorkerImpl', () => {
     expect(saved.status).toBe('failed');
   });
 
-  it('returns error status on repo bootstrap failure', async () => {
+  it('returns failed status on repo clone/pull failure', async () => {
     vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
-    vi.mocked(repoService.cloneOrPull).mockRejectedValue(new Error('git clone failed'));
+    vi.mocked(repoService.cloneOrPull).mockResolvedValue({ success: false, error: 'git clone failed' });
 
     const run = createPipelineRun();
     const stage1 = createStage1Result();
 
     const result = await worker.execute(run, stage1);
 
-    expect(result.status).toBe('error');
-    expect(result.reason).toBe('git clone failed');
+    expect(result.status).toBe('failed');
+    expect(result.reason).toContain('git clone failed');
     expect(evalRunner.run).not.toHaveBeenCalled();
     expect(resultsStore.saveStage2Result).not.toHaveBeenCalled();
   });

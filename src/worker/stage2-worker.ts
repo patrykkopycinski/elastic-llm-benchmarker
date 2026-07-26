@@ -69,9 +69,31 @@ export class Stage2WorkerImpl implements Stage2Worker {
 
       // 3. Clone/pull and bootstrap repo
       this.logger?.info('Stage 2: cloning/pulling Kibana repo', { runId: run.runId });
-      await this.repoService.cloneOrPull();
+      const cloneResult = await this.repoService.cloneOrPull();
+      if (!cloneResult.success) {
+        const result: Stage2Result = {
+          runId: run.runId,
+          modelId: run.modelId,
+          status: 'failed',
+          reason: `Kibana repo clone/pull failed: ${cloneResult.error}`,
+          startedAt,
+          completedAt: now(),
+        };
+        return result;
+      }
       this.logger?.info('Stage 2: bootstrapping Kibana repo', { runId: run.runId });
-      await this.repoService.bootstrap();
+      const bootstrapResult = await this.repoService.bootstrap();
+      if (!bootstrapResult.success) {
+        const result: Stage2Result = {
+          runId: run.runId,
+          modelId: run.modelId,
+          status: 'failed',
+          reason: `Kibana repo bootstrap failed: ${bootstrapResult.error}`,
+          startedAt,
+          completedAt: now(),
+        };
+        return result;
+      }
 
       // 4. Run evaluation suite
       this.logger?.info('Stage 2: running eval suite', { runId: run.runId, endpointUrl });
