@@ -39,7 +39,6 @@ import { LocalTraceQueryBuilder } from './services/local-trace-query-builder.js'
 import { CompositeTraceQueryBuilder } from './services/composite-trace-query-builder.js';
 import { ReasoningPromptBuilderImpl } from './services/reasoning-prompt-builder.js';
 import type { BenchmarkResult } from './types/benchmark.js';
-import type { ModelBenchmarkSummary } from './services/elasticsearch-results-store.js';
 import type { AppConfig } from './types/config.js';
 import { ToolCallBenchmarkService } from './services/tool-call-benchmark.js';
 import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js';
@@ -47,6 +46,9 @@ import { ConfigResearcherService } from './services/config-researcher.js';
 import { runEnqueue } from './cli/enqueue-handler.js';
 import { startHandler, createEsClient, createLlmClient } from './cli/start-handler.js';
 import { CliError } from './cli/shutdown.js';
+import { output, outputError, formatDuration } from './cli/output.js';
+import { resultsHandler } from './cli/results-handler.js';
+import { recommendHandler } from './cli/recommend-handler.js';
 import { buildRecommendationReport } from './services/recommendation-report-builder.js';
 import {
   mapBuildkiteResultToStage2,
@@ -95,44 +97,11 @@ function getResultsDbPath(config: AppConfig | null): string {
   return resolve(resultsDir, 'benchmarks.db');
 }
 
-/**
- * Outputs data in either JSON or human-readable format.
- */
-function output(data: unknown, json: boolean): void {
-  if (json) {
-    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
-  } else if (typeof data === 'string') {
-    process.stdout.write(data + '\n');
-  } else {
-    process.stdout.write(JSON.stringify(data, null, 2) + '\n');
-  }
-}
 
-/**
- * Outputs an error in either JSON or human-readable format.
- */
-function outputError(message: string, json: boolean): void {
-  if (json) {
-    process.stdout.write(JSON.stringify({ error: message }) + '\n');
-  } else {
-    console.error(`Error: ${message}`);
-  }
-}
 
-/**
- * Formats a duration in milliseconds to a human-readable string.
- */
-function formatDuration(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
 
-  if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
-  if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-}
+
+
 
 /**
  * Converts benchmark results to CSV format.
@@ -316,127 +285,7 @@ program
   .option('--offset <n>', 'Number of results to skip', '0')
   .option('--order <dir>', 'Sort order (asc | desc)', 'desc')
   .option('--summary', 'Show summary for each model instead of individual results', false)
-  .action(async (opts) => {
-    const globalOpts = program.opts();
-    const jsonOutput = globalOpts['json'] as boolean;
-
-    const config = loadAppConfig({
-      config: globalOpts['config'] as string,
-      json: jsonOutput,
-    });
-
-    const esClient = createEsClient(config);
-    if (!esClient) {
-      outputError('Cannot connect to Elasticsearch. Check config.', jsonOutput);
-      process.exit(1);
-    }
-
-    const store = new ElasticsearchResultsStore(esClient);
-    await store.initialize();
-
-    try {
-      const showSummary = opts['summary'] as boolean;
-      const modelId = opts['model'] as string | undefined;
-
-      if (showSummary) {
-        // Batch fetch in a single ES query (avoids N+1: one getModelSummary per model)
-        const summaries: ModelBenchmarkSummary[] = modelId
-          ? ((await store.getModelSummary(modelId)) ? [(await store.getModelSummary(modelId))!] : [])
-          : await store.getAllModelSummaries();
-
-        if (jsonOutput) {
-          output({ total: summaries.length, data: summaries }, true);
-        } else {
-          if (summaries.length === 0) {
-            console.error('No benchmark results found.');
-            return;
-          }
-
-          console.error(`Found ${summaries.length} model(s):\n`);
-
-          for (const s of summaries) {
-            console.error(`  ${s.modelId}`);
-            console.error(`    Runs: ${s.totalRuns} (${s.passedRuns} passed, ${s.failedRuns} failed)`);
-            console.error(`    Last Run: ${s.lastRunTimestamp} (${s.lastPassed ? 'PASSED' : 'FAILED'})`);
-            if (s.avgItlMs !== null) {
-              console.error(`    Avg ITL: ${s.avgItlMs.toFixed(2)}ms`);
-            }
-            if (s.avgThroughput !== null) {
-              console.error(`    Avg Throughput: ${s.avgThroughput.toFixed(2)} tok/s`);
-            }
-            if (s.avgToolCallSuccessRate !== null) {
-              console.error(`    Avg Tool Call Success: ${(s.avgToolCallSuccessRate * 100).toFixed(1)}%`);
-            }
-            console.error('');
-          }
-        }
-      } else {
-        const statusFilter = opts['status'] as string | undefined;
-        const limit = parseInt(opts['limit'] as string, 10);
-        const offset = parseInt(opts['offset'] as string, 10);
-        const orderBy = (opts['order'] as string) === 'asc' ? ('asc' as const) : ('desc' as const);
-
-        const results = await store.query({
-          modelId,
-          passed: statusFilter === 'passed' ? true : statusFilter === 'failed' ? false : undefined,
-          after: opts['after'] as string | undefined,
-          before: opts['before'] as string | undefined,
-          gpuType: opts['gpuType'] as string | undefined,
-          limit,
-          offset,
-          orderBy,
-        });
-
-        const stats = await store.getStats();
-        const totalCount =
-          statusFilter === 'passed' ? stats.passed : statusFilter === 'failed' ? stats.failed : stats.total;
-
-        if (jsonOutput) {
-          output({ total: totalCount, offset, limit, data: results }, true);
-        } else {
-          if (results.length === 0) {
-            console.error('No benchmark results found matching the filters.');
-            return;
-          }
-
-          console.error(`Showing ${results.length} of ${totalCount} result(s):\n`);
-
-          for (const r of results) {
-            const status = r.passed ? '\x1b[32mPASSED\x1b[0m' : '\x1b[31mFAILED\x1b[0m';
-            console.error(`  [${status}] ${r.modelId}`);
-            console.error(`    Timestamp: ${r.timestamp}`);
-            console.error(`    vLLM: ${r.vllmVersion}`);
-            console.error(`    GPU: ${r.hardwareConfig.gpuType} x${r.hardwareConfig.gpuCount}`);
-
-            if (r.benchmarkMetrics.length > 0) {
-              for (const m of r.benchmarkMetrics) {
-                console.error(
-                  `    [Concurrency ${m.concurrencyLevel}] ITL: ${m.itlMs.toFixed(2)}ms, ` +
-                    `Throughput: ${m.throughputTokensPerSec.toFixed(2)} tok/s, ` +
-                    `P99: ${m.p99LatencyMs.toFixed(2)}ms`,
-                );
-              }
-            }
-
-            if (r.toolCallResults) {
-              console.error(
-                `    Tool Calls: ${(r.toolCallResults.successRate * 100).toFixed(1)}% success, ` +
-                  `${r.toolCallResults.avgToolCallLatencyMs.toFixed(2)}ms avg latency`,
-              );
-            }
-
-            if (r.rejectionReasons.length > 0) {
-              console.error(`    Rejections: ${r.rejectionReasons.join(', ')}`);
-            }
-
-            console.error('');
-          }
-        }
-      }
-    } finally {
-      await store.close();
-    }
-  });
+  .action(async (opts) => { await resultsHandler(opts, { program }); });
 
 // ─── reevaluate command ───────────────────────────────────────────────────────
 
@@ -854,61 +703,7 @@ program
   .option('--verdict <verdict>', 'Filter by verdict (support | investigate | reject)')
   .option('--limit <n>', 'Number of reports to return', '10')
   .option('--format <fmt>', 'Output format: json or text', 'text')
-  .action(async (opts) => {
-    const globalOpts = program.opts();
-    const jsonOutput = (globalOpts['json'] as boolean) || opts['format'] === 'json';
-    const config = loadAppConfig({ config: globalOpts['config'] as string, json: jsonOutput });
-    const esClient = createEsClient(config);
-    if (!esClient) {
-      outputError('Cannot connect to Elasticsearch. Check config.', jsonOutput);
-      process.exit(1);
-    }
-
-    const store = new ElasticsearchResultsStore(esClient);
-    await store.initialize();
-
-    try {
-      const modelId = opts['model'] as string | undefined;
-
-      if (modelId) {
-        const report = await store.getLatestRecommendation(modelId);
-        if (!report) {
-          outputError(`No recommendation found for ${modelId}`, jsonOutput);
-          process.exit(1);
-        }
-        if (jsonOutput) {
-          output(report, true);
-        } else {
-          printReport(report);
-        }
-      } else {
-        const reports = await store.queryRecommendations({
-          verdict: opts['verdict'] as string | undefined,
-          limit: parseInt(opts['limit'] as string, 10),
-        });
-
-        if (reports.length === 0) {
-          if (jsonOutput) {
-            output({ total: 0, data: [] }, true);
-          } else {
-            console.error('No recommendation reports found.');
-          }
-          return;
-        }
-
-        if (jsonOutput) {
-          output({ total: reports.length, data: reports }, true);
-        } else {
-          console.error(`Found ${reports.length} recommendation report(s):\n`);
-          for (const r of reports) {
-            printReportSummary(r);
-          }
-        }
-      }
-    } finally {
-      await store.close();
-    }
-  });
+  .action(async (opts) => { await recommendHandler(opts, { program }); });
 
 // ─── regenerate-recommendation command ──────────────────────────────────
 // Rebuilds a model's recommendation report from persisted Stage 1/2/3 data
@@ -1103,49 +898,6 @@ program
   });
 
 
-function printReport(r: { modelId: string; verdict: string; confidence: string; hardwareProfile: string; stage1Passed: boolean; stage2Ran: boolean; stage2Passed: boolean | null; stage3Ran: boolean; stage1Metrics: { itl: { p50: number }; ttft: { p50: number }; throughputTps: number } | null; passingEvals: Array<{ suite: string; score: number; threshold: number; passed: boolean }>; blockingIssues: Array<{ severity: string; message: string }>; suggestions: Array<{ title: string; description: string }>; evaluatedAt: string; runId: string }): void {
-  const verdictColor = r.verdict === 'support' ? '\x1b[32m' : r.verdict === 'reject' ? '\x1b[31m' : '\x1b[33m';
-  console.error(`\n=== Recommendation Report: ${r.modelId} ===\n`);
-  console.error(`  Verdict:    ${verdictColor}${r.verdict.toUpperCase()}\x1b[0m`);
-  console.error(`  Confidence: ${r.confidence}`);
-  console.error(`  Hardware:   ${r.hardwareProfile}`);
-  console.error(`  Evaluated:  ${r.evaluatedAt}`);
-  console.error(`  Run ID:     ${r.runId}`);
-  console.error('');
-  console.error(`  Stage 1: ${r.stage1Passed ? 'PASSED' : 'FAILED'}`);
-  if (r.stage1Metrics) {
-    console.error(`    ITL p50:     ${r.stage1Metrics.itl.p50.toFixed(1)}ms`);
-    console.error(`    TTFT:        ${r.stage1Metrics.ttft.p50.toFixed(1)}ms`);
-    console.error(`    Throughput:  ${r.stage1Metrics.throughputTps.toFixed(1)} tps`);
-  }
-  console.error(`  Stage 2: ${r.stage2Ran ? (r.stage2Passed ? 'PASSED' : 'FAILED') : 'NOT RUN'}`);
-  if (r.passingEvals.length > 0) {
-    for (const e of r.passingEvals) {
-      const status = e.passed ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
-      console.error(`    [${status}] ${e.suite}: ${(e.score * 100).toFixed(0)}% (threshold: ${(e.threshold * 100).toFixed(0)}%)`);
-    }
-  }
-  console.error(`  Stage 3: ${r.stage3Ran ? 'COMPLETED' : 'NOT RUN'}`);
-  if (r.blockingIssues.length > 0) {
-    console.error('\n  Blocking Issues:');
-    for (const i of r.blockingIssues) {
-      console.error(`    [${i.severity}] ${i.message}`);
-    }
-  }
-  if (r.suggestions.length > 0) {
-    console.error('\n  Suggestions:');
-    for (const s of r.suggestions) {
-      console.error(`    - ${s.title}: ${s.description}`);
-    }
-  }
-  console.error('');
-}
-
-function printReportSummary(r: { modelId: string; verdict: string; confidence: string; evaluatedAt: string; stage1Passed: boolean; stage2Ran: boolean }): void {
-  const verdictColor = r.verdict === 'support' ? '\x1b[32m' : r.verdict === 'reject' ? '\x1b[31m' : '\x1b[33m';
-  const stages = `S1:${r.stage1Passed ? 'Y' : 'N'} S2:${r.stage2Ran ? 'Y' : '-'}`;
-  console.error(`  ${verdictColor}${r.verdict.toUpperCase().padEnd(12)}\x1b[0m ${r.modelId.padEnd(40)} [${r.confidence}] ${stages}  ${r.evaluatedAt}`);
-}
 
 // ─── benchmark-model command ───────────────────────────────────────────────
 
