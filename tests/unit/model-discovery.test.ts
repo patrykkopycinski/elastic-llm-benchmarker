@@ -256,7 +256,7 @@ describe('ModelDiscoveryService', () => {
       expect(result.totalRejected).toBe(1);
     });
 
-    it('should not reject models with unknown parameter count at the floor', async () => {
+    it('estimates from config.json rather than leaving parameter count unknown at the floor (regression: previously let sub-floor community fine-tunes through as a warn-only unknown)', async () => {
       const unknown = createMockHFModel({
         id: 'org/mystery-model',
         tags: ['text-generation', 'license:apache-2.0', 'transformers'],
@@ -276,8 +276,44 @@ describe('ModelDiscoveryService', () => {
         minParameterCount: 7_000_000_000,
       });
 
-      // No size in the name/tags → unknown count → not rejected at discovery
-      // (the downstream candidate filter warns on it instead).
+      // No size in the name/tags, but config.json dims (32L/4096H/11008I, no
+      // vocab_size in this fixture) estimate to ~7.1B — above the 7B floor, so
+      // it's admitted with a real (non-null) estimated count rather than an
+      // unknown that would only warn downstream.
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.parameterCount).not.toBeNull();
+      expect(result.models[0]!.parameterCount).toBeGreaterThan(7_000_000_000);
+    });
+
+    it('still returns an unknown (null) count when config.json itself carries no size dimensions', async () => {
+      const unknown = createMockHFModel({
+        id: 'org/no-dims-model',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+        config: { model_type: 'llama', architectures: ['LlamaForCausalLM'] },
+      });
+      const configs = new Map([
+        [
+          'org/no-dims-model',
+          createMockConfig({
+            max_position_embeddings: 131072,
+            hidden_size: undefined,
+            num_hidden_layers: undefined,
+            num_attention_heads: undefined,
+            intermediate_size: undefined,
+          }),
+        ],
+      ]);
+      global.fetch = setupFetchMock({
+        searchResults: [[unknown]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({
+        minContextWindow: 128000,
+        minParameterCount: 7_000_000_000,
+      });
+
       expect(result.models).toHaveLength(1);
       expect(result.models[0]!.parameterCount).toBeNull();
     });
@@ -965,12 +1001,18 @@ describe('ModelDiscoveryService', () => {
       expect(result.models[0]!.parameterCount).toBe(7000000000);
     });
 
-    it('should return null when parameter count is unavailable', async () => {
+    it('should return null when parameter count is unavailable (no id/tag marker AND no usable config.json dims)', async () => {
       const mockModel = createMockHFModel({
         id: 'org/model-no-params',
         tags: ['text-generation', 'license:apache-2.0'],
       });
-      const mockConfig = createMockConfig({ max_position_embeddings: 131072 });
+      const mockConfig = createMockConfig({
+        max_position_embeddings: 131072,
+        hidden_size: undefined,
+        num_hidden_layers: undefined,
+        num_attention_heads: undefined,
+        intermediate_size: undefined,
+      });
 
       const configs = new Map([['org/model-no-params', mockConfig]]);
       global.fetch = setupFetchMock({
@@ -982,6 +1024,86 @@ describe('ModelDiscoveryService', () => {
       const result = await service.discover();
 
       expect(result.models[0]!.parameterCount).toBeNull();
+    });
+
+    it('prefers safetensors.total over the id/tag heuristics when present', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/prose-name-model',
+        tags: ['text-generation', 'license:apache-2.0'],
+        safetensors: { total: 14_770_033_664 },
+      });
+      const mockConfig = createMockConfig({ max_position_embeddings: 131072 });
+
+      const configs = new Map([['org/prose-name-model', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models[0]!.parameterCount).toBe(14_770_033_664);
+    });
+
+    it('estimates parameter count from config.json when id/tags/safetensors give no signal (regression: Papajams/ratiocine, inta/hrd-llama slipped past the 24B floor as unknown)', async () => {
+      // inta/hrd-llama shape: 3.2B dense Llama, tied embeddings, no size marker in the id.
+      const mockModel = createMockHFModel({
+        id: 'inta/hrd-llama',
+        tags: ['text-generation', 'license:apache-2.0'],
+      });
+      const mockConfig = createMockConfig({
+        max_position_embeddings: 131072,
+        hidden_size: 3072,
+        num_hidden_layers: 28,
+        num_attention_heads: 24,
+        num_key_value_heads: 8,
+        intermediate_size: 8192,
+        vocab_size: 128256,
+        tie_word_embeddings: true,
+      });
+
+      const configs = new Map([['inta/hrd-llama', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({ minParameterCount: 24_000_000_000 });
+
+      // Below the 24B floor -> must be hard-rejected, not queued as an "unknown, warn-only" candidate.
+      expect(result.models.find((m) => m.id === 'inta/hrd-llama')).toBeUndefined();
+    });
+
+    it('admits a config-estimated model that clears the floor (untied embeddings counted)', async () => {
+      // Qwen3-32B shape: untied embeddings almost double the embedding term;
+      // omitting that previously under-counted this class by ~9%.
+      const mockModel = createMockHFModel({
+        id: 'org/prose-name-large-model',
+        tags: ['text-generation', 'license:apache-2.0'],
+      });
+      const mockConfig = createMockConfig({
+        max_position_embeddings: 131072,
+        hidden_size: 5120,
+        num_hidden_layers: 64,
+        num_attention_heads: 64,
+        num_key_value_heads: 8,
+        intermediate_size: 25600,
+        vocab_size: 151936,
+        tie_word_embeddings: false,
+      });
+
+      const configs = new Map([['org/prose-name-large-model', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({ minParameterCount: 24_000_000_000 });
+
+      expect(result.models.find((m) => m.id === 'org/prose-name-large-model')).toBeDefined();
     });
   });
 

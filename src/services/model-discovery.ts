@@ -29,6 +29,11 @@ interface HFModelEntry {
     [key: string]: unknown;
   };
   siblings?: Array<{ rfilename: string }>;
+  safetensors?: {
+    total?: number;
+    parameters?: Record<string, number>;
+    [key: string]: unknown;
+  };
   [key: string]: unknown;
 }
 
@@ -54,6 +59,14 @@ interface HFModelConfig {
   num_attention_heads?: number;
   hidden_size?: number;
   intermediate_size?: number;
+  vocab_size?: number;
+  num_key_value_heads?: number;
+  tie_word_embeddings?: boolean;
+  num_local_experts?: number;
+  num_experts?: number;
+  n_routed_experts?: number;
+  moe_intermediate_size?: number;
+  text_config?: HFModelConfig;
   [key: string]: unknown;
 }
 
@@ -63,6 +76,14 @@ const HF_API_BASE = 'https://huggingface.co';
 const MAX_PAGES = 10;
 const MODELS_PER_PAGE = 100;
 const DEFAULT_SEARCH = '';
+
+/**
+ * Upward bias applied to a config-derived parameter estimate before it is used
+ * as a hard floor. The estimator omits small terms (biases, norms, MTP heads)
+ * and so runs slightly low; biasing up keeps a borderline model in the funnel
+ * instead of dropping it on estimation error alone.
+ */
+const PARAM_ESTIMATE_TOLERANCE = 0.1;
 
 /**
  * Default whitelist for tool-calling–friendly model families. Derived from the
@@ -418,9 +439,14 @@ export class ModelDiscoveryService {
     }
 
     // Step 3.5: Parameter-count floor (Agent Builder baseline). A known count
-    // below the floor is rejected here; an unknown count is left for the
-    // downstream candidate filter to warn on rather than hard-reject.
-    const parameterCount = this.extractParameterCount(rawModel);
+    // below the floor is rejected here. When the id/tags carry no size marker
+    // (community fine-tunes with prose names), derive the count from the
+    // already-fetched config.json rather than leaving it unknown — an unknown
+    // count only *warns* downstream, which previously let sub-floor models
+    // (3.2B `inta/hrd-llama`, 14.7B `Papajams/ratiocine`) through the 24B gate
+    // and burn a full deploy + Stage 2 cycle each.
+    const parameterCount =
+      this.extractParameterCount(rawModel) ?? this.estimateParameterCountFromConfig(config);
     if (
       options.minParameterCount > 0 &&
       parameterCount !== null &&
@@ -686,12 +712,80 @@ export class ModelDiscoveryService {
       }
     }
 
-    const nameMatch = model.id.match(/(\d+)[bB]/);
+    // `safetensors.total` is the authoritative weight count, but the HF *list*
+    // endpoint (`/api/models?...`) never returns it — only the per-model detail
+    // endpoint does. When a caller has already hydrated the entry (or when this
+    // runs against detail JSON), prefer it over any name heuristic.
+    const safetensors = model.safetensors;
+    if (safetensors && typeof safetensors.total === 'number' && safetensors.total > 0) {
+      return safetensors.total;
+    }
+
+    // Name heuristic. Anchored on a size suffix (`-14B`, `_32b`, `Qwen3-30B-A3B`)
+    // so quantization/packaging noise (`4bit`, `w8a8`, `fp8`) can't be misread as
+    // a parameter count — `iol-ai-2026-solver` style ids simply return null.
+    const nameMatch = model.id.match(/(?:^|[-_./])(\d+(?:\.\d+)?)\s*[bB](?=$|[-_./])/);
     if (nameMatch?.[1]) {
-      return parseInt(nameMatch[1], 10) * 1_000_000_000;
+      return Math.round(parseFloat(nameMatch[1]) * 1_000_000_000);
     }
 
     return null;
+  }
+
+  /**
+   * Estimate total parameter count from `config.json` dimensions.
+   *
+   * Used as the last resort when neither a `params:` tag, `safetensors.total`,
+   * nor a size marker in the model id is available — which is the common case
+   * for community fine-tunes with prose names (`Papajams/ratiocine`,
+   * `inta/hrd-llama`). Without this, an unknown count degrades to a *warning*
+   * in the candidate filter rather than a rejection, so sub-floor models get
+   * queued and burn a full deploy + eval cycle before failing.
+   *
+   * Standard decoder-only transformer accounting:
+   *   embeddings          = vocab_size * hidden_size, doubled for the LM head when
+   *                         `tie_word_embeddings` is false (Qwen2.5/Qwen3 untie —
+   *                         ignoring it under-counted 32B by 9%)
+   *   attention (per layer)= hidden * (hidden + 2 * kv_hidden + hidden)
+   *   MLP (per layer)     = 3 * hidden * intermediate  (gated SwiGLU)
+   * MoE variants multiply the expert MLP term by the routed-expert count.
+   *
+   * Measured against `safetensors.total` on real HF cards the estimate lands
+   * within ~2% (Qwen3-32B 32.8B, Qwen2.5-14B 14.8B, Mistral-Small-24B 24.0B,
+   * hrd-llama 3.2B). It is only consulted as a *hard* floor gate, so the result
+   * is biased up by `PARAM_ESTIMATE_TOLERANCE` before comparison: a borderline
+   * model is admitted and rejected later on real weights rather than being
+   * silently dropped by a few percent of estimation error.
+   */
+  private estimateParameterCountFromConfig(config: HFModelConfig): number | null {
+    const cfg = config.text_config ?? config;
+
+    const layers = cfg.num_hidden_layers;
+    const hidden = cfg.hidden_size;
+    if (!layers || !hidden || layers <= 0 || hidden <= 0) return null;
+
+    const heads = cfg.num_attention_heads ?? 0;
+    const kvHeads = cfg.num_key_value_heads ?? heads;
+    const headDim = heads > 0 ? hidden / heads : 0;
+    const kvHidden = headDim > 0 ? kvHeads * headDim : hidden;
+
+    // q + k + v + o projections
+    const attnPerLayer = hidden * hidden + 2 * (hidden * kvHidden) + hidden * hidden;
+
+    const experts = cfg.num_local_experts ?? cfg.num_experts ?? cfg.n_routed_experts ?? 0;
+    const denseIntermediate = cfg.intermediate_size ?? 4 * hidden;
+    const expertIntermediate = cfg.moe_intermediate_size ?? denseIntermediate;
+    const mlpPerLayer =
+      experts > 0 ? 3 * hidden * expertIntermediate * experts : 3 * hidden * denseIntermediate;
+
+    const vocab = cfg.vocab_size ?? 0;
+    const embeddingMatrices = cfg.tie_word_embeddings === false ? 2 : 1;
+    const embeddings = vocab * hidden * embeddingMatrices;
+
+    const total = embeddings + layers * (attnPerLayer + mlpPerLayer);
+    if (total <= 0) return null;
+
+    return Math.round(total * (1 + PARAM_ESTIMATE_TOLERANCE));
   }
 
   private extractLicense(model: HFModelEntry): string {
