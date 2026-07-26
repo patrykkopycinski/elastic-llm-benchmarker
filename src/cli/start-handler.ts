@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import { gracefulShutdown, CliError } from './shutdown.js';
 import { Client } from '@elastic/elasticsearch';
 import { resolve, dirname } from 'node:path';
 import { mkdirSync, openSync } from 'node:fs';
@@ -141,7 +142,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
 
       // Load config first — needed for both one-off enqueue and scheduler start
       const config = loadAppConfig({ config: configPath, json: false });
-      if (!config) process.exit(1);
+      if (!config) throw new CliError('Failed to load configuration', 1);
 
       if (daemonize && !queueModel) {
         const absConfigPath = resolve(process.cwd(), configPath);
@@ -181,7 +182,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
         const esClient = createEsClient(config);
         if (!esClient) {
           console.error('Error: Could not create Elasticsearch client');
-          process.exit(1);
+          throw new CliError('Could not create Elasticsearch client', 1);
         }
 
         try {
@@ -196,7 +197,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
           if (!result.success) {
             console.error(`Error: ${result.message}`);
             await esClient.close();
-            process.exit(1);
+            throw new CliError(result.message, 1);
           }
 
           console.log(result.message);
@@ -210,7 +211,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
         } catch (error) {
           console.error('Error:', error instanceof Error ? error.message : String(error));
           await esClient.close();
-          process.exit(1);
+          throw new CliError(error instanceof Error ? error.message : String(error), 1);
         }
       }
 
@@ -218,7 +219,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
       const lockfile = new Lockfile({ path: '.benchmarker-queue.lock' });
       if (!lockfile.acquire()) {
         console.error('Error: benchmarker-queue is already running (lockfile exists)');
-        process.exit(1);
+        throw new CliError('benchmarker-queue is already running (lockfile exists)', 1);
       }
 
       // Pre-flight health check — pass config values as env vars
@@ -237,7 +238,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
       } catch {
         lockfile.release();
         console.error('Error: Health check failed. Fix issues and try again.');
-        process.exit(1);
+        throw new CliError('Health check failed. Fix issues and try again.', 1);
       }
 
       const logger = createLogger(config.logLevel ?? 'info');
@@ -254,7 +255,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
       if (!esClient) {
         lockfile.release();
         console.error('Error: Could not create Elasticsearch client');
-        process.exit(1);
+        throw new CliError('Could not create Elasticsearch client', 1);
       }
 
       // Ensure all ES indices exist with correct mappings
@@ -300,7 +301,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
         lockfile.release();
         await resultsStore.close();
         await esClient.close();
-        process.exit(1);
+        throw new CliError('Fatal error during scheduler startup', 1);
       }
       logger.info('Acquired GPU VM lease', { vmHost: config.ssh.host });
 
@@ -382,7 +383,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
             modelId: enqueueAfterClear,
             error: enqueueResult.message,
           });
-          process.exit(1);
+          throw new CliError(enqueueResult.message, 1);
         }
         logger.info('Enqueued validation model after clear-pending', {
           modelId: enqueueAfterClear,
@@ -509,7 +510,7 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
         if (!initResult.success) {
           logger.error('Failed to initialize local connector', { error: initResult.error });
           lockfile.release();
-          process.exit(1);
+          throw new CliError(initResult.error ?? 'Failed to initialize local connector', 1);
         }
         logger.info('Local connector initialized', { outputDir });
       }
@@ -641,21 +642,23 @@ export async function startHandler(opts: Record<string, unknown>, _deps: { progr
         logger.warn('Received SIGHUP — ignoring (daemon keeps running)');
       });
 
-      // Graceful shutdown
+      // Graceful shutdown — delegate to centralized shutdown utility
       const shutdown = async (signal: string) => {
-        logger.info(`Received ${signal}. Stopping scheduler...`);
-        clearInterval(leaseHeartbeat);
-        discoveryScheduler?.stop();
-        maintenanceScheduler?.stop();
-        await scheduler.stop();
-        // Close SSH pool before releasing the lease — the pool holds idle connections
-        // with 5-min idle timers that leak on every restart if not explicitly closed.
-        sshPool.close();
-        await gpuVmLease.release();
-        lockfile.release();
-        await resultsStore.close();
-        await esClient.close();
-        logger.info('Shutdown complete.');
+        await gracefulShutdown(
+          {
+            scheduler,
+            sshPool,
+            esClient,
+            resultsStore,
+            gpuVmLease,
+            lockfile,
+            leaseHeartbeat,
+            discoveryScheduler,
+            maintenanceScheduler,
+          },
+          signal,
+          logger,
+        );
         process.exit(0);
       };
 

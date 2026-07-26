@@ -46,6 +46,7 @@ import { buildDeployCommandWithToolCalling } from './services/vllm-deployment.js
 import { ConfigResearcherService } from './services/config-researcher.js';
 import { runEnqueue } from './cli/enqueue-handler.js';
 import { startHandler, createEsClient, createLlmClient } from './cli/start-handler.js';
+import { CliError } from './cli/shutdown.js';
 import { buildRecommendationReport } from './services/recommendation-report-builder.js';
 import {
   mapBuildkiteResultToStage2,
@@ -1358,7 +1359,17 @@ if (isQueueCliInvocation()) {
     )
     .option('--connector <type>', 'Output connector: "elasticsearch" (default) or "local"', 'elasticsearch')
     .option('--output-dir <path>', 'Output directory for local connector', './benchmark-output')
-    .action(async (opts) => { await startHandler(opts, { program }); });
+    .action(async (opts) => {
+      try {
+        await startHandler(opts, { program });
+      } catch (err) {
+        if (err instanceof CliError) {
+          if (err.message) console.error(`Error: ${err.message}`);
+          process.exit(err.exitCode);
+        }
+        throw err;
+      }
+    });
 
   program
     .command('queue <modelId>')
