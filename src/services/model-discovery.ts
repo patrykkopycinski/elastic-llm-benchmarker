@@ -115,7 +115,27 @@ const defaultOptions: Required<ModelDiscoveryOptions> = {
  */
 const COMPATIBLE_ARCHITECTURES: ReadonlySet<string> = VLLM_SUPPORTED_ARCHITECTURES;
 
-/** Known open-source / permissive license identifiers on HuggingFace */
+/**
+ * Known open-source / permissive license identifiers on HuggingFace that
+ * permit commercial use.
+ *
+ * Deliberately excludes:
+ *  - 'other': HF's catch-all bucket for any license string with no
+ *    dedicated tag — covers everything from real permissive licenses to
+ *    explicitly non-commercial ones (e.g. black-forest-labs/FLUX.1-dev is
+ *    tagged license:other and its actual terms are the
+ *    "flux-1-dev-non-commercial-license" — non-commercial use only).
+ *    Unverifiable without fetching and parsing the model card's free-text
+ *    LICENSE.md, so treated as a rejection rather than a silent pass.
+ *  - 'cc-by-nc-4.0' / 'cc-by-nc-sa-4.0': Creative Commons NonCommercial
+ *    variants — NC explicitly forbids commercial use. These were
+ *    previously (incorrectly) included in this set.
+ *
+ * RAIL-family licenses (openrail, bigscience-openrail-m,
+ * bigcode-openrail-m, creativeml-openrail-m, bigscience-bloom-rail-1.0) and
+ * the Llama/Gemma community licenses DO permit commercial use (subject to
+ * behavioral/usage restrictions, not a commercial-use ban) and are kept.
+ */
 const OPEN_SOURCE_LICENSES = new Set([
   'apache-2.0',
   'mit',
@@ -125,8 +145,6 @@ const OPEN_SOURCE_LICENSES = new Set([
   'mpl-2.0',
   'cc-by-4.0',
   'cc-by-sa-4.0',
-  'cc-by-nc-4.0',
-  'cc-by-nc-sa-4.0',
   'cc0-1.0',
   'unlicense',
   'isc',
@@ -143,7 +161,6 @@ const OPEN_SOURCE_LICENSES = new Set([
   'llama3.2',
   'llama3.3',
   'gemma',
-  'other',
 ]);
 
 /** Maps common HF tags to architecture family names. */

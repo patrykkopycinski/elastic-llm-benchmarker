@@ -341,6 +341,51 @@ describe('ModelDiscoveryService', () => {
       expect(result.totalRejected).toBe(1);
     });
 
+    it("should reject models tagged license:other (HF catch-all for unverifiable/non-standard licenses, e.g. FLUX.1-dev's non-commercial license)", async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/license-other-model',
+        tags: ['text-generation', 'license:other', 'transformers'],
+        config: { model_type: 'llama' },
+      });
+      const mockConfig = createMockConfig({ max_position_embeddings: 131072 });
+
+      const configs = new Map([['org/license-other-model', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['license-not-open-source']).toBe(1);
+    });
+
+    it.each(['cc-by-nc-4.0', 'cc-by-nc-sa-4.0'])(
+      'should reject models with the NonCommercial license %s',
+      async (license) => {
+        const mockModel = createMockHFModel({
+          id: `org/nc-licensed-model-${license}`,
+          tags: ['text-generation', `license:${license}`, 'transformers'],
+          config: { model_type: 'llama' },
+        });
+        const mockConfig = createMockConfig({ max_position_embeddings: 131072 });
+
+        const configs = new Map([[`org/nc-licensed-model-${license}`, mockConfig]]);
+        global.fetch = setupFetchMock({
+          searchResults: [[mockModel]],
+          configs,
+        }) as typeof global.fetch;
+
+        const service = new ModelDiscoveryService('test-token', [], 'error');
+        const result = await service.discover();
+
+        expect(result.models).toHaveLength(0);
+        expect(result.rejectionBreakdown['license-not-open-source']).toBe(1);
+      },
+    );
+
     it('should reject models with incompatible architecture', async () => {
       const mockModel = createMockHFModel({
         id: 'org/vision-model',
