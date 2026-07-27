@@ -813,16 +813,29 @@ export const discoverySchedulerConfigSchema = z.object({
    * Search terms run as an always-on discovery tier (not gated on "0
    * hardware-fit candidates" like `fallbackSearchProbes`) to actively surface
    * security-domain-tuned models every run, not just as a last resort. Each
-   * term is a HuggingFace search query (e.g. "foundation-sec",
-   * "whiterabbitneo") run with the primary sort; results still go through
-   * every existing gate (license, context, param floor, hardware fit) and
-   * get `securityDomainPatterns`-matched score boosting on top. Set to []
-   * to disable the dedicated probe (boosting via `securityDomainPatterns`
-   * still applies to whatever the primary/freshness/fallback sweeps find).
+   * term is a HuggingFace search query run with the primary sort; results
+   * still go through every existing gate (license, context, param floor,
+   * hardware fit) and get `securityDomainPatterns`-matched score boosting on
+   * top. Set to [] to disable the dedicated probe (boosting via
+   * `securityDomainPatterns` still applies to whatever the
+   * primary/freshness/fallback sweeps find).
+   *
+   * Terms verified live against the HF search API on 2026-07-27: branded
+   * probe terms (`foundation-sec`, `whiterabbitneo`, `security instruct`)
+   * matched HF's fuzzy index but returned zero candidates clearing this
+   * repo's 24B-param / tool-calling / non-GGUF / non-adapter floor — nearly
+   * every branded "security LLM" on HF today is a <10B toy model, a GGUF
+   * quant, or a LoRA adapter, not a full mergeable checkpoint. Generic
+   * defensive-security terms surface real full-size candidates instead
+   * (verified: `security`/`cybersecurity` surfaced 24-35B fine-tunes on
+   * whitelisted bases). Deliberately excludes offensive/red-team framing
+   * ("pentest", "exploit", "offensive security", "red team") — this probe
+   * is scoped to defensive/analysis-oriented security models; see
+   * `securityDomainPatterns` below for the same scoping rationale.
    */
   securityDomainSearchProbes: z
     .array(z.string())
-    .default(['foundation-sec', 'whiterabbitneo', 'security instruct']),
+    .default(['security', 'cybersecurity', 'threat detection', 'incident response']),
   /**
    * Case-insensitive regex patterns matched against the model id. A model whose
    * id matches ANY pattern is hard-skipped during scoring — never scored,
@@ -851,15 +864,30 @@ export const discoverySchedulerConfigSchema = z.object({
    * or auto-passes a model past the license/context/param-count/hardware
    * gates, it only changes queue ordering.
    *
-   * Seeded with the known cybersecurity-domain model families as of
-   * 2026-07-27 (Foundation-Sec, WhiteRabbitNeo, ZySec, SecurityLLM); extend
-   * as new security-tuned releases surface. Matches base id substrings, not
-   * regex, to stay predictable for a config maintained by non-regex-fluent
-   * operators.
+   * Seeded with the known defensive/analysis-oriented cybersecurity-domain
+   * model families as of 2026-07-27 (Foundation-Sec, WhiteRabbitNeo, ZySec,
+   * SecurityLLM) plus generic `security`/`cybersecurity` substrings, which a
+   * live 2026-07-27 HF sweep confirmed are the terms that actually surface
+   * full-size (24B+) fine-tunes today (the branded names mostly return <10B
+   * toy models, GGUF quants, or LoRA adapters that never reach this gate).
+   * Deliberately does NOT include offensive/red-team framing (e.g.
+   * "offsec", "pentest", "cyberstrike") or abliterated/safety-stripped
+   * releases — this repo's security-domain focus is scoped to defensive and
+   * analysis-oriented models. Extend as new defensive-security releases
+   * surface; matches base id substrings, not regex, to stay predictable for
+   * a config maintained by non-regex-fluent operators.
    */
   securityDomainPatterns: z
     .array(z.string())
-    .default(['foundation-sec', 'whiterabbitneo', 'zysec', 'securityllm', 'sec-gemini', 'cybersec']),
+    .default([
+      'foundation-sec',
+      'whiterabbitneo',
+      'zysec',
+      'securityllm',
+      'sec-gemini',
+      'cybersec',
+      'security',
+    ]),
 });
 
 /**

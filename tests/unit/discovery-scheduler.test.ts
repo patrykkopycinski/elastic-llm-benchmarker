@@ -6,6 +6,7 @@ import {
 } from '../../src/services/discovery-scheduler.js';
 import type { ScoredModel } from '../../src/services/discovery-scheduler.js';
 import { createLogger } from '../../src/utils/logger.js';
+import { discoverySchedulerConfigSchema } from '../../src/types/config.js';
 
 import type { ModelDiscoveryService } from '../../src/services/model-discovery.js';
 import type { HardwareEstimator } from '../../src/services/hardware-estimator.js';
@@ -1064,6 +1065,60 @@ describe('DiscoveryScheduler', () => {
 
       await scheduler.discoverAndScore();
       expect(discover).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('security-domain default config scoping (defensive-only)', () => {
+    // Regression guard: on 2026-07-27 the first cut of these defaults used
+    // branded probe terms (foundation-sec, whiterabbitneo, security
+    // instruct) that a live HF sweep showed return zero candidates clearing
+    // this repo's 24B-param/tool-calling/non-GGUF/non-adapter floor. The
+    // real available supply at that size is dominated by offensive-security/
+    // pentesting/red-team fine-tunes and abliterated (safety-stripped)
+    // releases (e.g. a CyberStrike-OffSec-* / *-abliterated pair verified
+    // live against HF on 2026-07-27). This repo's security-domain focus is
+    // scoped to defensive/analysis-oriented models only, so the defaults
+    // must never accidentally match that kind of model id.
+    const offensiveOrAbliteratedIds = [
+      'oyildirim/CyberStrike-OffSec-35B',
+      'cyberneurova/CyberNeurova-Qwen3.6-35B-A3B-abliterated',
+      'some-org/Llama-3-70B-PentestGPT',
+      'some-org/RedTeam-Offensive-LLM-34B',
+    ];
+
+    it('securityDomainPatterns defaults do not match offensive/pentest/abliterated model ids', () => {
+      const { securityDomainPatterns } = discoverySchedulerConfigSchema.parse({});
+      for (const id of offensiveOrAbliteratedIds) {
+        const matched = securityDomainPatterns.filter((p) => id.toLowerCase().includes(p));
+        expect(matched, `${id} unexpectedly matched: ${matched.join(', ')}`).toEqual([]);
+      }
+    });
+
+    it('securityDomainPatterns defaults DO match known defensive-security model ids', () => {
+      const { securityDomainPatterns } = discoverySchedulerConfigSchema.parse({});
+      const defensiveIds = [
+        'fdtn-ai/Foundation-Sec-8B-Instruct',
+        'WhiteRabbitNeo/Llama-3.1-WhiteRabbitNeo-2-70B',
+        'ZySec-AI/SecurityLLM',
+        'some-org/Cybersec-Analyst-32B',
+      ];
+      for (const id of defensiveIds) {
+        const matched = securityDomainPatterns.some((p) => id.toLowerCase().includes(p));
+        expect(matched, `${id} should have matched a defensive-security pattern`).toBe(true);
+      }
+    });
+
+    it('securityDomainSearchProbes defaults contain only generic defensive-security terms, no offensive/red-team framing', () => {
+      const { securityDomainSearchProbes } = discoverySchedulerConfigSchema.parse({});
+      const offensiveTerms = ['pentest', 'exploit', 'offensive', 'red team', 'redteam', 'offsec'];
+      for (const probe of securityDomainSearchProbes) {
+        for (const bad of offensiveTerms) {
+          expect(probe.toLowerCase()).not.toContain(bad);
+        }
+      }
+      // Sanity: the probe list isn't accidentally empty (which would
+      // silently disable the always-on discovery tier).
+      expect(securityDomainSearchProbes.length).toBeGreaterThan(0);
     });
   });
 
