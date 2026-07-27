@@ -1,5 +1,51 @@
 import { describe, it, expect } from 'vitest';
-import { estimateParamsBillionsFromConfig } from '../../src/services/hf-card-parser.js';
+import {
+  estimateParamsBillionsFromConfig,
+  extractContextWindowFromConfig,
+} from '../../src/services/hf-card-parser.js';
+
+describe('extractContextWindowFromConfig', () => {
+  it('reads max_position_embeddings from top-level config', () => {
+    expect(extractContextWindowFromConfig({ max_position_embeddings: 131072 }, '')).toBe(131072);
+  });
+
+  it('falls back to text_config.max_position_embeddings for VLM-wrapped configs (regression: Mistral-Small-3.2-24B-Instruct-2506 / Qwen3.6-35B-A3B-FP8-style configs nest real text-model dims under text_config while top-level fields are undefined for the multimodal wrapper — this used to return 0 for a real 262144-token model)', () => {
+    const config = {
+      model_type: 'mistral3',
+      text_config: {
+        max_position_embeddings: 262144,
+      },
+    };
+    expect(extractContextWindowFromConfig(config, '')).toBe(262144);
+  });
+
+  it('prefers top-level max_position_embeddings over text_config when both are present', () => {
+    const config = {
+      max_position_embeddings: 4096,
+      text_config: { max_position_embeddings: 262144 },
+    };
+    expect(extractContextWindowFromConfig(config, '')).toBe(4096);
+  });
+
+  it('applies rope_scaling using text_config.original_max_position_embeddings when top-level rope data is absent', () => {
+    const config = {
+      text_config: {
+        rope_scaling: { factor: 4.0, original_max_position_embeddings: 32768 },
+      },
+    };
+    expect(extractContextWindowFromConfig(config, '')).toBe(131072);
+  });
+
+  it('falls back to README text patterns when config is null', () => {
+    expect(
+      extractContextWindowFromConfig(null, 'This model has context window: 128k tokens.'),
+    ).toBe(128_000);
+  });
+
+  it('returns 0 when neither config nor README yield a signal', () => {
+    expect(extractContextWindowFromConfig({}, 'no size info here')).toBe(0);
+  });
+});
 
 describe('estimateParamsBillionsFromConfig', () => {
   it('returns null when shape fields are missing', () => {
