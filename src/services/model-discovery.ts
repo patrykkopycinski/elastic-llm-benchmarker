@@ -1,7 +1,10 @@
 import type { ModelInfo } from '../types/benchmark.js';
 import type { VMHardwareProfile } from '../types/config.js';
 import { HardwareEstimator } from './hardware-estimator.js';
-import { extractContextWindowFromConfig, normalizeArchitectureFromConfig } from './hf-config-utils.js';
+import {
+  extractContextWindowFromConfig,
+  normalizeArchitectureFromConfig,
+} from './hf-config-utils.js';
 import { createLogger } from '../utils/logger.js';
 import {
   TOOL_CALLING_WHITELIST,
@@ -206,11 +209,38 @@ export interface ModelCandidate {
   supportsToolCalling: boolean;
 }
 
+/**
+ * Stable machine-readable rejection categories, one per gate in
+ * fastReject()/evaluateCandidate(). Kept as a fixed enum (not free-text
+ * reason strings) so rejectionBreakdown counts are comparable/alertable
+ * across runs — "0 accepted" is undiagnosable from a single aggregate
+ * number, but "980/1000 rejected for architecture-incompatible" points
+ * straight at a whitelist or normalizeArchitecture bug.
+ */
+export type RejectionCategory =
+  | 'already-evaluated'
+  | 'cuda-incompatible-packaging'
+  | 'architecture-not-whitelisted'
+  | 'vram-budget-fast-reject'
+  | 'config-fetch-failed'
+  | 'architecture-not-compatible'
+  | 'context-window-too-small'
+  | 'parameter-count-below-floor'
+  | 'license-not-open-source'
+  | 'hardware-fit-failed';
+
 export interface DiscoverResult {
   models: ModelCandidate[];
   totalRejected: number;
   totalScanned: number;
   timestamp: string;
+  /**
+   * Count of rejections by category, so a "0 accepted" run can be diagnosed
+   * from the aggregate log line instead of grepping debug logs for
+   * per-model reasons. Categories are stable machine keys (not free text)
+   * so they can be compared/alerted on across runs.
+   */
+  rejectionBreakdown: Record<RejectionCategory, number>;
 }
 
 export interface ModelDiscoveryOptions {
@@ -271,9 +301,7 @@ export class ModelDiscoveryService {
     this.evaluatedModelIds = new Set(evaluatedModelIds);
     this.hardwareProfile = hardwareProfile;
     this.hardwareEstimator = new HardwareEstimator();
-    this.typeWhitelist = new Set(
-      typeWhitelist ?? Array.from(DEFAULT_TOOL_CALLING_WHITELIST),
-    );
+    this.typeWhitelist = new Set(typeWhitelist ?? Array.from(DEFAULT_TOOL_CALLING_WHITELIST));
 
     if (hardwareProfile) {
       // Heuristic per-GPU VRAM table (mirrors HardwareEstimator)
@@ -313,6 +341,18 @@ export class ModelDiscoveryService {
     const models: ModelCandidate[] = [];
     let totalRejected = 0;
     let totalScanned = 0;
+    const rejectionBreakdown: Record<RejectionCategory, number> = {
+      'already-evaluated': 0,
+      'cuda-incompatible-packaging': 0,
+      'architecture-not-whitelisted': 0,
+      'vram-budget-fast-reject': 0,
+      'config-fetch-failed': 0,
+      'architecture-not-compatible': 0,
+      'context-window-too-small': 0,
+      'parameter-count-below-floor': 0,
+      'license-not-open-source': 0,
+      'hardware-fit-failed': 0,
+    };
 
     for await (const page of this.fetchModelPages(opts)) {
       for (const rawModel of page) {
@@ -320,36 +360,43 @@ export class ModelDiscoveryService {
 
         if (this.isEvaluated(id)) {
           totalRejected++;
+          rejectionBreakdown['already-evaluated']++;
           continue;
         }
 
         // ── Fast reject (no extra HTTP call) ──────────────────────────
-        const reason = this.fastReject(rawModel as HFModelEntry);
-        if (reason) {
-          this.logger.debug(`Fast rejected ${id}: ${reason}`);
+        const fastRejection = this.fastReject(rawModel as HFModelEntry);
+        if (fastRejection) {
+          this.logger.debug(`Fast rejected ${id}: ${fastRejection.reason}`);
           totalRejected++;
           totalScanned++;
+          rejectionBreakdown[fastRejection.category]++;
           continue;
         }
 
         totalScanned++;
-        const candidate = await this.evaluateCandidate(
-          rawModel as HFModelEntry,
-          opts,
-        );
-        if (!candidate) {
+        const result = await this.evaluateCandidate(rawModel as HFModelEntry, opts);
+        if ('reason' in result) {
           totalRejected++;
+          rejectionBreakdown[result.reason]++;
           continue;
         }
 
-        models.push(candidate);
+        models.push(result.candidate);
         if (models.length >= opts.limit) break;
       }
       if (models.length >= opts.limit) break;
     }
 
+    const breakdownSummary = Object.entries(rejectionBreakdown)
+      .filter(([, count]) => count > 0)
+      .sort(([, a], [, b]) => b - a)
+      .map(([category, count]) => `${category}=${count}`)
+      .join(', ');
+
     this.logger.info(
-      `Discovery complete: ${models.length} accepted, ${totalRejected} rejected from ${totalScanned} scanned`,
+      `Discovery complete: ${models.length} accepted, ${totalRejected} rejected from ${totalScanned} scanned` +
+        (breakdownSummary ? ` (${breakdownSummary})` : ''),
     );
 
     return {
@@ -357,6 +404,7 @@ export class ModelDiscoveryService {
       totalRejected,
       totalScanned,
       timestamp: new Date().toISOString(),
+      rejectionBreakdown,
     };
   }
 
@@ -364,9 +412,7 @@ export class ModelDiscoveryService {
    * Yield pages of HF search results so that `discover()` can
    * evaluate and exit early without holding every model in memory.
    */
-  private async *fetchModelPages(
-    options: ModelDiscoveryOptions,
-  ): AsyncGenerator<HFModelEntry[]> {
+  private async *fetchModelPages(options: ModelDiscoveryOptions): AsyncGenerator<HFModelEntry[]> {
     const { search, sort, includeGated } = options;
     let page = 0;
 
@@ -379,14 +425,10 @@ export class ModelDiscoveryService {
         ...(sort ? { sort } : {}),
       });
 
-      const response = await this.fetchWithAuth(
-        `${HF_API_BASE}/api/models?${params}`,
-      );
+      const response = await this.fetchWithAuth(`${HF_API_BASE}/api/models?${params}`);
 
       if (!response.ok) {
-        this.logger.error(
-          `HF search failed: ${response.status} ${response.statusText}`,
-        );
+        this.logger.error(`HF search failed: ${response.status} ${response.statusText}`);
         break;
       }
 
@@ -416,27 +458,34 @@ export class ModelDiscoveryService {
    *
    * This is the *expensive* path: it fetches config.json and optionally
    * model_info.json. VRAM fit is checked here with the exact config.
+   *
+   * Returns the accepted candidate, or a RejectionCategory explaining why
+   * it was rejected. Previously returned a bare `null` on every rejection
+   * path (steps 1-4), leaving "Discovery complete: 0 accepted, N rejected"
+   * completely undiagnosable without manually flipping logLevel to debug
+   * and re-running — this makes the reason a first-class return value so
+   * discover() can aggregate it into rejectionBreakdown unconditionally.
    */
   private async evaluateCandidate(
     rawModel: HFModelEntry,
     options: Required<ModelDiscoveryOptions>,
-  ): Promise<ModelCandidate | null> {
+  ): Promise<{ candidate: ModelCandidate } | { reason: RejectionCategory }> {
     const id = rawModel.id;
 
     // Step 1: Fetch model config
     const config = await this.fetchModelConfig(id);
-    if (!config) return null;
+    if (!config) return { reason: 'config-fetch-failed' };
 
     // Step 2: Architecture compatibility
     const architecture = this.normalizeArchitecture(config);
     if (!architecture || !COMPATIBLE_ARCHITECTURES.has(architecture)) {
-      return null;
+      return { reason: 'architecture-not-compatible' };
     }
 
     // Step 3: Context window check
     const contextWindow = this.extractContextWindow(config);
     if (contextWindow < options.minContextWindow) {
-      return null;
+      return { reason: 'context-window-too-small' };
     }
 
     // Step 3.5: Parameter-count floor (Agent Builder baseline). A known count
@@ -453,13 +502,13 @@ export class ModelDiscoveryService {
       parameterCount !== null &&
       parameterCount < options.minParameterCount
     ) {
-      return null;
+      return { reason: 'parameter-count-below-floor' };
     }
 
     // Step 4: License check
     const license = this.extractLicense(rawModel);
     if (!OPEN_SOURCE_LICENSES.has(license)) {
-      return null;
+      return { reason: 'license-not-open-source' };
     }
 
     // Step 5: Deep hardware-fit check
@@ -467,7 +516,7 @@ export class ModelDiscoveryService {
       const fit = this.hardwareEstimator.dryRunCheck(config, this.hardwareProfile);
       if (!fit.fits) {
         this.logger.debug(`Rejected ${id}: ${fit.reason}`);
-        return null;
+        return { reason: 'hardware-fit-failed' };
       }
     }
 
@@ -478,14 +527,16 @@ export class ModelDiscoveryService {
     const name = id.split('/').pop() ?? id;
 
     return {
-      id,
-      name,
-      architecture,
-      contextWindow,
-      license,
-      parameterCount,
-      quantizations,
-      supportsToolCalling,
+      candidate: {
+        id,
+        name,
+        architecture,
+        contextWindow,
+        license,
+        parameterCount,
+        quantizations,
+        supportsToolCalling,
+      },
     };
   }
 
@@ -494,10 +545,11 @@ export class ModelDiscoveryService {
   /**
    * Quick rejection heuristics that run *before* config.json is fetched.
    *
-   * Returns a human-readable reason string if the model should be skipped,
-   * or `null` if it passes and warrants the expensive deep evaluation.
+   * Returns a machine-readable category + human-readable reason if the
+   * model should be skipped, or `null` if it passes and warrants the
+   * expensive deep evaluation.
    */
-  private fastReject(model: HFModelEntry): string | null {
+  private fastReject(model: HFModelEntry): { category: RejectionCategory; reason: string } | null {
     // 0. CUDA-incompatible packaging (e.g. MLX — Apple Silicon only). These
     // quantize with fields (`bits` with no `quant_method`) that the VRAM
     // estimator misreads as a real vLLM-loadable quantization, drastically
@@ -509,13 +561,19 @@ export class ModelDiscoveryService {
     // pre-deployment filter with estimatedVramGb underestimated and OOM'd.
     const incompatibleLibrary = this.detectCudaIncompatibleLibrary(model);
     if (incompatibleLibrary) {
-      return `packaging '${incompatibleLibrary}' is not vLLM/CUDA-loadable`;
+      return {
+        category: 'cuda-incompatible-packaging',
+        reason: `packaging '${incompatibleLibrary}' is not vLLM/CUDA-loadable`,
+      };
     }
 
     // 1. Type whitelist (from search-result metadata)
     const modelType = this.extractModelTypeFromSearchResult(model);
     if (modelType && !this.typeWhitelist.has(modelType)) {
-      return `type '${modelType}' not in whitelist`;
+      return {
+        category: 'architecture-not-whitelisted',
+        reason: `type '${modelType}' not in whitelist`,
+      };
     }
 
     // 2. Rough VRAM budget check from parameter count
@@ -524,7 +582,10 @@ export class ModelDiscoveryService {
       if (params && params > 0) {
         const estimatedGb = this.estimateVramGbFromParams(params);
         if (estimatedGb > this.targetVramGb) {
-          return `estimated VRAM ${estimatedGb.toFixed(1)} GB > budget ${this.targetVramGb.toFixed(1)} GB`;
+          return {
+            category: 'vram-budget-fast-reject',
+            reason: `estimated VRAM ${estimatedGb.toFixed(1)} GB > budget ${this.targetVramGb.toFixed(1)} GB`,
+          };
         }
       }
     }
@@ -572,7 +633,7 @@ export class ModelDiscoveryService {
   /** Heuristic: fp16 weights + 20 % overhead for KV-cache / activations. */
   private estimateVramGbFromParams(params: number): number {
     // 2 bytes/param (fp16/bf16) * 1.2 overhead factor
-    return (params * 2 * 1.2) / (1024 ** 3);
+    return (params * 2 * 1.2) / 1024 ** 3;
   }
 
   // ─── Metadata Extraction (kept from original) ─────────────────────────────
@@ -581,10 +642,7 @@ export class ModelDiscoveryService {
     return normalizeArchitectureFromConfig(config);
   }
 
-  private extractQuantizations(
-    model: HFModelEntry,
-    config: HFModelConfig,
-  ): string[] {
+  private extractQuantizations(model: HFModelEntry, config: HFModelConfig): string[] {
     const quants = new Set<string>();
 
     if (config.quantization_config) {
@@ -602,7 +660,23 @@ export class ModelDiscoveryService {
     if (model.tags) {
       for (const tag of model.tags) {
         const lower = tag.toLowerCase();
-        if (['awq', 'gptq', 'gguf', 'exl2', 'bq', 'q4', 'q5', 'q6', 'q8', 'int4', 'int8', 'fp16', 'bf16'].some((q) => lower.includes(q))) {
+        if (
+          [
+            'awq',
+            'gptq',
+            'gguf',
+            'exl2',
+            'bq',
+            'q4',
+            'q5',
+            'q6',
+            'q8',
+            'int4',
+            'int8',
+            'fp16',
+            'bf16',
+          ].some((q) => lower.includes(q))
+        ) {
           quants.add(lower);
         }
       }
@@ -808,9 +882,7 @@ export class ModelDiscoveryService {
   async fetchModelInfo(modelId: string): Promise<ModelInfo | null> {
     if (this.infoCache.has(modelId)) return this.infoCache.get(modelId)!;
     try {
-      const response = await this.fetchWithAuth(
-        `${HF_API_BASE}/api/models/${modelId}`,
-      );
+      const response = await this.fetchWithAuth(`${HF_API_BASE}/api/models/${modelId}`);
       if (!response.ok) {
         this.infoCache.set(modelId, null);
         return null;

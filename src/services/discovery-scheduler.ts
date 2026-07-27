@@ -39,8 +39,24 @@ const SUPERSEDE_MIN_AGE_GAP_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Variant/quantization suffix tokens that never distinguish a model family. */
 const FAMILY_VARIANT_TOKENS = new Set([
-  'instruct', 'chat', 'it', 'base', 'preview', 'thinking', 'reasoner', 'reasoning',
-  'fp8', 'fp16', 'bf16', 'awq', 'gptq', 'gguf', 'mlx', 'int3', 'int4', 'int8',
+  'instruct',
+  'chat',
+  'it',
+  'base',
+  'preview',
+  'thinking',
+  'reasoner',
+  'reasoning',
+  'fp8',
+  'fp16',
+  'bf16',
+  'awq',
+  'gptq',
+  'gguf',
+  'mlx',
+  'int3',
+  'int4',
+  'int8',
 ]);
 
 function isSizeToken(token: string): boolean {
@@ -172,9 +188,12 @@ export class DiscoveryScheduler {
       intervalMinutes: this.deps.config.intervalMinutes,
     });
     void this.runOnce();
-    this.timer = setInterval(() => {
-      void this.runOnce();
-    }, this.deps.config.intervalMinutes * 60 * 1000);
+    this.timer = setInterval(
+      () => {
+        void this.runOnce();
+      },
+      this.deps.config.intervalMinutes * 60 * 1000,
+    );
   }
 
   /**
@@ -333,6 +352,16 @@ export class DiscoveryScheduler {
   ): Promise<ScoredModel[]> {
     const scored: ScoredModel[] = [];
     const excludeMatchers = this.compileExcludePatterns();
+    // Aggregate skip-reason counts so "0 hardware-fit candidates" is
+    // diagnosable from a single log line instead of grepping debug logs —
+    // every skip below was previously logged at debug only (invisible at
+    // i9's info logLevel) with no aggregation across the batch, mirroring
+    // the same silent-rejection gap fixed in model-discovery.ts's
+    // evaluateCandidate()/rejectionBreakdown.
+    const skipCounts: Record<string, number> = {};
+    const countSkip = (reason: string): void => {
+      skipCounts[reason] = (skipCounts[reason] ?? 0) + 1;
+    };
 
     for (const model of models) {
       try {
@@ -345,12 +374,14 @@ export class DiscoveryScheduler {
           this.logger.debug(
             `Skipping ${model.id}: matches excludeModelPatterns (${excludedBy.source}) — outdated generation`,
           );
+          countSkip('excluded-by-pattern');
           continue;
         }
 
         const config = await this.deps.discoveryService.fetchModelConfig(model.id);
         if (!config) {
           this.logger.debug(`Skipping ${model.id}: config.json fetch failed`);
+          countSkip('config-fetch-failed');
           continue;
         }
 
@@ -378,6 +409,7 @@ export class DiscoveryScheduler {
           this.logger.debug(
             `Skipping ${model.id}: trendingScore ${trendingScore.toFixed(2)} < ${this.deps.config.minTrendingScore}`,
           );
+          countSkip('trending-score-too-low');
           continue;
         }
 
@@ -388,6 +420,7 @@ export class DiscoveryScheduler {
             this.logger.debug(
               `Skipping ${model.id}: Agent Builder baseline — ${filterResult.rejections.map((r) => r.criterion).join(', ')}`,
             );
+            countSkip('agent-builder-baseline-rejected');
             continue;
           }
           if (filterResult.warnings.length > 0) {
@@ -421,11 +454,23 @@ export class DiscoveryScheduler {
           superseded: false,
           baselineWarnings,
         });
+        if (!fits) countSkip('hardware-fit-failed');
       } catch (err) {
         this.logger.debug(`Skipping ${model.id}: error during scoring: ${String(err)}`);
+        countSkip('scoring-error');
         // Continue to next model; never throw
       }
     }
+
+    const skipSummary = Object.entries(skipCounts)
+      .sort(([, a], [, b]) => b - a)
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(', ');
+    const hardwareFitCount = scored.filter((m) => m.hardwareFit).length;
+    this.logger.info(
+      `Discovery: scored ${scored.length}/${models.length} models, ${hardwareFitCount} hardware-fit` +
+        (skipSummary ? ` (skipped: ${skipSummary})` : ''),
+    );
 
     return scored;
   }
@@ -547,9 +592,7 @@ export class DiscoveryScheduler {
           // deploy attempt that vLLM will OOM on. The freshness-fallback sweep can
           // surface non-fitting fresh models, so filter them here rather than let
           // the scheduler dequeue and fail them.
-          this.logger.debug(
-            `Skipping ${model.id}: does not fit the target hardware profile`,
-          );
+          this.logger.debug(`Skipping ${model.id}: does not fit the target hardware profile`);
           skipped++;
           continue;
         }
@@ -590,9 +633,7 @@ export class DiscoveryScheduler {
         search: searchOverride ?? this.deps.config.search,
         sort: sortOverride ?? this.deps.config.sort,
         ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
-        ...(minParamBillions
-          ? { minParameterCount: minParamBillions * 1_000_000_000 }
-          : {}),
+        ...(minParamBillions ? { minParameterCount: minParamBillions * 1_000_000_000 } : {}),
       });
       return result;
     } catch (err) {

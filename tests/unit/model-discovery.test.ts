@@ -222,6 +222,7 @@ describe('ModelDiscoveryService', () => {
 
       expect(result.models).toHaveLength(0);
       expect(result.totalRejected).toBe(1);
+      expect(result.rejectionBreakdown['context-window-too-small']).toBe(1);
     });
 
     it('should reject models below the parameter-count floor', async () => {
@@ -254,6 +255,7 @@ describe('ModelDiscoveryService', () => {
       expect(result.models).toHaveLength(1);
       expect(result.models[0]!.id).toBe('org/big-70B-Instruct');
       expect(result.totalRejected).toBe(1);
+      expect(result.rejectionBreakdown['parameter-count-below-floor']).toBe(1);
     });
 
     it('estimates from config.json rather than leaving parameter count unknown at the floor (regression: previously let sub-floor community fine-tunes through as a warn-only unknown)', async () => {
@@ -383,6 +385,47 @@ describe('ModelDiscoveryService', () => {
 
       expect(result.models).toHaveLength(0);
       expect(result.totalRejected).toBe(1);
+      expect(result.rejectionBreakdown['already-evaluated']).toBe(1);
+    });
+
+    it('aggregates rejections by category across multiple distinct rejection reasons in a single run (regression: "Discovery complete: 0 accepted" was previously undiagnosable without flipping to debug logLevel)', async () => {
+      const evaluated = createMockHFModel({ id: 'org/already-evaluated' });
+      const smallCtx = createMockHFModel({
+        id: 'org/small-ctx',
+        tags: ['text-generation', 'license:mit', 'transformers'],
+      });
+      const badLicense = createMockHFModel({
+        id: 'org/bad-license',
+        tags: ['text-generation', 'license:proprietary', 'transformers'],
+      });
+      const good = createMockHFModel({
+        id: 'org/good-model',
+        tags: ['text-generation', 'license:apache-2.0', 'transformers'],
+      });
+
+      const configs = new Map([
+        ['org/small-ctx', createMockConfig({ max_position_embeddings: 4096 })],
+        ['org/bad-license', createMockConfig({ max_position_embeddings: 131072 })],
+        ['org/good-model', createMockConfig({ max_position_embeddings: 131072 })],
+      ]);
+
+      global.fetch = setupFetchMock({
+        searchResults: [[evaluated, smallCtx, badLicense, good]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', ['org/already-evaluated'], 'error');
+      const result = await service.discover({ minContextWindow: 128000 });
+
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.id).toBe('org/good-model');
+      expect(result.totalRejected).toBe(3);
+      expect(result.rejectionBreakdown['already-evaluated']).toBe(1);
+      expect(result.rejectionBreakdown['context-window-too-small']).toBe(1);
+      expect(result.rejectionBreakdown['license-not-open-source']).toBe(1);
+      // Every category in the fixed enum is present even at 0, so callers
+      // can safely index without an existence check.
+      expect(result.rejectionBreakdown['hardware-fit-failed']).toBe(0);
     });
 
     it('should respect the limit option', async () => {
