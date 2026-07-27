@@ -223,6 +223,7 @@ export type RejectionCategory =
   | 'architecture-not-whitelisted'
   | 'vram-budget-fast-reject'
   | 'config-fetch-failed'
+  | 'config-fetch-rate-limited'
   | 'architecture-not-compatible'
   | 'context-window-too-small'
   | 'parameter-count-below-floor'
@@ -347,6 +348,7 @@ export class ModelDiscoveryService {
       'architecture-not-whitelisted': 0,
       'vram-budget-fast-reject': 0,
       'config-fetch-failed': 0,
+      'config-fetch-rate-limited': 0,
       'architecture-not-compatible': 0,
       'context-window-too-small': 0,
       'parameter-count-below-floor': 0,
@@ -473,8 +475,9 @@ export class ModelDiscoveryService {
     const id = rawModel.id;
 
     // Step 1: Fetch model config
-    const config = await this.fetchModelConfig(id);
-    if (!config) return { reason: 'config-fetch-failed' };
+    const { config, rateLimited } = await this.fetchModelConfigWithStatus(id);
+    if (!config)
+      return { reason: rateLimited ? 'config-fetch-rate-limited' : 'config-fetch-failed' };
 
     // Step 2: Architecture compatibility
     const architecture = this.normalizeArchitecture(config);
@@ -859,7 +862,26 @@ export class ModelDiscoveryService {
   // ─── Data Fetching ───────────────────────────────────────────────────────
 
   async fetchModelConfig(modelId: string): Promise<HFModelConfig | null> {
-    if (this.configCache.has(modelId)) return this.configCache.get(modelId)!;
+    return (await this.fetchModelConfigWithStatus(modelId)).config;
+  }
+
+  /**
+   * Same as fetchModelConfig() but also surfaces *why* the fetch failed, so
+   * discover()'s rejectionBreakdown can distinguish a 429 (rate-limited —
+   * actionable, needs backoff/fewer concurrent requests) from a 404
+   * (expected noise: dataset/adapter/space repos misclassified as models by
+   * HF search, nothing to fix) from a network error. Before this split they
+   * all landed in one 'config-fetch-failed' bucket, indistinguishable
+   * without flipping to debug and re-running — exactly the same
+   * undiagnosable-aggregate problem the rejectionBreakdown feature was
+   * built to solve, just one level deeper.
+   */
+  private async fetchModelConfigWithStatus(
+    modelId: string,
+  ): Promise<{ config: HFModelConfig | null; rateLimited: boolean }> {
+    if (this.configCache.has(modelId)) {
+      return { config: this.configCache.get(modelId)!, rateLimited: false };
+    }
     try {
       const response = await this.fetchWithAuth(
         `${HF_API_BASE}/${modelId}/resolve/main/config.json`,
@@ -867,15 +889,15 @@ export class ModelDiscoveryService {
       if (!response.ok) {
         this.logger.debug(`Failed to fetch config for ${modelId}: ${response.status}`);
         this.configCache.set(modelId, null);
-        return null;
+        return { config: null, rateLimited: response.status === 429 };
       }
       const config = (await response.json()) as HFModelConfig;
       this.configCache.set(modelId, config);
-      return config;
+      return { config, rateLimited: false };
     } catch (error) {
       this.logger.debug(`Error fetching config for ${modelId}: ${error}`);
       this.configCache.set(modelId, null);
-      return null;
+      return { config: null, rateLimited: false };
     }
   }
 

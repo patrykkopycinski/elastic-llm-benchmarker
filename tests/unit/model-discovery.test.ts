@@ -428,6 +428,41 @@ describe('ModelDiscoveryService', () => {
       expect(result.rejectionBreakdown['hardware-fit-failed']).toBe(0);
     });
 
+    it('distinguishes a rate-limited (429) config fetch from a genuine 404/missing-config failure in rejectionBreakdown', async () => {
+      // Regression: config-fetch-failed conflated "404, expected noise from
+      // dataset/adapter repos" with "429, rate-limited — actionable, needs
+      // backoff" into one indistinguishable bucket. Verified live: a single
+      // sweep showed config-fetch-failed=700, and there was no way to tell
+      // from the aggregate whether that was benign 404 noise or the sweep
+      // burning its whole budget getting throttled.
+      const rateLimitedModel = createMockHFModel({ id: 'org/rate-limited-model' });
+      const missingConfigModel = createMockHFModel({ id: 'org/missing-config-model' });
+
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        const urlStr = typeof url === 'string' ? url : String(url);
+        if (urlStr.includes('/api/models?')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve([rateLimitedModel, missingConfigModel]),
+          });
+        }
+        if (urlStr.includes('org/rate-limited-model/resolve/main/config.json')) {
+          return Promise.resolve({ ok: false, status: 429 });
+        }
+        if (urlStr.includes('org/missing-config-model/resolve/main/config.json')) {
+          return Promise.resolve({ ok: false, status: 404 });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['config-fetch-rate-limited']).toBe(1);
+      expect(result.rejectionBreakdown['config-fetch-failed']).toBe(1);
+    });
+
     it('should respect the limit option', async () => {
       const models = [
         createMockHFModel({ id: 'org/model-1', tags: ['text-generation', 'license:apache-2.0'] }),
