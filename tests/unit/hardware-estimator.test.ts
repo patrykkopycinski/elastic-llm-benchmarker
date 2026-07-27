@@ -91,6 +91,30 @@ describe('HardwareEstimator', () => {
       expect(result.confidence).toBe('medium');
     });
 
+    it('falls back to the coarse numExperts*0.9 whole-model multiplier only when both moe_intermediate_size AND intermediate_size are absent', () => {
+      // Locks in that the last-resort fallback path is still reachable —
+      // this is a deliberately rare case (real configs almost always carry
+      // at least intermediate_size) but should not silently disappear.
+      const denseConfig = {
+        hidden_size: 4096,
+        num_hidden_layers: 32,
+        num_attention_heads: 32,
+        num_key_value_heads: 8,
+        // no intermediate_size
+      };
+      const moeConfig = {
+        ...denseConfig,
+        num_local_experts: 8,
+        // no moe_intermediate_size, no intermediate_size
+      };
+
+      const denseResult = estimator.estimateGpuMemory(denseConfig);
+      const moeResult = estimator.estimateGpuMemory(moeConfig);
+
+      // numExperts * 0.9 = 7.2x the dense estimate.
+      expect(moeResult.paramsBillions).toBeCloseTo(denseResult.paramsBillions * 7.2, 1);
+    });
+
     it('estimates a DeepSeek-V3/Kimi-K2-style MoE model using n_routed_experts naming', () => {
       // Regression: moonshotai/Kimi-K2-Instruct-0905 (~1T total params) only
       // declares `n_routed_experts` (DeepSeek-V3 naming), not `num_local_experts`
@@ -160,6 +184,35 @@ describe('HardwareEstimator', () => {
 
       expect(result.paramsBillions).toBeGreaterThan(95);
       expect(result.paramsBillions).toBeLessThan(115);
+    });
+
+    it('estimates a high-expert-count MoE with moe_intermediate_size missing using the intermediate_size/8 fallback ratio (Qwen3-30B-A3B, regression for the pathological numExperts*0.9 whole-model multiplier)', () => {
+      // Real Qwen/Qwen3-30B-A3B config with moe_intermediate_size deleted,
+      // simulating a release that omits it. Real published total: ~30.5B
+      // params (30B-A3B = 30B total, 3B active). The old
+      // `paramsBillions *= numExperts * 0.9` whole-model multiplier
+      // estimated ~278B (9x over) on this exact config, because it scales
+      // the 12h^2 dense-equivalent term by the full expert count instead of
+      // only the FFN's per-expert width. Using intermediate_size directly
+      // (ratio 1.0) instead of the empirical ~1/8 ratio also overshoots
+      // badly (~233B, 7.6x over) since intermediate_size is the dense FFN
+      // width, not any single expert's much narrower width.
+      const config = {
+        hidden_size: 2048,
+        num_hidden_layers: 48,
+        num_attention_heads: 32,
+        num_key_value_heads: 4,
+        intermediate_size: 6144,
+        num_experts: 128,
+        num_experts_per_tok: 8,
+        // moe_intermediate_size intentionally omitted (real value: 768)
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      // Real: 30.5B. Old formula: ~278B. Assert well within real-world range,
+      // nowhere near the old formula's order-of-magnitude overshoot.
+      expect(result.paramsBillions).toBeGreaterThan(20);
+      expect(result.paramsBillions).toBeLessThan(45);
     });
 
     it('estimates a very-high-expert-count MoE precisely (Kimi-K2)', () => {

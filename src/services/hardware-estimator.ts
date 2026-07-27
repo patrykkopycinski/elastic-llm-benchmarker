@@ -86,6 +86,14 @@ const BATCH_SIZE = 1;
 const DEFAULT_DTYPE_BYTES = 2;
 
 /**
+ * Fallback ratio used to approximate a missing `moe_intermediate_size` from
+ * a config's dense `intermediate_size`, for MoE param estimation. See
+ * estimateParams()'s MoE adjustment comment for derivation — empirically
+ * ~1/8 across real MoE releases (Qwen3-30B-A3B, GLM-4.5-Air, Kimi-K2).
+ */
+const MOE_INTERMEDIATE_SIZE_FALLBACK_RATIO = 0.125;
+
+/**
  * Estimates GPU memory requirements for HuggingFace transformer models
  * and checks fit against hardware profiles.
  *
@@ -291,26 +299,49 @@ export class HardwareEstimator {
     // MoE adjustment: scale up by the expert count factor when the config
     // declares more than one expert (any naming convention).
     if (typeof numExperts === 'number' && numExperts > 1) {
-      const moeIntermediateSize = config.moe_intermediate_size;
-      if (typeof moeIntermediateSize === 'number' && moeIntermediateSize > 0) {
-        // Precise estimate: only the FFN scales with expert count, and it
-        // scales at the expert's own (narrow) width — not the dense-
-        // equivalent width baked into the 12h^2 heuristic above. Naively
-        // multiplying the whole dense estimate by numExperts (the old
-        // approach) overshoots by ~10x on high-expert-count architectures
-        // (GLM-4.5-Air: 128 experts → estimated 1990GB vs real ~106B params
-        // / ~200GB bf16; Kimi-K2: 384 experts) because it scales the wide
-        // dense FFN term too, not just the narrow per-expert one. Verified
-        // against both real configs: this formula lands within ~1% of each
-        // model's published total parameter count.
+      // Precise estimate: only the FFN scales with expert count, and it
+      // scales at the expert's own (narrow) width — not the dense-
+      // equivalent width baked into the 12h^2 heuristic above. Naively
+      // multiplying the whole dense estimate by numExperts (the old
+      // approach, still used as a last-resort fallback below) overshoots
+      // multiplicatively as expert count grows because it scales the wide
+      // dense FFN term too, not just the narrow per-expert one — verified
+      // pathological on Qwen3-30B-A3B's real config (128 experts,
+      // moe_intermediate_size stripped to simulate a config lacking it):
+      // the old formula estimated ~278B vs the real 30.5B (9x over).
+      //
+      // When `moe_intermediate_size` is present this lands within ~1% of a
+      // model's published total parameter count (verified against
+      // GLM-4.5-Air: 128 experts, and Kimi-K2: 384 experts).
+      //
+      // When absent, MOE_INTERMEDIATE_SIZE_FALLBACK_RATIO approximates the
+      // missing field from `intermediate_size` — empirically,
+      // moe_intermediate_size / intermediate_size clusters tightly around
+      // 1/8 across real MoE releases (Qwen3-30B-A3B: 768/6144 = 0.125,
+      // GLM-4.5-Air: 1408/10944 = 0.129, Kimi-K2: 2048/18432 = 0.111).
+      // Using the dense intermediate_size directly (i.e. ratio 1) still
+      // overshoots by ~7-8x (232.7B on the Qwen3-30B-A3B case above) since
+      // dense FFN width is deliberately much wider than any single expert's
+      // width in a real MoE architecture. This ratio-based estimate lands
+      // within ~2.3% of Qwen3-30B-A3B's real 30.5B params.
+      const moeIntermediateSize =
+        typeof config.moe_intermediate_size === 'number' && config.moe_intermediate_size > 0
+          ? config.moe_intermediate_size
+          : typeof config.intermediate_size === 'number' && config.intermediate_size > 0
+            ? config.intermediate_size * MOE_INTERMEDIATE_SIZE_FALLBACK_RATIO
+            : undefined;
+      if (moeIntermediateSize !== undefined) {
         const attnParamsBillions = (4 * (hiddenSize ** 2) * numLayers) / 1e9;
         const totalExperts = numExperts + (config.n_shared_experts ?? 0);
         const moeFfnParamsBillions =
           (3 * hiddenSize * moeIntermediateSize * totalExperts * numLayers) / 1e9;
         paramsBillions = attnParamsBillions + moeFfnParamsBillions;
       } else {
-        // No expert-width info available — fall back to the coarse
-        // whole-model multiplier (better than ignoring MoE entirely).
+        // No expert-width info of any kind (neither moe_intermediate_size
+        // nor intermediate_size) — last-resort fallback to the coarse
+        // whole-model multiplier (better than ignoring MoE entirely, though
+        // this path should be rare since intermediate_size is nearly always
+        // present in real configs).
         paramsBillions *= Math.max(1, numExperts * 0.9);
       }
     }
