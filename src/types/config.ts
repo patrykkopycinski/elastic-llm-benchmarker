@@ -857,13 +857,24 @@ export const discoverySchedulerConfigSchema = z.object({
    * new generations land.
    *
    * Note the trailing dash in `qwen3-`: it matches gen-3.0 editions
-   * (`qwen3-30b`, `qwen3-next-80b`, `qwen3-coder-*`) but NOT `qwen3.6-*` (the
-   * dot, not a dash, follows `qwen3`). Qwen3.6 (Apr 2026) is the current target
-   * generation, so all of Qwen3.0 is retired here while 3.6+ stays eligible.
+   * (`qwen3-30b`, `qwen3-next-80b`) but NOT `qwen3.6-*` (the dot, not a dash,
+   * follows `qwen3`). Qwen3.6 (Apr 2026) is the current target generation, so
+   * all of Qwen3.0 is retired here while 3.6+ stays eligible.
+   *
+   * `qwen3-(?!coder)` carries a negative lookahead so the pattern does NOT
+   * retire `Qwen3-Coder-*` (base or any repack, e.g.
+   * `QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ`). Qwen3-Coder is a distinct,
+   * still-current product line (Qwen3-Coder-Next is its active successor as
+   * of mid-2026, not a Qwen3.6 rename) — the blanket `qwen3-` substring was
+   * silently discarding every Coder-line model, including quant repacks that
+   * were never even scored (bug found 2026-07-27: zero Stage 1/2 records for
+   * QuantTrio's AWQ repack despite it never actually being rejected on
+   * quality grounds — the base Qwen/Qwen3-Coder-30B-A3B-Instruct passed all
+   * 3 security eval suites when tested manually, out-of-band).
    */
   excludeModelPatterns: z
     .array(z.string())
-    .default(['qwen2', 'qwen1', 'qwen3-', 'llama-2', 'llama2', 'codellama']),
+    .default(['qwen2', 'qwen1', 'qwen3-(?!coder)', 'llama-2', 'llama2', 'codellama']),
   /**
    * Case-insensitive substrings matched against the model id. A model whose
    * id matches ANY pattern gets its `totalScore` boosted (see
