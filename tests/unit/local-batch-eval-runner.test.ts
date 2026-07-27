@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -6,7 +7,7 @@ vi.mock('node:child_process', async () => {
   const actual = await vi.importActual('node:child_process');
   return {
     ...actual,
-    execFile: vi.fn(),
+    spawn: vi.fn(),
   };
 });
 
@@ -28,7 +29,7 @@ vi.mock('../../src/utils/logger.js', () => ({
   })),
 }));
 
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readFile, readdir } from 'node:fs/promises';
 import {
   LocalBatchEvalRunner,
@@ -39,35 +40,43 @@ import {
 } from '../../src/services/local-batch-eval-runner.js';
 import type { Stage2LocalConfig } from '../../src/types/config.js';
 
-const execFileMock = vi.mocked(execFile);
+const spawnMock = vi.mocked(spawn);
 const readFileMock = vi.mocked(readFile);
 const readdirMock = vi.mocked(readdir);
 
+/** Minimal fake ChildProcess: stdout/stderr are EventEmitters, close/error propagate. */
+class FakeChildProcess extends EventEmitter {
+  stdout = new EventEmitter();
+  stderr = new EventEmitter();
+  pid = 12345;
+}
+
 function mockExecFileSuccess(stdout: string, stderr: string = '') {
-  execFileMock.mockImplementation((_file, _args, _options, _callback) => {
-    let callback = _callback;
-    if (typeof _options === 'function') {
-      callback = _options;
-    }
-    if (callback) {
-      process.nextTick(() => (callback as (e: unknown, o: string, se: string) => void)(null, stdout, stderr));
-    }
-    return null as unknown as ReturnType<typeof execFile>;
+  spawnMock.mockImplementation(() => {
+    const child = new FakeChildProcess();
+    process.nextTick(() => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+      child.emit('close', 0);
+    });
+    return child as unknown as ReturnType<typeof spawn>;
   });
 }
 
 function mockExecFileFailure(message: string, stdout: string = '', stderr: string = '', code: number | null = 1) {
-  execFileMock.mockImplementation((_file, _args, _options, _callback) => {
-    let callback = _callback;
-    if (typeof _options === 'function') {
-      callback = _options;
-    }
-    const err = new Error(message) as Error & { code: number | null };
-    err.code = code;
-    if (callback) {
-      process.nextTick(() => (callback as (e: unknown, o: string, se: string) => void)(err, stdout, stderr));
-    }
-    return null as unknown as ReturnType<typeof execFile>;
+  spawnMock.mockImplementation(() => {
+    const child = new FakeChildProcess();
+    process.nextTick(() => {
+      if (stdout) child.stdout.emit('data', Buffer.from(stdout));
+      if (stderr) child.stderr.emit('data', Buffer.from(stderr));
+      // A spawn-level failure (e.g. ENOENT) emits 'error' instead of 'close'.
+      if (code === null) {
+        child.emit('error', new Error(message));
+      } else {
+        child.emit('close', code);
+      }
+    });
+    return child as unknown as ReturnType<typeof spawn>;
   });
 }
 
@@ -361,11 +370,11 @@ describe('LocalBatchEvalRunner', () => {
       ],
     });
 
-    expect(execFileMock).toHaveBeenCalled();
-    const call = execFileMock.mock.calls[0];
+    expect(spawnMock).toHaveBeenCalled();
+    const call = spawnMock.mock.calls[0];
     const args = call[1] as string[];
     expect(args).not.toContain('--smoke');
-    const options = call[2] as { env?: NodeJS.ProcessEnv };
+    const options = call[2] as { env?: NodeJS.ProcessEnv; cwd?: string };
     expect(options.env?.BATCH_PAUSE_ALWAYS_ON_STACK).toBe('true');
     expect(options.env?.BATCH_TEARDOWN_ON_EXIT).toBe('true');
     expect(options.env?.BATCH_CLEANUP_STALE_PORTS).toBe('true');
@@ -374,8 +383,6 @@ describe('LocalBatchEvalRunner', () => {
     expect(options.env?.BATCH_SUITES).toBe(
       'security-alert-triage,security-alerts-rag-regression,security-esql-generation-regression',
     );
-    expect(options.timeout).toBe(60_000 + 60_000 + ESQL_MIN_SUITE_TIMEOUT_MS);
-    expect(options.maxBuffer).toBe(BATCH_RUNNER_MAX_BUFFER_BYTES);
   });
 
   it('reports failed status and logs a warning when execFile itself errors with no exit code', async () => {
@@ -386,5 +393,98 @@ describe('LocalBatchEvalRunner', () => {
 
     expect(result.status).toBe('failed');
     expect(result.suites.every((s) => s.status === 'fail')).toBe(true);
+  });
+
+  it('exposes activePid while a run is in flight and clears it after completion (regression: scheduler shutdown-drain-timeout kill path needs a live PID to target)', async () => {
+    let capturedPidDuringRun: number | undefined;
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChildProcess();
+      process.nextTick(() => {
+        // By now onSpawn() has fired synchronously after spawn() returned,
+        // so activePid should reflect the in-flight run's PID.
+        capturedPidDuringRun = runner.activePid;
+        child.stdout.emit(
+          'data',
+          Buffer.from('[batch 10:00:00] >>> Summary: /plugin/matrix-output/summary.json'),
+        );
+        child.emit('close', 0);
+      });
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+    readFileMock.mockResolvedValue(
+      JSON.stringify({
+        run_id: 'r',
+        timestamp: 't',
+        overall_exit: 0,
+        log_dir: '/plugin/matrix-output/batch-logs',
+        results: [],
+      }),
+    );
+
+    const runner = new LocalBatchEvalRunner(createConfig());
+    expect(runner.activePid).toBeUndefined();
+
+    await runner.run(baseOpts);
+
+    expect(capturedPidDuringRun).toBe(12345);
+    expect(runner.activePid).toBeUndefined();
+  });
+
+  it('killActive() sends SIGKILL to the negative (process-group) PID, not the raw child PID', () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChildProcess();
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+
+    const runner = new LocalBatchEvalRunner(createConfig());
+    // No run in flight — killActive() should be a safe no-op.
+    runner.killActive();
+    expect(killSpy).not.toHaveBeenCalled();
+
+    // Simulate an in-flight run by triggering run() but not awaiting/resolving it.
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChildProcess();
+      // Never emits 'close' — simulates a hung process.
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+    void runner.run(baseOpts);
+
+    // Let the spawn callback (onSpawn) fire before asserting.
+    return new Promise<void>((resolve) => {
+      process.nextTick(() => {
+        expect(runner.activePid).toBe(12345);
+        runner.killActive();
+        expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGKILL');
+        killSpy.mockRestore();
+        resolve();
+      });
+    });
+  });
+
+  it('kills the process group via SIGTERM when combined stdout+stderr exceeds BATCH_RUNNER_MAX_BUFFER_BYTES (regression: spawn()-based execFilePromise reimplements execFile\'s maxBuffer enforcement manually since spawn has no built-in cap)', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    let child!: FakeChildProcess;
+    spawnMock.mockImplementation(() => {
+      child = new FakeChildProcess();
+      return child as unknown as ReturnType<typeof spawn>;
+    });
+
+    const runner = new LocalBatchEvalRunner(createConfig());
+    const runPromise = runner.run(baseOpts);
+
+    await new Promise((r) => process.nextTick(r));
+    expect(runner.activePid).toBe(12345);
+
+    // Emit a chunk larger than the buffer cap — should trigger a SIGTERM kill.
+    child.stdout.emit('data', Buffer.alloc(BATCH_RUNNER_MAX_BUFFER_BYTES + 1, 'x'));
+
+    expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
+
+    // Let the (now-killed) child actually close so run() can resolve and the
+    // test doesn't leave a dangling promise.
+    child.emit('close', null);
+    await runPromise;
+    killSpy.mockRestore();
   });
 });

@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { createLogger } from '../utils/logger.js';
@@ -77,18 +77,97 @@ function execFilePromise(
   file: string,
   args: string[],
   options: { cwd: string; timeout: number; maxBuffer: number; env?: NodeJS.ProcessEnv },
+  onSpawn?: (pid: number | undefined) => void,
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   return new Promise((resolve) => {
-    execFile(file, args, options, (error, stdout, stderr) => {
-      const code = (error as NodeJS.ErrnoException)?.code;
-      const exitCode = error
-        ? typeof code === 'number'
-          ? code
-          : 1
-        : 0;
-      resolve({ stdout, stderr, exitCode });
+    // detached: true makes the child its own process-group leader (setsid),
+    // so killing -pid (negative pid = signal the whole group) reaps the
+    // entire subprocess tree (bash → the batch script → Playwright → ES/
+    // Kibana), not just the immediate bash PID. Without this, a forced kill
+    // of just the top process leaves ES/Kibana orphaned and still holding
+    // ports, since the batch script doesn't propagate signals to its own
+    // children on a hard kill. execFile() doesn't accept `detached`
+    // (spawn-only option), so this reimplements execFile's buffered
+    // stdout/stderr + timeout + maxBuffer behavior on top of spawn().
+    const child = spawn(file, args, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: true,
+    });
+
+    onSpawn?.(child.pid);
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let killedForMaxBuffer = false;
+
+    const timeoutHandle = setTimeout(() => {
+      if (settled) return;
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        // process already gone
+      }
+    }, options.timeout);
+
+    const checkMaxBuffer = () => {
+      if (killedForMaxBuffer) return;
+      if (stdout.length + stderr.length > options.maxBuffer) {
+        killedForMaxBuffer = true;
+        try {
+          if (child.pid) process.kill(-child.pid, 'SIGTERM');
+        } catch {
+          // process already gone
+        }
+      }
+    };
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+      checkMaxBuffer();
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+      checkMaxBuffer();
+    });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      stderr += `\n${err.message}`;
+      resolve({ stdout, stderr, exitCode: 1 });
+    });
+
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      resolve({ stdout, stderr, exitCode: code });
     });
   });
+}
+
+/**
+ * Forcibly kill a batch eval process tree by process group. Used when the
+ * scheduler's shutdown drain timeout expires with this run still active —
+ * see SchedulerOptions.shutdownDrainTimeoutMs. Best-effort: ESRCH (already
+ * dead) is swallowed since the goal is "make sure it's gone", not signal
+ * delivery confirmation.
+ */
+export function killBatchEvalProcessGroup(pid: number, logger?: Logger): void {
+  try {
+    process.kill(-pid, 'SIGKILL');
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code !== 'ESRCH') {
+      logger?.warn('Failed to kill batch eval process group', {
+        pid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 /**
@@ -177,10 +256,30 @@ export function orderBenchmarkerSuites(suites: string[]): string[] {
 export class LocalBatchEvalRunner {
   private readonly config: Stage2LocalConfig;
   private readonly logger: Logger;
+  /**
+   * PID of the currently-running batch script's process group (spawn's own
+   * PID, killable via `killBatchEvalProcessGroup`). Set while `run()` has an
+   * in-flight execution; undefined otherwise. Exposed so the scheduler can
+   * force-kill a stuck run on shutdown-drain-timeout instead of leaving an
+   * orphaned Playwright/ES/Kibana process tree behind. See
+   * SchedulerOptions.shutdownDrainTimeoutMs.
+   */
+  private currentPid: number | undefined;
 
   constructor(config: Stage2LocalConfig, logger?: Logger) {
     this.config = config;
     this.logger = logger ?? createLogger('info');
+  }
+
+  get activePid(): number | undefined {
+    return this.currentPid;
+  }
+
+  /** Force-kill the in-flight batch eval process tree, if any. */
+  killActive(): void {
+    if (this.currentPid !== undefined) {
+      killBatchEvalProcessGroup(this.currentPid, this.logger);
+    }
   }
 
   async run(opts: LocalBatchEvalOptions): Promise<LocalBatchEvalResult> {
@@ -239,11 +338,21 @@ export class LocalBatchEvalRunner {
       batchTimeoutMs: timeoutMs,
     });
 
-    const { stdout, stderr, exitCode } = await execFilePromise(
-      'bash',
-      [batchScript, ...args],
-      { cwd: pluginDir, timeout: timeoutMs, maxBuffer: BATCH_RUNNER_MAX_BUFFER_BYTES, env },
-    );
+    let stdout: string;
+    let stderr: string;
+    let exitCode: number | null;
+    try {
+      ({ stdout, stderr, exitCode } = await execFilePromise(
+        'bash',
+        [batchScript, ...args],
+        { cwd: pluginDir, timeout: timeoutMs, maxBuffer: BATCH_RUNNER_MAX_BUFFER_BYTES, env },
+        (pid) => {
+          this.currentPid = pid;
+        },
+      ));
+    } finally {
+      this.currentPid = undefined;
+    }
 
     let stdoutLogPath: string | undefined;
     try {

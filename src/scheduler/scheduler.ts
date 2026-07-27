@@ -35,7 +35,24 @@ import { progressNow, reportQueueProgress } from '../utils/queue-progress.js';
 export interface SchedulerOptions {
   pollIntervalMs: number;
   maxConcurrentRuns: number;
+  /**
+   * Max time stop() waits for in-flight runs to drain before giving up and
+   * returning anyway. Without a bound, a single stuck Stage 2 batch eval
+   * (e.g. a dead local Scout stack the child process never detects) makes
+   * stop() await forever, which means gracefulShutdown() never resolves,
+   * process.exit(0) never runs, and the daemon survives its own SIGTERM —
+   * launchd then spawns a *second* worker process that correctly refuses to
+   * double-run (GPU VM lease already held) and exits, leaving nothing
+   * running until the stale lease crosses its own staleness threshold.
+   * Default 5 minutes: generous enough for a real in-flight benchmark run
+   * to finish cleanly, short enough that a bounce during a hang recovers
+   * within one polling cycle instead of tens of minutes.
+   */
+  shutdownDrainTimeoutMs?: number;
 }
+
+/** @see SchedulerOptions.shutdownDrainTimeoutMs */
+const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS = 5 * 60_000;
 
 export interface CIEvalsOptions {
   enabled: boolean;
@@ -190,8 +207,24 @@ export class Scheduler {
       clearInterval(this.timer);
       this.timer = null;
     }
-    // Wait for active runs to complete
+    // Wait for active runs to complete, but never forever — a single stuck
+    // in-flight run (e.g. a batch eval child process that died without the
+    // parent detecting it) must not block shutdown indefinitely. See
+    // SchedulerOptions.shutdownDrainTimeoutMs.
+    const drainTimeoutMs = this.options.shutdownDrainTimeoutMs ?? DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS;
+    const drainStartedAt = Date.now();
     while (this.activeRuns > 0) {
+      if (Date.now() - drainStartedAt >= drainTimeoutMs) {
+        this.logger.warn(
+          'Scheduler: shutdown drain timeout exceeded — proceeding with shutdown despite active runs',
+          { activeRuns: this.activeRuns, drainTimeoutMs },
+        );
+        // Force-kill the underlying process tree (if the active worker
+        // exposes one) so a stuck batch eval doesn't leak an orphaned
+        // Playwright/ES/Kibana process tree behind the exiting daemon.
+        this.stage2Worker?.killActive?.();
+        break;
+      }
       await new Promise((r) => setTimeout(r, 1000));
     }
     // Wait for deferred Buildkite polls + tunnel teardown

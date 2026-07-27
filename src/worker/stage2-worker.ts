@@ -8,6 +8,16 @@ import type { ElasticsearchResultsStore } from '../services/elasticsearch-result
 
 export interface Stage2Worker {
   execute(run: PipelineRun, stage1Result: Stage1Result): Promise<Stage2Result>;
+  /**
+   * Force-terminate any in-flight execute() call's underlying process tree.
+   * Optional — only implemented by workers that spawn external processes
+   * (e.g. the batch runner). Called by the scheduler when the shutdown
+   * drain timeout expires with this worker's execute() still pending, so a
+   * stuck batch eval doesn't leak an orphaned Playwright/ES/Kibana process
+   * tree after the daemon itself exits. See
+   * SchedulerOptions.shutdownDrainTimeoutMs.
+   */
+  killActive?(): void;
 }
 
 export interface Stage2WorkerDependencies {

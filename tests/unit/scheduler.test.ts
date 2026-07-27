@@ -538,4 +538,92 @@ describe('Scheduler', () => {
       expect(queueService.enqueue).not.toHaveBeenCalled();
     });
   });
+
+  describe('shutdown drain timeout', () => {
+    it('stop() returns within shutdownDrainTimeoutMs instead of hanging forever when a run never completes (regression: a stuck Stage 2 batch eval previously made stop() await activeRuns > 0 with no bound, so gracefulShutdown() — and thus process.exit(0) — never ran, and the daemon survived its own SIGTERM)', async () => {
+      let resolveExecute: (() => void) | undefined;
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveExecute = () => resolve(successStage1);
+          }),
+      );
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+
+      const drainTimeoutMs = 200;
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1, shutdownDrainTimeoutMs: drainTimeoutMs },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+      );
+
+      await scheduler.start();
+      // Let processEntry begin and increment activeRuns, but never resolve it.
+      await new Promise((r) => setTimeout(r, 20));
+
+      const stopStartedAt = Date.now();
+      await scheduler.stop();
+      const stopDurationMs = Date.now() - stopStartedAt;
+
+      // Bounded by drainTimeoutMs (+ small scheduling slack), not infinite.
+      expect(stopDurationMs).toBeLessThan(drainTimeoutMs + 1500);
+      // Clean up the dangling promise so it doesn't leak into other tests.
+      resolveExecute?.();
+    });
+
+    it('calls stage2Worker.killActive() when the drain timeout expires with a run still active', async () => {
+      const killActiveMock = vi.fn();
+      (stage2Worker as Stage2Worker & { killActive: typeof killActiveMock }).killActive =
+        killActiveMock;
+      let resolveExecute: (() => void) | undefined;
+      (stage1Worker.execute as ReturnType<typeof vi.fn>).mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            resolveExecute = () => resolve(successStage1);
+          }),
+      );
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1, shutdownDrainTimeoutMs: 100 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 20));
+      await scheduler.stop();
+
+      expect(killActiveMock).toHaveBeenCalledTimes(1);
+      resolveExecute?.();
+    });
+
+    it('does not call killActive() when the run finishes before the drain timeout', async () => {
+      const killActiveMock = vi.fn();
+      (stage2Worker as Stage2Worker & { killActive: typeof killActiveMock }).killActive =
+        killActiveMock;
+      dequeueMock.mockResolvedValueOnce(baseEntry);
+
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1, shutdownDrainTimeoutMs: 5 * 60_000 },
+        stage2Worker,
+        resultsStore,
+        stage3Worker,
+      );
+
+      await scheduler.start();
+      await new Promise((r) => setTimeout(r, 100));
+      await scheduler.stop();
+
+      expect(killActiveMock).not.toHaveBeenCalled();
+    });
+  });
 });

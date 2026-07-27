@@ -116,6 +116,9 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
   const { gate, batchRunner, resultsStore, queueService, logger } = deps;
 
   return {
+    killActive(): void {
+      batchRunner.killActive();
+    },
     async execute(run: PipelineRun, stage1Result: Stage1Result): Promise<Stage2Result> {
       const now = () => new Date().toISOString();
       const startedAt = now();
