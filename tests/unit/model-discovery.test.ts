@@ -583,6 +583,39 @@ describe('ModelDiscoveryService', () => {
       expect(result.models[0]!.contextWindow).toBe(131072);
     });
 
+    it('should fall back to text_config.max_position_embeddings for VLM-wrapped configs (regression: Mistral-Small-3.2-24B-Instruct-2506 was silently dropped — top-level fields are undefined on the mistral3 wrapper, real dims live under text_config, so contextWindow computed to 0 and failed the minContextWindow gate with no log line)', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/vlm-wrapped-model',
+        tags: ['text-generation', 'license:apache-2.0'],
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'mistral3',
+        max_position_embeddings: undefined,
+        hidden_size: undefined,
+        num_hidden_layers: undefined,
+        num_attention_heads: undefined,
+        text_config: {
+          max_position_embeddings: 131072,
+          hidden_size: 5120,
+          num_hidden_layers: 40,
+          num_attention_heads: 32,
+        },
+      });
+      delete mockConfig.max_position_embeddings;
+
+      const configs = new Map([['org/vlm-wrapped-model', mockConfig]]);
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs,
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover({ minContextWindow: 128000 });
+
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]!.contextWindow).toBe(131072);
+    });
+
     it('should use max_sequence_length as fallback', async () => {
       const mockModel = createMockHFModel({
         id: 'org/model-seq',

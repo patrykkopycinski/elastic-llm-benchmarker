@@ -800,16 +800,28 @@ export class ModelDiscoveryService {
   }
 
   private extractContextWindow(config: HFModelConfig): number {
-    let window = config.max_position_embeddings ?? config.max_sequence_length ?? 0;
+    // VLM-wrapped configs (mistral3, qwen2_5_vl, etc.) nest the real text-model
+    // dimensions under `text_config`; the top-level fields are the multimodal
+    // wrapper's own (usually absent for context-window purposes). Fall back to
+    // text_config so e.g. Mistral-Small-3.2-24B-Instruct-2506 (text_config.
+    // max_position_embeddings=131072, top-level=undefined) isn't scored as a
+    // 0-token-context model and silently dropped at the context-window gate.
+    const tc = config.text_config;
+    let window =
+      config.max_position_embeddings ??
+      tc?.max_position_embeddings ??
+      config.max_sequence_length ??
+      tc?.max_sequence_length ??
+      0;
 
-    if (config.sliding_window && config.sliding_window > window) {
-      window = config.sliding_window;
+    const slidingWindow = config.sliding_window ?? tc?.sliding_window;
+    if (slidingWindow && slidingWindow > window) {
+      window = slidingWindow;
     }
 
-    if (config.rope_scaling?.factor && config.rope_scaling.original_max_position_embeddings) {
-      window = Math.round(
-        config.rope_scaling.original_max_position_embeddings * config.rope_scaling.factor,
-      );
+    const ropeScaling = config.rope_scaling ?? tc?.rope_scaling;
+    if (ropeScaling?.factor && ropeScaling.original_max_position_embeddings) {
+      window = Math.round(ropeScaling.original_max_position_embeddings * ropeScaling.factor);
     }
 
     return window;

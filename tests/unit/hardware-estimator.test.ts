@@ -194,6 +194,22 @@ describe('HardwareEstimator', () => {
       expect(result.confidence).toBe('low');
     });
 
+    it('resolves dims from text_config for VLM-wrapped configs (regression: Mistral-Small-3.2-24B-Instruct-2506-style configs nest real dims under text_config while top-level fields are undefined for the multimodal wrapper — this used to estimate 0 params/0 GB and trivially "fit" any hardware profile instead of a real ~28GB check)', () => {
+      const config = {
+        model_type: 'mistral3',
+        text_config: {
+          hidden_size: 5120,
+          num_hidden_layers: 40,
+          num_attention_heads: 32,
+          num_key_value_heads: 8,
+        },
+      };
+      const result = estimator.estimateGpuMemory(config);
+
+      expect(result.paramsBillions).toBeGreaterThan(0);
+      expect(result.totalGb).toBeGreaterThan(0);
+    });
+
     it('reduces memory with 4-bit quantization', () => {
       const config = {
         hidden_size: 4096,

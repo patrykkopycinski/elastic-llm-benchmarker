@@ -25,6 +25,12 @@ export interface HFModelConfig {
   moe_intermediate_size?: number;
   n_shared_experts?: number;
   num_parameters?: number;
+  /**
+   * VLM-wrapped configs (mistral3, qwen2_5_vl, llava, etc.) nest the actual
+   * text-model dimensions here; top-level fields describe the multimodal
+   * wrapper and are usually absent. See resolveTextDims().
+   */
+  text_config?: HFModelConfig;
   [key: string]: unknown;
 }
 
@@ -88,13 +94,33 @@ const DEFAULT_DTYPE_BYTES = 2;
  */
 export class HardwareEstimator {
   /**
+   * Resolve the effective config to read model dimensions from.
+   *
+   * VLM-wrapped configs (mistral3, qwen2_5_vl, llava, etc.) nest the real
+   * text-model dims under `text_config` while leaving the top-level fields
+   * undefined (they describe the multimodal wrapper). Without this, e.g.
+   * Mistral-Small-3.2-24B-Instruct-2506 estimates to 0 params / 0 GB and
+   * silently mis-scores as trivially "fits" instead of a real ~48GB check —
+   * and upstream context-window extraction has the same blind spot, which is
+   * what actually caused it to be dropped before reaching this estimator.
+   * text_config wins when present since it holds the real transformer dims;
+   * quantization_config is read from whichever level actually defines it.
+   */
+  private resolveTextDims(config: HFModelConfig): HFModelConfig {
+    const tc = config.text_config;
+    if (!tc || typeof tc !== 'object') return config;
+    return { ...config, ...tc, quantization_config: config.quantization_config ?? tc.quantization_config };
+  }
+
+  /**
    * Estimate GPU memory breakdown for a model config.
    *
    * Returns weights, KV-cache, activation and total memory in GB.
    * Confidence reflects how complete the input config is.
    */
-  estimateGpuMemory(config: HFModelConfig): EstimationResult {
+  estimateGpuMemory(rawConfig: HFModelConfig): EstimationResult {
     try {
+      const config = this.resolveTextDims(rawConfig);
       const { paramsBillions, confidence } = this.estimateParams(config);
       const dtypeBytes = this.estimateDtypeBytes(config);
       const weightsGb = (paramsBillions * 1_000_000_000 * dtypeBytes) / (1024 ** 3);
