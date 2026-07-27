@@ -290,20 +290,39 @@ export class DiscoveryScheduler {
     // still passes through the full scoreModels gate chain (license, context,
     // param floor, hardware fit) — this tier only widens the search surface,
     // it does not relax any gate.
+    //
+    // Each probe term is searched with BOTH the primary sort (typically
+    // downloads) AND `lastModified`. This is not optional/best-effort: a
+    // downloads-sorted HF search is structurally incapable of surfacing
+    // security-domain fine-tunes, which are a low-download-count niche by
+    // nature (small community releases, often <1 year old) — verified live
+    // on 2026-07-27 that generic terms like "security"/"cybersecurity" with
+    // downloads sort return zero candidates at this repo's 24B+ floor even
+    // across 90-result pages, while the same terms with different sorts (or
+    // more specific queries) surface real candidates that downloads-sort
+    // buries under thousands of tiny classifiers/POCs. Mirrors the same
+    // downloads→lastModified fallback pattern already used by the generic
+    // sweep below, just applied unconditionally per probe term instead of
+    // only when the whole cycle finds nothing.
     const securityProbes = this.deps.config.securityDomainSearchProbes ?? [];
+    const securityProbeSorts: Array<DiscoverySchedulerConfig['sort']> = Array.from(
+      new Set([primarySort, 'lastModified']),
+    );
     for (const probe of securityProbes) {
-      this.logger.info('Discovery: running security-domain search probe', {
-        probe,
-        sort: primarySort,
-      });
-      const probeResult = await this.tryDiscover(primarySort, probe);
-      if (!probeResult || probeResult.models.length === 0) continue;
-      const seen = new Set(scored.map((m) => m.id));
-      const probeScored = await this.scoreModels(
-        probeResult.models.filter((m) => !seen.has(m.id)),
-        profile,
-      );
-      scored.push(...probeScored);
+      for (const probeSort of securityProbeSorts) {
+        this.logger.info('Discovery: running security-domain search probe', {
+          probe,
+          sort: probeSort,
+        });
+        const probeResult = await this.tryDiscover(probeSort, probe);
+        if (!probeResult || probeResult.models.length === 0) continue;
+        const seen = new Set(scored.map((m) => m.id));
+        const probeScored = await this.scoreModels(
+          probeResult.models.filter((m) => !seen.has(m.id)),
+          profile,
+        );
+        scored.push(...probeScored);
+      }
     }
 
     // Self-healing freshness fallback: when the primary (typically downloads-ranked)

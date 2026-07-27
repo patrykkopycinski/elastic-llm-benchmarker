@@ -813,12 +813,13 @@ export const discoverySchedulerConfigSchema = z.object({
    * Search terms run as an always-on discovery tier (not gated on "0
    * hardware-fit candidates" like `fallbackSearchProbes`) to actively surface
    * security-domain-tuned models every run, not just as a last resort. Each
-   * term is a HuggingFace search query run with the primary sort; results
-   * still go through every existing gate (license, context, param floor,
-   * hardware fit) and get `securityDomainPatterns`-matched score boosting on
-   * top. Set to [] to disable the dedicated probe (boosting via
-   * `securityDomainPatterns` still applies to whatever the
-   * primary/freshness/fallback sweeps find).
+   * term is a HuggingFace search query run with the primary sort AND
+   * `lastModified` (see `discoverAndScore` in discovery-scheduler.ts for why
+   * both sorts are mandatory, not optional); results still go through every
+   * existing gate (license, context, param floor, hardware fit) and get
+   * `securityDomainPatterns`-matched score boosting on top. Set to [] to
+   * disable the dedicated probe (boosting via `securityDomainPatterns` still
+   * applies to whatever the primary/freshness/fallback sweeps find).
    *
    * Terms verified live against the HF search API on 2026-07-27: branded
    * probe terms (`foundation-sec`, `whiterabbitneo`, `security instruct`)
@@ -826,12 +827,20 @@ export const discoverySchedulerConfigSchema = z.object({
    * repo's 24B-param / tool-calling / non-GGUF / non-adapter floor — nearly
    * every branded "security LLM" on HF today is a <10B toy model, a GGUF
    * quant, or a LoRA adapter, not a full mergeable checkpoint. Generic
-   * defensive-security terms surface real full-size candidates instead
-   * (verified: `security`/`cybersecurity` surfaced 24-35B fine-tunes on
-   * whitelisted bases). Deliberately excludes offensive/red-team framing
-   * ("pentest", "exploit", "offensive security", "red team") — this probe
-   * is scoped to defensive/analysis-oriented security models; see
-   * `securityDomainPatterns` below for the same scoping rationale.
+   * defensive-security terms (`security`, `cybersecurity`, etc.) are kept as
+   * the probe terms because they're the ones a HF operator would actually
+   * search, but as of 2026-07-27 there is NO defensive-security model on
+   * HF that clears every gate (24B+, safetensors, non-adapter, tool-calling
+   * base) — the closest near-misses found in a broad sweep:
+   * `RedTeamLab/Qwen3.6-27B-blueteam-v5` (27B, Qwen3.6-whitelisted, blue
+   * team framed) is GGUF-only (no safetensors published), and
+   * `cyber-pal-security/CyberPal2.0-20B` is a real safetensors checkpoint
+   * but under the 24B floor. This is a genuine supply gap, not a probe bug —
+   * re-run the sweep periodically as new releases land. Deliberately
+   * excludes offensive/red-team framing ("pentest", "exploit", "offensive
+   * security", "red team") — this probe is scoped to defensive/
+   * analysis-oriented security models; see `securityDomainPatterns` below
+   * for the same scoping rationale.
    */
   securityDomainSearchProbes: z
     .array(z.string())

@@ -1066,6 +1066,80 @@ describe('DiscoveryScheduler', () => {
       await scheduler.discoverAndScore();
       expect(discover).toHaveBeenCalledTimes(1);
     });
+
+    it('searches each probe term with BOTH the primary sort and lastModified, and picks up a lastModified-only hit', async () => {
+      // Regression guard for the 2026-07-27 fix: security-domain fine-tunes
+      // are a low-download niche by nature, so a downloads-only probe can
+      // never surface them even with well-chosen search terms. This test
+      // seeds a candidate that ONLY appears on the `lastModified` sort (the
+      // primary/downloads sort returns nothing for that probe) and asserts
+      // it still gets discovered and scored.
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const primaryModels = [createMockModelInfo({ id: 'org/generic-instruct-model' })];
+      const freshOnlyModel = createMockModelInfo({ id: 'org/fresh-security-finetune-27b' });
+
+      const calls: Array<{ search?: string; sort?: string }> = [];
+      const discover = vi.fn().mockImplementation((opts: { search?: string; sort?: string }) => {
+        calls.push({ search: opts?.search, sort: opts?.sort });
+        if (opts?.search === 'cybersecurity' && opts?.sort === 'lastModified') {
+          return Promise.resolve({
+            models: [freshOnlyModel],
+            totalScanned: 1,
+            totalRejected: 0,
+            timestamp: now.toISOString(),
+          });
+        }
+        if (opts?.search === 'cybersecurity') {
+          // Primary (downloads) sort for the same probe term: nothing new.
+          return Promise.resolve({
+            models: [],
+            totalScanned: 0,
+            totalRejected: 0,
+            timestamp: now.toISOString(),
+          });
+        }
+        return Promise.resolve({
+          models: primaryModels,
+          totalScanned: 1,
+          totalRejected: 0,
+          timestamp: now.toISOString(),
+        });
+      });
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 5000, createdAt: '2026-07-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = {
+        ...createMockConfig(),
+        sort: 'downloads' as const,
+        securityDomainSearchProbes: ['cybersecurity'],
+      };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+
+      // Both sorts were actually tried for the probe term.
+      const cybersecCalls = calls.filter((c) => c.search === 'cybersecurity');
+      const sortsUsed = new Set(cybersecCalls.map((c) => c.sort));
+      expect(sortsUsed.has('downloads')).toBe(true);
+      expect(sortsUsed.has('lastModified')).toBe(true);
+
+      // The lastModified-only candidate still made it into the scored set.
+      const ids = scored.map((m) => m.id);
+      expect(ids).toContain('org/fresh-security-finetune-27b');
+    });
   });
 
   describe('security-domain default config scoping (defensive-only)', () => {
