@@ -3,13 +3,16 @@ import { DEFAULT_ENTRY_STALE_AFTER_MS } from '../services/queue-service.js';
 import type { PipelineRun } from './pipeline-state.js';
 import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../worker/index.js';
 import type { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
-import type { AppConfig } from '../types/config.js';
+import type { AppConfig, TunnelConfig } from '../types/config.js';
 import type { RecommendationReport } from '../types/recommendation.js';
 import { buildRecommendationReport } from '../services/recommendation-report-builder.js';
 import type { SlackNotifier } from '../services/slack-notifier.js';
 import type { InferenceEngine } from '../engines/engine-types.js';
 import type { ModelSmokeTest } from '../services/model-smoke-test.js';
-import type { BuildkiteEvalTrigger, BuildkiteBuildResult } from '../services/buildkite-eval-trigger.js';
+import type {
+  BuildkiteEvalTrigger,
+  BuildkiteBuildResult,
+} from '../services/buildkite-eval-trigger.js';
 import { isRetriableInfraState } from '../services/buildkite-eval-trigger.js';
 import {
   buildResumeStage2Result,
@@ -62,6 +65,34 @@ export interface CIEvalsOptions {
   sshPool?: SSHClientPool;
 }
 
+/**
+ * Decide the tunnel config to hand VllmPublicEndpointResolver for the
+ * non-pre-warmed resolve path.
+ *
+ * publicEndpointUrl (what a real ngrok tunnel produces) is only ever
+ * consumed by triggerBuildkiteEvals(), which itself early-returns without
+ * this.ciEvals — so attempting an actual public tunnel when CI evals are
+ * disabled builds a URL nobody uses. Previously the scheduler passed
+ * config.tunnel verbatim regardless of ciEvals, so every successful Stage 1
+ * run on a host with tunnel.enabled=true but CI evals off (e.g.
+ * buildkite.apiToken unset) burned ~3 minutes (4 attempts x 45s ngrok CLI
+ * timeout) creating a tunnel with no consumer. Verified live: i9's config
+ * has tunnel.enabled=true + no buildkite token — 4 failed ngrok attempts
+ * (11:38-11:41) on a run with CI evals off.
+ *
+ * Forcing tunnel.enabled=false here (rather than skipping resolve()
+ * entirely) still gets the SSH local-forward health check/URL —
+ * resolve()'s cheap branches — only the expensive ngrok CLI attempt path is
+ * skipped. Exported as a pure function so the decision is unit-testable
+ * without spinning up the full Scheduler.
+ */
+export function resolveEffectiveTunnelConfig(
+  tunnel: TunnelConfig,
+  ciEvalsEnabled: boolean | undefined,
+): TunnelConfig {
+  return ciEvalsEnabled ? tunnel : { ...tunnel, enabled: false };
+}
+
 interface DeferredInfrastructureCleanup {
   releasePublicEndpoint?: () => Promise<void>;
   deploymentName: string;
@@ -80,16 +111,18 @@ interface CIEvalRunResult {
 }
 
 export class Scheduler {
-
   /**
    * Track Stage 2 failures per model. After 3 consecutive failures of the same type,
    * mark the model as blacklisted for 6 hours to avoid retry churn (P0-2).
-   * 
+   *
    * Key insight: retrying the exact same model with the exact same infra/config
    * rarely succeeds. Only retry if the infrastructure was fixed (e.g., vLLM restarted,
    * Kibana reconnected, connector updated).
    */
-  private readonly modelFailureTracker: Map<string, { count: number; lastErrorType: string; lastAt: number }> = new Map();
+  private readonly modelFailureTracker: Map<
+    string,
+    { count: number; lastErrorType: string; lastAt: number }
+  > = new Map();
   private readonly modelCooldown: Map<string, number> = new Map(); // modelId -> expireAt timestamp
   /** Max entries to prevent unbounded growth. Stale entries are pruned periodically. */
   private static readonly MAX_TRACKED_FAILURES = 200;
@@ -119,7 +152,11 @@ export class Scheduler {
 
   private recordModelFailure(modelId: string, errorType: string): void {
     const now = Date.now();
-    const existing = this.modelFailureTracker.get(modelId) || { count: 0, lastErrorType: '', lastAt: 0 };
+    const existing = this.modelFailureTracker.get(modelId) || {
+      count: 0,
+      lastErrorType: '',
+      lastAt: 0,
+    };
 
     // Reset counter if error type changed (different failure root cause)
     if (existing.lastErrorType && existing.lastErrorType !== errorType) {
@@ -137,7 +174,7 @@ export class Scheduler {
       this.modelCooldown.set(modelId, expireAt);
       this.logger.warn(
         `Scheduler: auto-blacklisted ${modelId} for 6h — 3 consecutive Stage 2 failures (${errorType})`,
-        { modelId, failureCount: existing.count, expireAt: new Date(expireAt).toISOString() }
+        { modelId, failureCount: existing.count, expireAt: new Date(expireAt).toISOString() },
       );
       existing.count = 0; // Reset for next cycle
     }
@@ -228,9 +265,7 @@ export class Scheduler {
       await new Promise((r) => setTimeout(r, 1000));
     }
     // Wait for deferred Buildkite polls + tunnel teardown
-    await Promise.all(
-      [...this.deferredCleanups.values()].map((entry) => entry.pollPromise),
-    );
+    await Promise.all([...this.deferredCleanups.values()].map((entry) => entry.pollPromise));
   }
 
   /**
@@ -279,9 +314,12 @@ export class Scheduler {
         this.ownedEntryIds(),
       );
       if (reclaimed > 0) {
-        this.logger.warn('Scheduler: reclaimed stuck in-flight entries to pending (periodic backstop)', {
-          count: reclaimed,
-        });
+        this.logger.warn(
+          'Scheduler: reclaimed stuck in-flight entries to pending (periodic backstop)',
+          {
+            count: reclaimed,
+          },
+        );
       }
     } catch (err) {
       this.logger.warn('Scheduler: periodic stuck-entry reclaim failed', {
@@ -310,10 +348,13 @@ export class Scheduler {
         ? await this.queueService.complete(id, leaseToken)
         : await this.queueService.fail(id, errorMessage ?? 'failed', leaseToken);
     if (!result.applied && result.reason === 'lease-mismatch') {
-      this.logger.warn('Scheduler: terminal write fenced out — lease no longer held, another owner controls this entry', {
-        queueEntryId: id,
-        status,
-      });
+      this.logger.warn(
+        'Scheduler: terminal write fenced out — lease no longer held, another owner controls this entry',
+        {
+          queueEntryId: id,
+          status,
+        },
+      );
     }
     return result.applied;
   }
@@ -345,10 +386,13 @@ export class Scheduler {
     const reached = terminalToday >= caps.maxModelsPerDay;
     if (reached && !this.costCapEngaged) {
       this.costCapEngaged = true;
-      this.logger.warn('Scheduler: daily cost cap reached — pausing new model intake (VM stays up, in-flight runs finish)', {
-        terminalToday,
-        maxModelsPerDay: caps.maxModelsPerDay,
-      });
+      this.logger.warn(
+        'Scheduler: daily cost cap reached — pausing new model intake (VM stays up, in-flight runs finish)',
+        {
+          terminalToday,
+          maxModelsPerDay: caps.maxModelsPerDay,
+        },
+      );
     } else if (!reached && this.costCapEngaged) {
       this.costCapEngaged = false;
       this.logger.info('Scheduler: daily cost cap cleared — resuming model intake', {
@@ -374,13 +418,20 @@ export class Scheduler {
     leaseToken: string | null,
   ): Promise<boolean> {
     if (entry.metadata?.force === true) return false;
-    const matchers = compileModelExcludeMatchers(this.config?.discoveryScheduler?.excludeModelPatterns);
+    const matchers = compileModelExcludeMatchers(
+      this.config?.discoveryScheduler?.excludeModelPatterns,
+    );
     const matched = findMatchingExcludePattern(entry.modelId, matchers);
     if (!matched) return false;
 
     this.logger.warn(
       'Scheduler: retiring queue entry — model matches excludeModelPatterns (outdated generation); enqueue with --force to override',
-      { queueEntryId: entry.id, modelId: entry.modelId, pattern: matched.source, status: entry.status },
+      {
+        queueEntryId: entry.id,
+        modelId: entry.modelId,
+        pattern: matched.source,
+        status: entry.status,
+      },
     );
     const reason = `Skipped: matches excludeModelPatterns (${matched.source}) — outdated generation`;
     // Retire as `cancelled` (not `failed`): a denylist skip never ran and
@@ -408,9 +459,12 @@ export class Scheduler {
     await this.reclaimStuckEntries();
     if (this.activeRuns >= this.options.maxConcurrentRuns) return;
     if (this.deferredCleanups.size > 0) {
-      this.logger.info('Scheduler: waiting for deferred Buildkite poll before dequeuing next model', {
-        pending: this.deferredCleanups.size,
-      });
+      this.logger.info(
+        'Scheduler: waiting for deferred Buildkite poll before dequeuing next model',
+        {
+          pending: this.deferredCleanups.size,
+        },
+      );
       return;
     }
 
@@ -427,7 +481,8 @@ export class Scheduler {
         });
         // Take over the lease abandoned by the previous daemon so our heartbeat
         // keeps the entry fresh (prevents a concurrent reclaim to `pending`).
-        const adoptedToken = (await this.queueService.adoptEntry(inFlight.id)) ?? inFlight.leaseToken;
+        const adoptedToken =
+          (await this.queueService.adoptEntry(inFlight.id)) ?? inFlight.leaseToken;
         if (adoptedToken) this.entryLeases.set(inFlight.id, adoptedToken);
         // Recency backstop: never resume a Stage-1/CI-eval run for a model the
         // operator has since denylisted. Discovery cannot un-queue an already
@@ -486,10 +541,7 @@ export class Scheduler {
     }
   }
 
-  private async processEntry(
-    entry: QueueEntry,
-    options?: { resume?: boolean },
-  ): Promise<void> {
+  private async processEntry(entry: QueueEntry, options?: { resume?: boolean }): Promise<void> {
     const run: PipelineRun = {
       runId: crypto.randomUUID(),
       modelId: entry.modelId,
@@ -516,7 +568,10 @@ export class Scheduler {
       return;
     }
     if (formatCheck.warning) {
-      this.logger.warn("Scheduler: model format warning", { modelId: entry.modelId, warning: formatCheck.warning });
+      this.logger.warn('Scheduler: model format warning', {
+        modelId: entry.modelId,
+        warning: formatCheck.warning,
+      });
     }
 
     // === Retry cooldown check (P0-2) ===
@@ -607,7 +662,9 @@ export class Scheduler {
       // Pre-warm tunnel in parallel with Stage 1 when CI evals are enabled.
       // The SSH forward + ngrok only need the config-driven ports (not the
       // actual model endpoint URL), so we can start them while Stage 1 runs.
-      let tunnelPromise: Promise<Awaited<ReturnType<VllmPublicEndpointResolver['resolve']>>> | undefined;
+      let tunnelPromise:
+        | Promise<Awaited<ReturnType<VllmPublicEndpointResolver['resolve']>>>
+        | undefined;
       const needsTunnel = this.ciEvals?.enabled && this.config?.tunnel?.enabled;
       if (needsTunnel && this.config) {
         const resolver = new VllmPublicEndpointResolver({
@@ -657,9 +714,12 @@ export class Scheduler {
         if (tunnelPromise) {
           resolved = await tunnelPromise;
         } else {
+          // See resolveEffectiveTunnelConfig() doc comment for why this
+          // guards against burning ~3 minutes on an unused ngrok tunnel
+          // when CI evals are disabled.
           const resolver = new VllmPublicEndpointResolver({
             ssh: this.config.ssh,
-            tunnel: this.config.tunnel,
+            tunnel: resolveEffectiveTunnelConfig(this.config.tunnel, this.ciEvals?.enabled),
             logLevel: this.config.logLevel,
           });
           resolved = await resolver.resolve(run.deployment.endpointUrl);
@@ -669,7 +729,9 @@ export class Scheduler {
         // still loading when the SSH forward health check ran. Now that Stage 1
         // has passed, vLLM is guaranteed to be serving — retry tunnel resolution.
         if (!resolved.tunneled && tunnelPromise && this.config.tunnel?.enabled) {
-          this.logger.info('Scheduler: pre-warmed tunnel fell back to direct URL — retrying now that vLLM is serving');
+          this.logger.info(
+            'Scheduler: pre-warmed tunnel fell back to direct URL — retrying now that vLLM is serving',
+          );
           await resolved.cleanup();
           const freshResolver = new VllmPublicEndpointResolver({
             ssh: this.config.ssh,
@@ -697,10 +759,13 @@ export class Scheduler {
         run.benchmarkResult &&
         run.benchmarkResult.stage2Eligible === false
       ) {
-        this.logger.warn('Scheduler: skipping CI evals — model failed stage2 eligibility thresholds', {
-          modelId: run.modelId,
-          metrics: run.benchmarkResult.metrics,
-        });
+        this.logger.warn(
+          'Scheduler: skipping CI evals — model failed stage2 eligibility thresholds',
+          {
+            modelId: run.modelId,
+            metrics: run.benchmarkResult.metrics,
+          },
+        );
       }
 
       // Local Stage 2 gate (`local` / `localThenWeekly` tiers): run the local
@@ -882,9 +947,7 @@ export class Scheduler {
     // Tag classified failures so operators can triage by category in the queue;
     // leave `unknown` messages pristine (a `[unknown]` prefix is just noise).
     const tagged =
-      classification.category === 'unknown'
-        ? message
-        : `[${classification.category}] ${message}`;
+      classification.category === 'unknown' ? message : `[${classification.category}] ${message}`;
     const statusMessage = willRetry ? `${tagged} (auto-retry ${retryCount + 1}/${budget})` : tagged;
 
     const applied = await this.writeTerminal(entry.id, 'failed', statusMessage, leaseToken);
@@ -1188,7 +1251,6 @@ export class Scheduler {
       });
     };
 
-
     const pollWeeklyMatrix = async (): Promise<Stage2Result> => {
       const suitesToRun = evalSuites.filter((id) => !skipSuiteIds?.includes(id));
       if (suitesToRun.length === 0) {
@@ -1403,9 +1465,12 @@ export class Scheduler {
         })
         .catch(async (err) => {
           const msg = err instanceof Error ? err.message : String(err);
-          const transient = msg.includes('fetch failed') ||
-            msg.includes('ECONNRESET') || msg.includes('ETIMEDOUT') ||
-            msg.includes('ENOTFOUND') || msg.toLowerCase().includes('network');
+          const transient =
+            msg.includes('fetch failed') ||
+            msg.includes('ECONNRESET') ||
+            msg.includes('ETIMEDOUT') ||
+            msg.includes('ENOTFOUND') ||
+            msg.toLowerCase().includes('network');
           if (transient) {
             // Transient network errors (fetch failed, ECONN*) should NOT tear down
             // the vLLM deployment or mark the queue entry as permanently failed —

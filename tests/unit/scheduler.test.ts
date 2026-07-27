@@ -1,20 +1,58 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Scheduler } from '../../src/scheduler/scheduler.js';
-import type {
-  QueueService,
-  QueueEntry,
-} from '../../src/services/queue-service.js';
-import type {
-  Stage1Worker,
-  Stage2Worker,
-  Stage3Worker,
-} from '../../src/worker/index.js';
+import { Scheduler, resolveEffectiveTunnelConfig } from '../../src/scheduler/scheduler.js';
+import type { QueueService, QueueEntry } from '../../src/services/queue-service.js';
+import type { Stage1Worker, Stage2Worker, Stage3Worker } from '../../src/worker/index.js';
 import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
 import type {
   Stage1Result,
   Stage2Result,
   Stage3Result,
 } from '../../src/scheduler/pipeline-state.js';
+import type { TunnelConfig } from '../../src/types/config.js';
+
+describe('resolveEffectiveTunnelConfig', () => {
+  // Regression: the scheduler previously passed config.tunnel verbatim to
+  // VllmPublicEndpointResolver regardless of whether CI evals (the only
+  // consumer of the resulting publicEndpointUrl) were enabled. On a host
+  // with tunnel.enabled=true but no buildkite.apiToken, this burned ~3
+  // minutes (4 attempts x 45s ngrok CLI timeout) creating a public tunnel
+  // nobody used, on every single successful Stage 1 run. Verified live on
+  // i9: 4 failed ngrok attempts (11:38-11:41) on a run with CI evals off.
+  const baseTunnel: TunnelConfig = {
+    enabled: true,
+    provider: 'ngrok',
+    localPort: 18000,
+    timeoutMs: 60000,
+    retryAttempts: 3,
+    retryDelayMs: 5000,
+    ngrokRegion: 'us',
+  };
+
+  it('passes the tunnel config through unchanged when CI evals are enabled', () => {
+    const result = resolveEffectiveTunnelConfig(baseTunnel, true);
+    expect(result).toEqual(baseTunnel);
+    expect(result.enabled).toBe(true);
+  });
+
+  it('forces tunnel.enabled=false when CI evals are disabled, even if the config says enabled=true', () => {
+    const result = resolveEffectiveTunnelConfig(baseTunnel, false);
+    expect(result.enabled).toBe(false);
+    // Every other field passes through unchanged — only enabled is overridden.
+    expect(result.provider).toBe('ngrok');
+    expect(result.localPort).toBe(18000);
+  });
+
+  it('forces tunnel.enabled=false when ciEvalsEnabled is undefined (ciEvals never configured)', () => {
+    const result = resolveEffectiveTunnelConfig(baseTunnel, undefined);
+    expect(result.enabled).toBe(false);
+  });
+
+  it('leaves an already-disabled tunnel config disabled regardless of ciEvalsEnabled', () => {
+    const disabledTunnel: TunnelConfig = { ...baseTunnel, enabled: false };
+    expect(resolveEffectiveTunnelConfig(disabledTunnel, true).enabled).toBe(false);
+    expect(resolveEffectiveTunnelConfig(disabledTunnel, false).enabled).toBe(false);
+  });
+});
 
 describe('Scheduler', () => {
   let queueService: QueueService;
@@ -64,9 +102,7 @@ describe('Scheduler', () => {
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
     scores: { tool_use: 0.85 },
-    suiteResults: [
-      { suite: 'tool_use', status: 'pass', score: 0.85 },
-    ],
+    suiteResults: [{ suite: 'tool_use', status: 'pass', score: 0.85 }],
   };
 
   const successStage3: Stage3Result = {
@@ -172,9 +208,7 @@ describe('Scheduler', () => {
       status: 'failed',
       error: 'deployment_timeout',
     };
-    (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
-      failedStage1,
-    );
+    (stage1Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(failedStage1);
     dequeueMock.mockResolvedValueOnce(baseEntry);
 
     await scheduler.start();
@@ -187,11 +221,7 @@ describe('Scheduler', () => {
     // Routed through failEntry → fenced fail(): 'deployment_timeout' is
     // unclassified (unknown, non-retriable) so the message is untagged and no
     // auto-retry fires. The held lease token fences the terminal write.
-    expect(queueService.fail).toHaveBeenCalledWith(
-      baseEntry.id,
-      'deployment_timeout',
-      'lease-1',
-    );
+    expect(queueService.fail).toHaveBeenCalledWith(baseEntry.id, 'deployment_timeout', 'lease-1');
     expect(queueService.enqueue).not.toHaveBeenCalled();
   });
 
@@ -201,9 +231,7 @@ describe('Scheduler', () => {
       status: 'error',
       reason: 'eval_suite_failed',
     };
-    (stage2Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(
-      failedStage2,
-    );
+    (stage2Worker.execute as ReturnType<typeof vi.fn>).mockResolvedValue(failedStage2);
     dequeueMock.mockResolvedValueOnce(baseEntry);
 
     await scheduler.start();
@@ -214,11 +242,7 @@ describe('Scheduler', () => {
     expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
     // Stage 3 should NOT run when Stage 2 fails
     expect(stage3Worker.execute).not.toHaveBeenCalled();
-    expect(queueService.fail).toHaveBeenCalledWith(
-      baseEntry.id,
-      'eval_suite_failed',
-      'lease-1',
-    );
+    expect(queueService.fail).toHaveBeenCalledWith(baseEntry.id, 'eval_suite_failed', 'lease-1');
   });
 
   it('resumes in-flight entry instead of dequeuing another', async () => {
