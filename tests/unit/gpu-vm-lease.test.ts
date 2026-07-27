@@ -233,6 +233,19 @@ describe('GpuVmLeaseService.heartbeat', () => {
     expect(mock.update).toHaveBeenCalledTimes(1);
   });
 
+  it('sets retry_on_conflict so a racing heartbeat write does not surface as a version_conflict_engine_exception (regression: this fired repeatedly in production on 2026-07-27 because the write had no server-side retry)', async () => {
+    const mock = createMockClient();
+    const svc = makeService(mock.client);
+    await svc.acquire();
+    mock.update.mockClear();
+
+    await svc.heartbeat();
+
+    expect(mock.update).toHaveBeenCalledWith(
+      expect.objectContaining({ retry_on_conflict: 3 }),
+    );
+  });
+
   it('is a no-op when the lease is not owned', async () => {
     const mock = createMockClient({
       doc: leaseDoc({ heartbeat_at: new Date(NOW - 1_000).toISOString() }),

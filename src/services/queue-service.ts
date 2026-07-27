@@ -21,11 +21,7 @@ export const DEFAULT_ENTRY_STALE_AFTER_MS = 120_000;
 const TERMINAL_WRITE_MAX_ATTEMPTS = 3;
 
 /** Why a fenced terminal write did not apply. */
-export type TerminalWriteReason =
-  | 'lease-mismatch'
-  | 'already-terminal'
-  | 'not-found'
-  | 'conflict';
+export type TerminalWriteReason = 'lease-mismatch' | 'already-terminal' | 'not-found' | 'conflict';
 
 /** True when an ES client error carries the given HTTP status code. */
 function isStatusCode(err: unknown, code: number): boolean {
@@ -148,7 +144,9 @@ function mapPipelineProgressFromEs(
   };
 }
 
-function mapPipelineProgressToEs(progress: PipelineProgress): NonNullable<EsSource['metadata']>['pipeline_progress'] {
+function mapPipelineProgressToEs(
+  progress: PipelineProgress,
+): NonNullable<EsSource['metadata']>['pipeline_progress'] {
   return {
     stage: progress.stage,
     detail: progress.detail,
@@ -176,32 +174,36 @@ function toEntry(id: string, src: EsSource): QueueEntry {
     requestedBy: src.requested_by ?? null,
     leaseToken: src.lease_token ?? null,
     heartbeatAt: src.heartbeat_at ?? null,
-    metadata: src.metadata ? {
-      configOverrides: src.metadata.config_overrides ? {
-        tensorParallelSize: src.metadata.config_overrides.tensor_parallel_size,
-        maxModelLen: src.metadata.config_overrides.max_model_len,
-      } : undefined,
-      skipReasoning: src.metadata.skip_reasoning,
-      trendingScore: src.metadata.trending_score,
-      hardwareFit: src.metadata.hardware_fit,
-      hardwareProfileId: src.metadata.hardware_profile_id,
-      estimatedGb: src.metadata.estimated_gb,
-      fits: src.metadata.fits,
-      force: src.metadata.force,
-      reason: src.metadata.reason,
-      infraRetryCount: src.metadata.infra_retry_count,
-      pipelineProgress: mapPipelineProgressFromEs(src.metadata.pipeline_progress),
-      skipStage1: src.metadata.skip_stage1,
-      endpointUrl: src.metadata.endpoint_url,
-      deploymentName: src.metadata.deployment_name,
-      skipPassedSuites: src.metadata.skip_passed_suites,
-      baselineWarnings: src.metadata.baseline_warnings,
-    } : undefined,
+    metadata: src.metadata
+      ? {
+          configOverrides: src.metadata.config_overrides
+            ? {
+                tensorParallelSize: src.metadata.config_overrides.tensor_parallel_size,
+                maxModelLen: src.metadata.config_overrides.max_model_len,
+              }
+            : undefined,
+          skipReasoning: src.metadata.skip_reasoning,
+          trendingScore: src.metadata.trending_score,
+          hardwareFit: src.metadata.hardware_fit,
+          hardwareProfileId: src.metadata.hardware_profile_id,
+          estimatedGb: src.metadata.estimated_gb,
+          fits: src.metadata.fits,
+          force: src.metadata.force,
+          reason: src.metadata.reason,
+          infraRetryCount: src.metadata.infra_retry_count,
+          pipelineProgress: mapPipelineProgressFromEs(src.metadata.pipeline_progress),
+          skipStage1: src.metadata.skip_stage1,
+          endpointUrl: src.metadata.endpoint_url,
+          deploymentName: src.metadata.deployment_name,
+          skipPassedSuites: src.metadata.skip_passed_suites,
+          baselineWarnings: src.metadata.baseline_warnings,
+        }
+      : undefined,
   };
 }
 
 export class QueueService {
-  constructor(private readonly esClient: Client) { }
+  constructor(private readonly esClient: Client) {}
 
   async enqueue(
     modelId: string,
@@ -239,26 +241,30 @@ export class QueueService {
       requested_by: requestedBy ?? null,
       lease_token: null,
       heartbeat_at: null,
-      metadata: metadata ? {
-        config_overrides: metadata.configOverrides ? {
-          tensor_parallel_size: metadata.configOverrides.tensorParallelSize,
-          max_model_len: metadata.configOverrides.maxModelLen,
-        } : undefined,
-        skip_reasoning: metadata.skipReasoning,
-        trending_score: metadata.trendingScore,
-        hardware_fit: metadata.hardwareFit,
-        hardware_profile_id: metadata.hardwareProfileId,
-        estimated_gb: metadata.estimatedGb,
-        fits: metadata.fits,
-        force: metadata.force,
-        reason: metadata.reason,
-        infra_retry_count: metadata.infraRetryCount,
-        skip_stage1: metadata.skipStage1,
-        endpoint_url: metadata.endpointUrl,
-        deployment_name: metadata.deploymentName,
-        skip_passed_suites: metadata.skipPassedSuites,
-        baseline_warnings: metadata.baselineWarnings,
-      } : undefined,
+      metadata: metadata
+        ? {
+            config_overrides: metadata.configOverrides
+              ? {
+                  tensor_parallel_size: metadata.configOverrides.tensorParallelSize,
+                  max_model_len: metadata.configOverrides.maxModelLen,
+                }
+              : undefined,
+            skip_reasoning: metadata.skipReasoning,
+            trending_score: metadata.trendingScore,
+            hardware_fit: metadata.hardwareFit,
+            hardware_profile_id: metadata.hardwareProfileId,
+            estimated_gb: metadata.estimatedGb,
+            fits: metadata.fits,
+            force: metadata.force,
+            reason: metadata.reason,
+            infra_retry_count: metadata.infraRetryCount,
+            skip_stage1: metadata.skipStage1,
+            endpoint_url: metadata.endpointUrl,
+            deployment_name: metadata.deploymentName,
+            skip_passed_suites: metadata.skipPassedSuites,
+            baseline_warnings: metadata.baselineWarnings,
+          }
+        : undefined,
     };
     const res = await this.esClient.index({
       index: INDEX,
@@ -297,6 +303,7 @@ export class QueueService {
         `,
         params: { now, token: leaseToken },
       },
+      retry_on_conflict: 3,
       refresh: true,
     });
 
@@ -354,10 +361,7 @@ export class QueueService {
       index: INDEX,
       query: {
         bool: {
-          should: [
-            { term: { status: 'deploying' } },
-            { term: { status: 'benchmarking' } },
-          ],
+          should: [{ term: { status: 'deploying' } }, { term: { status: 'benchmarking' } }],
           minimum_should_match: 1,
         },
       },
@@ -374,10 +378,7 @@ export class QueueService {
       index: INDEX,
       query: {
         bool: {
-          should: [
-            { term: { status: 'deploying' } },
-            { term: { status: 'benchmarking' } },
-          ],
+          should: [{ term: { status: 'deploying' } }, { term: { status: 'benchmarking' } }],
           minimum_should_match: 1,
         },
       },
@@ -455,6 +456,7 @@ export class QueueService {
           }
         `,
       },
+      retry_on_conflict: 3,
       refresh: true,
     });
     return updateRes.result !== 'noop';
@@ -481,6 +483,7 @@ export class QueueService {
         `,
         params: { now, token: leaseToken },
       },
+      retry_on_conflict: 3,
     });
     return updateRes.result !== 'noop';
   }
@@ -508,6 +511,7 @@ export class QueueService {
         `,
         params: { now, token: leaseToken },
       },
+      retry_on_conflict: 3,
       refresh: true,
     });
     return updateRes.result === 'noop' ? null : leaseToken;
@@ -651,7 +655,9 @@ export class QueueService {
 
     const mutations: string[] = [
       `ctx._source.status = params.status;`,
-      ...(terminal ? [`ctx._source.completed_at = params.now; ctx._source.lease_token = null;`] : []),
+      ...(terminal
+        ? [`ctx._source.completed_at = params.now; ctx._source.lease_token = null;`]
+        : []),
       ...(errorMessage !== undefined ? [`ctx._source.error_message = params.error_message;`] : []),
     ];
 
@@ -679,6 +685,7 @@ export class QueueService {
           token: leaseToken ?? null,
         },
       },
+      retry_on_conflict: 3,
       refresh: true,
     });
     return updateRes.result !== 'noop';
@@ -717,6 +724,7 @@ export class QueueService {
           token: leaseToken ?? null,
         },
       },
+      retry_on_conflict: 3,
       refresh: true,
     });
     return updateRes.result !== 'noop';
@@ -738,6 +746,7 @@ export class QueueService {
           `,
           params: { now: new Date().toISOString() },
         },
+        retry_on_conflict: 3,
         refresh: true,
       });
       return updateRes.result !== 'noop';
@@ -862,9 +871,7 @@ export class QueueService {
    * priority and clears the terminal timestamp/error. Returns the model ids
    * re-enqueued. The caller decides retriability (owns the classifier).
    */
-  async requeueFailedEntries(
-    ids: readonly string[],
-  ): Promise<number> {
+  async requeueFailedEntries(ids: readonly string[]): Promise<number> {
     let requeued = 0;
     const now = new Date().toISOString();
     for (const id of ids) {
@@ -887,6 +894,7 @@ export class QueueService {
           `,
           params: { now },
         },
+        retry_on_conflict: 3,
         refresh: true,
       });
       if (res.result !== 'noop') requeued++;
@@ -903,10 +911,7 @@ export class QueueService {
       index: INDEX,
       query: {
         bool: {
-          filter: [
-            { term: { status: 'failed' } },
-            { range: { completed_at: { lte: beforeIso } } },
-          ],
+          filter: [{ term: { status: 'failed' } }, { range: { completed_at: { lte: beforeIso } } }],
         },
       },
       sort: [{ completed_at: { order: 'asc' } }],

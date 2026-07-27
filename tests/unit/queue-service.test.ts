@@ -145,6 +145,13 @@ describe('QueueService lease fencing + reclaim', () => {
       expect(arg.script.source).toContain('ctx._source.heartbeat_at = params.now');
     });
 
+    it('sets retry_on_conflict so a racing heartbeat/terminal write does not surface as version_conflict_engine_exception (regression: observed live on queueEntryId enyUop8BhIiK3Oozv2_Q on 2026-07-27)', async () => {
+      update.mockResolvedValue({ result: 'updated' });
+      await service.heartbeat('q1', 'tok-1');
+      const arg = update.mock.calls[0][0];
+      expect(arg.retry_on_conflict).toBe(3);
+    });
+
     it('returns false when fenced out (token mismatch → noop)', async () => {
       update.mockResolvedValue({ result: 'noop' });
       expect(await service.heartbeat('q1', 'stale-token')).toBe(false);

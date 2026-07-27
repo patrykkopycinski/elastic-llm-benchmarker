@@ -155,7 +155,9 @@ export class GpuVmLeaseService {
         }
         // Stale, or already ours: take/refresh it, guarding the rare race with
         // optimistic concurrency so a simultaneous takeover is detected.
-        const acquiredAt = this.isMine(holder) ? holder.acquiredAt : new Date(this.now()).toISOString();
+        const acquiredAt = this.isMine(holder)
+          ? holder.acquiredAt
+          : new Date(this.now()).toISOString();
         try {
           await this.esClient.index({
             index: INDEX,
@@ -215,9 +217,11 @@ export class GpuVmLeaseService {
     return { success: false, error: 'lease contended (version conflict)' };
   }
 
-  private async readLease(): Promise<
-    { source: EsLease; seqNo: number | undefined; primaryTerm: number | undefined } | null
-  > {
+  private async readLease(): Promise<{
+    source: EsLease;
+    seqNo: number | undefined;
+    primaryTerm: number | undefined;
+  } | null> {
     try {
       const res = (await this.esClient.get({ index: INDEX, id: this.docId })) as EsGetResult;
       if (!res._source) return null;
@@ -228,7 +232,16 @@ export class GpuVmLeaseService {
     }
   }
 
-  /** Refresh the heartbeat. Best-effort: logs and swallows failures. */
+  /** Refresh the heartbeat. Best-effort: logs and swallows failures.
+   * Uses ES's native retry_on_conflict rather than a manual retry loop —
+   * unlike queue-service.ts's terminal writes (which must re-check lease
+   * ownership/idempotency on every retry), a heartbeat is a pure "bump the
+   * timestamp" write with no business logic to re-verify, so a server-side
+   * retry is sufficient and avoids a second round-trip per conflict. Without
+   * this, a single racing write (e.g. two heartbeat ticks overlapping under
+   * load) surfaced as a version_conflict_engine_exception log line instead
+   * of silently succeeding, which is what generated the heartbeat error
+   * spam observed in production on 2026-07-27. */
   async heartbeat(): Promise<void> {
     if (!this.owns) return;
     try {
@@ -236,6 +249,7 @@ export class GpuVmLeaseService {
         index: INDEX,
         id: this.docId,
         doc: { heartbeat_at: new Date(this.now()).toISOString() },
+        retry_on_conflict: 3,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
