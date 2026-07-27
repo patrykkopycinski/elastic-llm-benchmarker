@@ -810,6 +810,20 @@ export const discoverySchedulerConfigSchema = z.object({
     .array(z.string())
     .default(['instruct', 'mistral small', 'mixtral']),
   /**
+   * Search terms run as an always-on discovery tier (not gated on "0
+   * hardware-fit candidates" like `fallbackSearchProbes`) to actively surface
+   * security-domain-tuned models every run, not just as a last resort. Each
+   * term is a HuggingFace search query (e.g. "foundation-sec",
+   * "whiterabbitneo") run with the primary sort; results still go through
+   * every existing gate (license, context, param floor, hardware fit) and
+   * get `securityDomainPatterns`-matched score boosting on top. Set to []
+   * to disable the dedicated probe (boosting via `securityDomainPatterns`
+   * still applies to whatever the primary/freshness/fallback sweeps find).
+   */
+  securityDomainSearchProbes: z
+    .array(z.string())
+    .default(['foundation-sec', 'whiterabbitneo', 'security instruct']),
+  /**
    * Case-insensitive regex patterns matched against the model id. A model whose
    * id matches ANY pattern is hard-skipped during scoring — never scored,
    * queued, or benchmarked. This is the recency backstop for outdated
@@ -828,6 +842,24 @@ export const discoverySchedulerConfigSchema = z.object({
   excludeModelPatterns: z
     .array(z.string())
     .default(['qwen2', 'qwen1', 'qwen3-', 'llama-2', 'llama2', 'codellama']),
+  /**
+   * Case-insensitive substrings matched against the model id. A model whose
+   * id matches ANY pattern gets its `totalScore` boosted (see
+   * `SECURITY_DOMAIN_SCORE_BOOST` in discovery-scheduler.ts) so security-
+   * domain-tuned models are queued ahead of generic instruct models of
+   * similar trending/hardware-fit standing. Purely additive — never excludes
+   * or auto-passes a model past the license/context/param-count/hardware
+   * gates, it only changes queue ordering.
+   *
+   * Seeded with the known cybersecurity-domain model families as of
+   * 2026-07-27 (Foundation-Sec, WhiteRabbitNeo, ZySec, SecurityLLM); extend
+   * as new security-tuned releases surface. Matches base id substrings, not
+   * regex, to stay predictable for a config maintained by non-regex-fluent
+   * operators.
+   */
+  securityDomainPatterns: z
+    .array(z.string())
+    .default(['foundation-sec', 'whiterabbitneo', 'zysec', 'securityllm', 'sec-gemini', 'cybersec']),
 });
 
 /**

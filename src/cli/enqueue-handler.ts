@@ -8,6 +8,10 @@ import {
   formatBaselineRejections,
 } from '../services/agent-builder-baseline.js';
 import { deriveModelFamily } from '../services/discovery-scheduler.js';
+import {
+  compileModelExcludeMatchers,
+  findMatchingExcludePattern,
+} from '../utils/model-exclude.js';
 import type { AppConfig } from '../types/config.js';
 
 export interface EnqueueOptions {
@@ -91,6 +95,31 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
   }
 
   const queueService = new QueueService(esClient);
+
+  // Recency denylist, checked at enqueue time rather than only at dequeue.
+  //
+  // `retireIfRecencyExcluded` in the scheduler already cancels a denylisted
+  // entry, but it only runs once the scheduler claims the entry — so `enqueue`
+  // reported "Enqueued <model>" (exit 0), the operator believed the model was
+  // queued, and minutes-to-hours later the entry silently flipped to
+  // `cancelled` with the real reason buried in the queue doc. That produced a
+  // <1s "cancelled" with no CLI-visible cause (observed for
+  // cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit on 2026-07-27, and twice
+  // before for Qwen/Qwen3-30B-A3B-Instruct-2507). Surface it up-front with the
+  // matched pattern named, and honour the same `--force` override the
+  // scheduler-side guard honours.
+  const excludedBy = findMatchingExcludePattern(
+    modelId,
+    compileModelExcludeMatchers(config.discoveryScheduler?.excludeModelPatterns),
+  );
+  if (excludedBy && !force) {
+    return {
+      success: false,
+      message:
+        `Model ${modelId} matches excludeModelPatterns (${excludedBy.source}) — superseded generation. ` +
+        'Use --force to enqueue anyway.',
+    };
+  }
 
   const familyConflict = await findFamilyDedupConflict(queueService, modelId, config, force);
   if (familyConflict) {

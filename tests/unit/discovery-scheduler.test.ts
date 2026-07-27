@@ -438,6 +438,7 @@ describe('DiscoveryScheduler', () => {
         createdAt: '2026-01-01T00:00:00Z',
         family: id,
         superseded: false,
+        securityDomain: false,
       });
 
       const stats = await scheduler.autoQueue([
@@ -870,6 +871,199 @@ describe('DiscoveryScheduler', () => {
 
       const scored = await scheduler.discoverAndScore();
       expect(scored.map((m) => m.id)).toContain('Qwen/Qwen3-32B-Instruct');
+    });
+  });
+
+  describe('securityDomainPatterns scoring boost', () => {
+    it('boosts totalScore and sets securityDomain=true for a matching model id', async () => {
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [
+        createMockModelInfo({ id: 'fdtn-ai/Foundation-Sec-8B-Instruct' }),
+        createMockModelInfo({ id: 'org/generic-instruct-model' }),
+      ];
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 2, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        // Identical trending inputs for both models, chosen low enough that
+        // the totalScore ceiling (100) isn't hit — otherwise the boost would
+        // be masked by both models capping out at the same value. So any
+        // score delta below is attributable only to the security-domain
+        // boost, not trending noise or the cap.
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 50, createdAt: '2026-06-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = {
+        ...createMockConfig(),
+        securityDomainPatterns: ['foundation-sec'],
+      };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      const secModel = scored.find((m) => m.id === 'fdtn-ai/Foundation-Sec-8B-Instruct')!;
+      const genericModel = scored.find((m) => m.id === 'org/generic-instruct-model')!;
+
+      expect(secModel.securityDomain).toBe(true);
+      expect(genericModel.securityDomain).toBe(false);
+      // Same trending/hardware-fit inputs, so the only source of a score gap
+      // is the security-domain boost.
+      expect(secModel.trendingScore).toBe(genericModel.trendingScore);
+      expect(secModel.totalScore).toBeGreaterThan(genericModel.totalScore);
+    });
+
+    it('does not boost a model that matches no configured pattern', async () => {
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [createMockModelInfo({ id: 'org/generic-instruct-model' })];
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 5000, createdAt: '2026-07-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = {
+        ...createMockConfig(),
+        securityDomainPatterns: ['foundation-sec'],
+      };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(scored[0]!.securityDomain).toBe(false);
+    });
+
+    it('ignores an invalid regex pattern instead of aborting the sweep', async () => {
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [createMockModelInfo({ id: 'fdtn-ai/Foundation-Sec-8B-Instruct' })];
+      const discoveryService = {
+        discover: vi
+          .fn()
+          .mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() }),
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 5000, createdAt: '2026-07-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = {
+        ...createMockConfig(),
+        securityDomainPatterns: ['(unclosed', 'foundation-sec'],
+      };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+      expect(scored[0]!.securityDomain).toBe(true);
+    });
+  });
+
+  describe('securityDomainSearchProbes', () => {
+    it('runs each configured probe every discovery cycle, merging new results in', async () => {
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const primaryModels = [createMockModelInfo({ id: 'org/generic-instruct-model' })];
+      const probeModels = [createMockModelInfo({ id: 'fdtn-ai/Foundation-Sec-8B-Instruct' })];
+
+      const discover = vi.fn().mockImplementation((opts: { search?: string }) => {
+        if (opts?.search === 'foundation-sec') {
+          return Promise.resolve({
+            models: probeModels,
+            totalScanned: 1,
+            totalRejected: 0,
+            timestamp: now.toISOString(),
+          });
+        }
+        return Promise.resolve({
+          models: primaryModels,
+          totalScanned: 1,
+          totalRejected: 0,
+          timestamp: now.toISOString(),
+        });
+      });
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 5000, createdAt: '2026-07-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = {
+        ...createMockConfig(),
+        // 1x1x21.6GB hardware profile trivially fits either model, so this
+        // exercises the "always-on" probe path, not the 0-hardware-fit
+        // fallback path.
+        securityDomainSearchProbes: ['foundation-sec'],
+      };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      const scored = await scheduler.discoverAndScore();
+
+      expect(discover).toHaveBeenCalledWith(expect.objectContaining({ search: 'foundation-sec' }));
+      const ids = scored.map((m) => m.id);
+      expect(ids).toContain('org/generic-instruct-model');
+      expect(ids).toContain('fdtn-ai/Foundation-Sec-8B-Instruct');
+    });
+
+    it('does not run any probe when securityDomainSearchProbes is empty', async () => {
+      const now = new Date('2026-07-27T00:00:00Z');
+      vi.setSystemTime(now);
+
+      const models = [createMockModelInfo({ id: 'org/generic-instruct-model' })];
+      const discover = vi
+        .fn()
+        .mockResolvedValue({ models, totalScanned: 1, totalRejected: 0, timestamp: now.toISOString() });
+
+      const discoveryService = {
+        discover,
+        fetchModelConfig: vi
+          .fn()
+          .mockResolvedValue({ hidden_size: 4096, num_hidden_layers: 32, num_attention_heads: 32 }),
+        fetchModelInfo: vi
+          .fn()
+          .mockResolvedValue({ downloads: 5000, createdAt: '2026-07-01T00:00:00Z' }),
+        isEvaluated: vi.fn().mockReturnValue(false),
+        markEvaluated: vi.fn().mockResolvedValue(undefined),
+      } as unknown as ModelDiscoveryService;
+
+      const config = { ...createMockConfig(), securityDomainSearchProbes: [] };
+      const deps = createMockDeps({ discoveryService, config });
+      const scheduler = new DiscoveryScheduler(deps);
+
+      await scheduler.discoverAndScore();
+      expect(discover).toHaveBeenCalledTimes(1);
     });
   });
 

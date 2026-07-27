@@ -25,8 +25,23 @@ export function checkModelFormatCompatibility(modelId: string): FormatCheckResul
     };
   }
 
-  // Reject bnb-4bit bitsandbytes (requires llama-cpp, not vLLM)
-  if (id.includes("bnb-4bit") || id.includes("4bit")) {
+  // Reject bnb-4bit bitsandbytes (requires llama-cpp, not vLLM).
+  //
+  // IMPORTANT: only reject the actual bitsandbytes packaging, not any model id
+  // containing the substring "4bit". vLLM natively serves AWQ, GPTQ, and
+  // compressed-tensors 4-bit formats just fine — those repos are frequently
+  // named "...-AWQ-4bit" or "...-4bit-AWQ" (e.g. cyankiwi's AWQ quant line),
+  // and a bare `includes('4bit')` false-positive-rejected
+  // cyankiwi/Devstral-Small-2-24B-Instruct-2512-AWQ-4bit (real quant_method:
+  // "awq", compressed-tensors pack-quantized) on every discovery sweep and
+  // every manual enqueue. Match the bnb/bitsandbytes marker explicitly, and
+  // only treat a lone "4bit"/"4-bit" token as bnb when no AWQ/GPTQ/compressed-
+  // tensors marker is also present in the id.
+  const isExplicitBnb = id.includes("bnb-4bit") || id.includes("bnb4bit") || id.includes("bitsandbytes");
+  const hasVllmNativeQuantMarker =
+    id.includes("awq") || id.includes("gptq") || id.includes("compressed-tensors") || id.includes("marlin");
+  const isBareFourBit = (id.includes("4bit") || id.includes("4-bit")) && !hasVllmNativeQuantMarker;
+  if (isExplicitBnb || isBareFourBit) {
     return {
       compatible: false,
       reason: "4-bit bitsandbytes require llama.cpp. Use FP8 or AWQ quantization instead.",

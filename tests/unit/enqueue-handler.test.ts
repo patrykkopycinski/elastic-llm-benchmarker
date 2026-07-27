@@ -224,6 +224,59 @@ describe('runEnqueue', () => {
     );
   });
 
+  it('should fail when the model matches excludeModelPatterns and force=false', async () => {
+    // Regression test: enqueue previously reported "Enqueued" (success) for a
+    // denylisted model, then the scheduler silently cancelled the entry
+    // minutes-to-hours later with no CLI-visible cause. Fail fast instead.
+    const denylistConfig = {
+      ...mockConfig,
+      discoveryScheduler: { excludeModelPatterns: ['qwen3-'] },
+    } as unknown as AppConfig;
+
+    const result = await runEnqueue({
+      modelId: 'cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit',
+      config: denylistConfig,
+      esClient: mockEsClient as AppConfig,
+    } as EnqueueOptions);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/excludeModelPatterns/);
+    expect(result.message).toMatch(/qwen3-/);
+  });
+
+  it('should enqueue a denylisted model when force=true', async () => {
+    const denylistConfig = {
+      ...mockConfig,
+      discoveryScheduler: { excludeModelPatterns: ['qwen3-'] },
+    } as unknown as AppConfig;
+
+    const result = await runEnqueue({
+      modelId: 'cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit',
+      config: denylistConfig,
+      esClient: mockEsClient as AppConfig,
+      force: true,
+    } as EnqueueOptions);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('does not reject a newer generation (Qwen3.6) against the qwen3- pattern', async () => {
+    // qwen3- (trailing dash) targets gen-3.0 ids only; Qwen3.6 has a dot after
+    // "Qwen3" so it must not collide with the same-family exclude pattern.
+    const denylistConfig = {
+      ...mockConfig,
+      discoveryScheduler: { excludeModelPatterns: ['qwen3-'] },
+    } as unknown as AppConfig;
+
+    const result = await runEnqueue({
+      modelId: 'Qwen/Qwen3.6-27B-FP8',
+      config: denylistConfig,
+      esClient: mockEsClient as AppConfig,
+    } as EnqueueOptions);
+
+    expect(result.success).toBe(true);
+  });
+
   it('should fail when Agent Builder baseline rejects the model', async () => {
     const baselineConfig = {
       ...mockConfig,

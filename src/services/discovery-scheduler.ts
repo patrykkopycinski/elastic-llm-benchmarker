@@ -18,7 +18,7 @@ export interface ScoredModel extends ModelInfo {
   trendingScore: number;
   /** Whether the model fits the configured hardware profile */
   hardwareFit: boolean;
-  /** Combined score: trending * 0.6 + hardware bonus (0 or 40) */
+  /** Combined score: trending * 0.6 + hardware bonus (0 or 40) + security-domain bonus (0 or SECURITY_DOMAIN_SCORE_BOOST) */
   totalScore: number;
   /** ISO creation date from HuggingFace (used for recency / supersession). */
   createdAt: string | null;
@@ -28,7 +28,20 @@ export interface ScoredModel extends ModelInfo {
   superseded: boolean;
   /** Non-blocking Agent Builder baseline warnings (e.g. low MoE active-param count). */
   baselineWarnings?: string[];
+  /** True when the model id matched a configured `securityDomainPatterns` entry. */
+  securityDomain: boolean;
 }
+
+/**
+ * Additive score bonus applied when a model id matches
+ * `discoveryScheduler.securityDomainPatterns` (e.g. Foundation-Sec,
+ * WhiteRabbitNeo). Chosen so it can shift queue ordering ahead of a
+ * similarly-trending generic instruct model without overriding the
+ * hardware-fit bonus (40) that gates whether a model is queueable at all —
+ * a security-domain model that doesn't fit hardware still doesn't fit.
+ */
+export const SECURITY_DOMAIN_SCORE_BOOST = 20;
+
 
 /**
  * A same-family sibling must be at least this much newer to supersede a model.
@@ -267,6 +280,31 @@ export class DiscoveryScheduler {
     }
 
     const scored = await this.scoreModels(discoveryResult.models, profile);
+    const primarySort = this.deps.config.sort;
+
+    // Security-domain probe tier: runs every discovery cycle (not gated on
+    // "0 hardware-fit candidates" the way the generic fallback probes are),
+    // per the operator's ask to actively focus benchmarking on
+    // security-domain-tuned models rather than only opportunistically boost
+    // whichever ones happen to surface in the generic sweeps. Every result
+    // still passes through the full scoreModels gate chain (license, context,
+    // param floor, hardware fit) — this tier only widens the search surface,
+    // it does not relax any gate.
+    const securityProbes = this.deps.config.securityDomainSearchProbes ?? [];
+    for (const probe of securityProbes) {
+      this.logger.info('Discovery: running security-domain search probe', {
+        probe,
+        sort: primarySort,
+      });
+      const probeResult = await this.tryDiscover(primarySort, probe);
+      if (!probeResult || probeResult.models.length === 0) continue;
+      const seen = new Set(scored.map((m) => m.id));
+      const probeScored = await this.scoreModels(
+        probeResult.models.filter((m) => !seen.has(m.id)),
+        profile,
+      );
+      scored.push(...probeScored);
+    }
 
     // Self-healing freshness fallback: when the primary (typically downloads-ranked)
     // sweep yields no hardware-fitting candidate, the reputable feed is exhausted —
@@ -275,7 +313,6 @@ export class DiscoveryScheduler {
     // qualifying models, then merge the new ids in. Skipped when the configured sort
     // is already freshness-based (the second sweep would return the same supply and
     // just burn an HF request).
-    const primarySort = this.deps.config.sort;
     if (
       scored.filter((m) => m.hardwareFit).length === 0 &&
       primarySort !== 'lastModified' &&
@@ -346,12 +383,28 @@ export class DiscoveryScheduler {
     );
   }
 
+  /**
+   * Compile the configured `securityDomainPatterns` into case-insensitive
+   * matchers. Reuses the same compiler as the exclude-pattern denylist —
+   * both are just "case-insensitive regex/substring against the model id"
+   * matching, only the downstream effect (boost vs. exclude) differs.
+   */
+  private compileSecurityDomainPatterns(): RegExp[] {
+    return compileModelExcludeMatchers(this.deps.config.securityDomainPatterns, (pattern, err) =>
+      this.logger.warn(`Discovery: invalid securityDomainPatterns entry "${pattern}", ignoring`, {
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+
+
   private async scoreModels(
     models: ModelInfo[],
     profile: HardwareProfileDefinition | undefined,
   ): Promise<ScoredModel[]> {
     const scored: ScoredModel[] = [];
     const excludeMatchers = this.compileExcludePatterns();
+    const securityDomainMatchers = this.compileSecurityDomainPatterns();
     // Aggregate skip-reason counts so "0 hardware-fit candidates" is
     // diagnosable from a single log line instead of grepping debug logs —
     // every skip below was previously logged at debug only (invisible at
@@ -442,7 +495,9 @@ export class DiscoveryScheduler {
         }
 
         const rawTotal = trendingScore * 0.6 + (fits ? 40 : 0);
-        const totalScore = Math.min(100, Math.max(0, rawTotal));
+        const securityDomain = findMatchingExcludePattern(model.id, securityDomainMatchers) !== null;
+        const boostedTotal = rawTotal + (securityDomain ? SECURITY_DOMAIN_SCORE_BOOST : 0);
+        const totalScore = Math.min(100, Math.max(0, boostedTotal));
 
         scored.push({
           ...model,
@@ -453,7 +508,16 @@ export class DiscoveryScheduler {
           family: deriveModelFamily(model.id),
           superseded: false,
           baselineWarnings,
+          securityDomain,
         });
+        if (securityDomain) {
+          this.logger.info('Discovery: security-domain model matched, boosting score', {
+            modelId: model.id,
+            trendingScore,
+            boost: SECURITY_DOMAIN_SCORE_BOOST,
+            totalScore,
+          });
+        }
         if (!fits) countSkip('hardware-fit-failed');
       } catch (err) {
         this.logger.debug(`Skipping ${model.id}: error during scoring: ${String(err)}`);
