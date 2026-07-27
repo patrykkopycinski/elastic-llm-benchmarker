@@ -1,5 +1,6 @@
 import type { VMHardwareProfile } from '../types/config.js';
 import type { HardwareProfileDefinition } from './hardware-profiles.js';
+import { resolveEffectiveHfConfig } from './hf-config-utils.js';
 
 /**
  * Subset of HuggingFace config.json fields needed for memory estimation.
@@ -107,9 +108,7 @@ export class HardwareEstimator {
    * quantization_config is read from whichever level actually defines it.
    */
   private resolveTextDims(config: HFModelConfig): HFModelConfig {
-    const tc = config.text_config;
-    if (!tc || typeof tc !== 'object') return config;
-    return { ...config, ...tc, quantization_config: config.quantization_config ?? tc.quantization_config };
+    return resolveEffectiveHfConfig(config);
   }
 
   /**

@@ -1,6 +1,7 @@
 import type { ModelInfo } from '../types/benchmark.js';
 import type { VMHardwareProfile } from '../types/config.js';
 import { HardwareEstimator } from './hardware-estimator.js';
+import { extractContextWindowFromConfig, normalizeArchitectureFromConfig } from './hf-config-utils.js';
 import { createLogger } from '../utils/logger.js';
 import {
   TOOL_CALLING_WHITELIST,
@@ -577,29 +578,7 @@ export class ModelDiscoveryService {
   // ─── Metadata Extraction (kept from original) ─────────────────────────────
 
   private normalizeArchitecture(config: HFModelConfig): string | null {
-    if (config.model_type) return config.model_type;
-    if (config.architectures?.length) {
-      const cls = config.architectures[0] ?? '';
-      if (!cls) return null;
-      if (cls.includes('Llama')) return 'llama';
-      if (cls.includes('Mistral')) return 'mistral';
-      if (cls.includes('Mixtral')) return 'mixtral';
-      if (cls.includes('Qwen')) return 'qwen2';
-      if (cls.includes('Gemma')) return 'gemma';
-      if (cls.includes('Phi')) return 'phi3';
-      if (cls.includes('Deepseek')) return 'deepseek';
-      if (cls.includes('DeepSeek')) return 'deepseek';
-      if (cls.includes('Falcon')) return 'falcon';
-      if (cls.includes('GPTNeoX')) return 'gpt_neox';
-      if (cls.includes('GPT2')) return 'gpt2';
-      if (cls.includes('Mpt')) return 'mpt';
-      if (cls.includes('Bloom')) return 'bloom';
-      if (cls.includes('OPT')) return 'opt';
-      if (cls.includes('StableLm')) return 'stablelm';
-      if (cls.includes('CommandR')) return 'command-r';
-      if (cls.includes('Cohere')) return 'cohere';
-    }
-    return null;
+    return normalizeArchitectureFromConfig(config);
   }
 
   private extractQuantizations(
@@ -800,31 +779,7 @@ export class ModelDiscoveryService {
   }
 
   private extractContextWindow(config: HFModelConfig): number {
-    // VLM-wrapped configs (mistral3, qwen2_5_vl, etc.) nest the real text-model
-    // dimensions under `text_config`; the top-level fields are the multimodal
-    // wrapper's own (usually absent for context-window purposes). Fall back to
-    // text_config so e.g. Mistral-Small-3.2-24B-Instruct-2506 (text_config.
-    // max_position_embeddings=131072, top-level=undefined) isn't scored as a
-    // 0-token-context model and silently dropped at the context-window gate.
-    const tc = config.text_config;
-    let window =
-      config.max_position_embeddings ??
-      tc?.max_position_embeddings ??
-      config.max_sequence_length ??
-      tc?.max_sequence_length ??
-      0;
-
-    const slidingWindow = config.sliding_window ?? tc?.sliding_window;
-    if (slidingWindow && slidingWindow > window) {
-      window = slidingWindow;
-    }
-
-    const ropeScaling = config.rope_scaling ?? tc?.rope_scaling;
-    if (ropeScaling?.factor && ropeScaling.original_max_position_embeddings) {
-      window = Math.round(ropeScaling.original_max_position_embeddings * ropeScaling.factor);
-    }
-
-    return window;
+    return extractContextWindowFromConfig(config);
   }
 
   // ─── Data Fetching ───────────────────────────────────────────────────────

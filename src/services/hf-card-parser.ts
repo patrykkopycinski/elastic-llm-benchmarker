@@ -1,8 +1,17 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { extractContextWindowFromConfig } from './hf-config-utils.js';
 
 const ONE_HOUR_MS = 3_600_000;
 const MAX_CONTEXT_WINDOW = 1_048_576;
+
+/**
+ * Re-exported for backward compatibility with existing imports/tests.
+ * Canonical implementation lives in hf-config-utils.ts (shared with
+ * model-discovery.ts, hardware-estimator.ts, agent-builder-baseline.ts —
+ * see that file's header comment for why this was consolidated).
+ */
+export { extractContextWindowFromConfig };
 
 export interface HFCardParserOptions {
   modelId: string;
@@ -111,85 +120,6 @@ export function estimateParamsBillionsFromConfig(
   const attnPerLayer = 4 * h * h;
   const estimate = v * h + l * (attnPerLayer + ffnPerLayer);
   return estimate / 1_000_000_000;
-}
-
-function parseSizeStringToTokens(str: string): number {
-  const cleaned = str.trim().toLowerCase().replace(/,/g, '');
-  if (cleaned.endsWith('k')) return parseFloat(cleaned.slice(0, -1)) * 1_000;
-  if (cleaned.endsWith('m')) return parseFloat(cleaned.slice(0, -1)) * 1_000_000;
-  return parseFloat(cleaned) || 0;
-}
-
-/**
- * Extract the effective context window (max sequence length in tokens) from
- * a HuggingFace config.json, falling back to README text patterns when the
- * config is absent or incomplete.
- *
- * VLM-wrapped configs (mistral3, qwen2_5_vl, etc.) nest the real text-model
- * dims under `text_config`; top-level fields describe the multimodal wrapper
- * and are typically absent there. Exported (mirroring
- * estimateParamsBillionsFromConfig) so it's directly testable and reusable —
- * this is the third independent implementation of this exact extraction
- * (siblings in model-discovery.ts and hardware-estimator.ts) that had the
- * same text_config blind spot, verified live against
- * Qwen/Qwen3.6-35B-A3B-FP8: logged contextWindow:0 before this fix despite a
- * real 262144-token text_config.max_position_embeddings.
- */
-export function extractContextWindowFromConfig(
-  configJson: Record<string, unknown> | null,
-  readme: string,
-): number {
-  if (configJson) {
-    const tc =
-      configJson['text_config'] && typeof configJson['text_config'] === 'object'
-        ? (configJson['text_config'] as Record<string, unknown>)
-        : null;
-
-    const maxPos =
-      configJson['max_position_embeddings'] ??
-      configJson['n_positions'] ??
-      configJson['max_sequence_length'] ??
-      tc?.['max_position_embeddings'] ??
-      tc?.['n_positions'] ??
-      tc?.['max_sequence_length'];
-    if (typeof maxPos === 'number') {
-      return maxPos;
-    }
-
-    const rope = configJson['rope_scaling'] ?? tc?.['rope_scaling'];
-    if (rope && typeof rope === 'object') {
-      const ropeObj = rope as Record<string, unknown>;
-      const factor = typeof ropeObj.factor === 'number' ? ropeObj.factor : 1;
-      const basePos =
-        typeof ropeObj.original_max_position_embeddings === 'number'
-          ? ropeObj.original_max_position_embeddings
-          : typeof configJson['max_position_embeddings'] === 'number'
-            ? configJson['max_position_embeddings']
-            : typeof tc?.['max_position_embeddings'] === 'number'
-              ? (tc['max_position_embeddings'] as number)
-              : 0;
-      if (basePos > 0) {
-        return Math.floor(basePos * factor);
-      }
-    }
-  }
-
-  const regexes = [
-    /context window[:\s]+(\d+[kKmM]?)/i,
-    /max position embeddings[:\s]+(\d+[kKmM]?)/i,
-    /sequence length[:\s]+(\d+[kKmM]?)/i,
-    /(\d+[kKmM]?)\s*tokens/i,
-  ];
-
-  for (const regex of regexes) {
-    const match = readme.match(regex);
-    if (match?.[1]) {
-      const val = parseSizeStringToTokens(match[1]);
-      if (val > 0) return val;
-    }
-  }
-
-  return 0;
 }
 
 export class HFCardParser {

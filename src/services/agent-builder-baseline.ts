@@ -1,6 +1,7 @@
 import type { ModelInfo } from '../types/benchmark.js';
 import type { AppConfig } from '../types/config.js';
 import { HFCardParser } from './hf-card-parser.js';
+import { extractContextWindowFromConfig, normalizeArchitectureFromConfig } from './hf-config-utils.js';
 import {
   ModelCandidateFilter,
   type FilterResult,
@@ -69,36 +70,11 @@ export function normalizeParameterCount(raw: number | null): number | null {
 }
 
 export function extractContextWindowFromHfConfig(config: HfConfigJson): number {
-  const tc = config.text_config;
-  let window =
-    config.max_position_embeddings ??
-    tc?.max_position_embeddings ??
-    config.max_sequence_length ??
-    tc?.max_sequence_length ??
-    0;
-
-  if (config.sliding_window && config.sliding_window > window) {
-    window = config.sliding_window;
-  }
-
-  const rope = config.rope_scaling ?? tc?.rope_scaling;
-  if (rope?.factor && rope.original_max_position_embeddings) {
-    window = Math.round(rope.original_max_position_embeddings * rope.factor);
-  }
-
-  return window;
+  return extractContextWindowFromConfig(config as Record<string, unknown>);
 }
 
 export function normalizeArchitectureFromHfConfig(config: HfConfigJson): string | null {
-  if (config.model_type) return config.model_type;
-  const cls = config.architectures?.[0] ?? '';
-  if (cls.includes('Llama')) return 'llama';
-  if (cls.includes('Mistral')) return 'mistral';
-  if (cls.includes('Mixtral')) return 'mixtral';
-  if (cls.includes('Qwen')) return 'qwen2';
-  if (cls.includes('Gemma')) return 'gemma';
-  if (cls.includes('Phi')) return 'phi3';
-  return config.model_type ?? null;
+  return normalizeArchitectureFromConfig(config as Record<string, unknown>);
 }
 
 export function estimateParameterCountFromHfConfig(
