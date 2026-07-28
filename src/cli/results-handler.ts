@@ -1,4 +1,5 @@
-import { Command } from 'commander';
+import type { Command } from 'commander';
+import { resolve } from 'node:path';
 import { loadConfig } from '../config/index.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import type { ModelBenchmarkSummary } from '../services/elasticsearch-results-store.js';
@@ -8,7 +9,7 @@ import { output, outputError } from './output.js';
 function loadAppConfig(options: { config?: string; json?: boolean }): ReturnType<typeof loadConfig> | null {
   try {
     const configPath = options.config
-      ? require('node:path').resolve(process.cwd(), options.config)
+      ? resolve(process.cwd(), options.config)
       : undefined;
     return loadConfig(undefined, { configPath });
   } catch (err) {
