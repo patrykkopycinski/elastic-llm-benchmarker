@@ -8,8 +8,13 @@
  * and lets the production query do the truncating.
  */
 import { describe, it, expect } from 'vitest';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
 import type { Client } from '@elastic/elasticsearch';
 import { QueueService } from '../../src/services/queue-service.js';
+import { createQueueServer } from '../../src/api/queue-server.js';
+import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
+import { HttpEntryResolver } from '../../src/scripts/buzz-bridge.js';
 import {
   BuzzNotifier,
   SqliteTransitionStore,
@@ -192,5 +197,114 @@ describe('truncation recovery', () => {
     await notifier.processSnapshot(snapshot);
 
     expect(transport.posts).toEqual([]);
+  });
+});
+
+/**
+ * The same recovery path, but with the HTTP hop left in.
+ *
+ * The tests above drive `QueueService.getById()` directly, and the route is
+ * covered separately in `queue-server.test.ts` — so the one seam nothing
+ * exercised was `HttpEntryResolver` talking to the real route. For a truncated
+ * entry that route is the only way `completed` is ever observed (`getCurrent()`
+ * matches only deploying/benchmarking), so it is the wrong place to rely on two
+ * separately-covered halves.
+ */
+describe('resolve-by-id over HTTP', () => {
+  async function mount(docs: EsDoc[], opts: { requireAuth?: boolean; token?: string } = {}) {
+    const esClient = createFakeEs(docs);
+    const service = new QueueService(esClient);
+    const app = createQueueServer({
+      esClient,
+      queueService: service,
+      resultsStore: {} as unknown as ElasticsearchResultsStore,
+      requireAuth: opts.requireAuth ?? false,
+    });
+
+    const server = app.listen(0);
+    await once(server, 'listening');
+    const { port } = server.address() as AddressInfo;
+
+    return {
+      service,
+      resolver: new HttpEntryResolver(`http://127.0.0.1:${port}`, opts.token),
+      close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  function truncatedFixture(): EsDoc[] {
+    return [
+      ...Array.from({ length: 100 }, (_, i) =>
+        doc(`filler-${i}`, { requested_at: `2026-07-01T00:00:${String(i).padStart(2, '0')}.000Z` }),
+      ),
+      doc(DISCOVERY_ID, {
+        source: 'discovery',
+        priority: 10,
+        status: 'benchmarking',
+        requested_at: '2026-07-28T12:00:00.000Z',
+      }),
+    ];
+  }
+
+  it('closes a truncated entry through the real route', async () => {
+    const docs = truncatedFixture();
+    const harness = await mount(docs);
+
+    try {
+      expect((await harness.service.getQueue()).some((e) => e.id === DISCOVERY_ID)).toBe(false);
+
+      const transport = createRecordingTransport();
+      const notifier = new BuzzNotifier({
+        store: new SqliteTransitionStore(':memory:'),
+        transport,
+        resolver: harness.resolver,
+      });
+
+      await notifier.processSnapshot({
+        entries: await harness.service.getQueue(),
+        current: await harness.service.getCurrent(),
+      });
+      expect(transport.posts).toHaveLength(1);
+
+      docs[docs.length - 1]._source.status = 'completed';
+
+      await notifier.processSnapshot({
+        entries: await harness.service.getQueue(),
+        current: await harness.service.getCurrent(),
+      });
+
+      expect(transport.posts).toHaveLength(2);
+      expect(transport.posts[1]).toContain('completed');
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('returns null over HTTP only for an id the route itself reports missing', async () => {
+    const harness = await mount(truncatedFixture());
+    try {
+      // Resolve a present id first. Without this the null below proves nothing:
+      // a wrong path 404s exactly like an unknown id, so the assertion would
+      // still pass against a route that does not exist.
+      expect(await harness.resolver.resolveById(DISCOVERY_ID)).toMatchObject({
+        id: DISCOVERY_ID,
+        status: 'benchmarking',
+      });
+
+      expect(await harness.resolver.resolveById('no-such-entry')).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  it('throws loudly on a 401 rather than silently leaving the thread open', async () => {
+    // Auth on, no token configured on the bridge. Silence here would be
+    // indistinguishable from an idle queue, so this must surface.
+    const harness = await mount(truncatedFixture(), { requireAuth: true });
+    try {
+      await expect(harness.resolver.resolveById(DISCOVERY_ID)).rejects.toThrow(/401/);
+    } finally {
+      await harness.close();
+    }
   });
 });
