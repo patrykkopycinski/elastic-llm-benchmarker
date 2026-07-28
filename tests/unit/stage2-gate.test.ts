@@ -75,7 +75,10 @@ function createMockConfig(overrides?: Partial<AppConfig['stage2Thresholds']>): A
   } as unknown as AppConfig;
 }
 
-function createStage1Result(metrics: Stage1Result['metrics']): Stage1Result {
+function createStage1Result(
+  metrics: Stage1Result['metrics'],
+  overrides: Partial<Stage1Result> = {},
+): Stage1Result {
   return {
     runId: 'run-1',
     modelId: 'meta-llama/Llama-3-8B',
@@ -85,6 +88,7 @@ function createStage1Result(metrics: Stage1Result['metrics']): Stage1Result {
     rawOutput: '',
     startedAt: new Date().toISOString(),
     completedAt: new Date().toISOString(),
+    ...overrides,
   };
 }
 
@@ -246,5 +250,93 @@ describe('Stage2Gate', () => {
     const decision = gate.check(result);
 
     expect(decision.proceed).toBe(true);
+  });
+
+  describe('stage2Eligible short-circuit', () => {
+    it('rejects a fast model that failed the tool-call gate, even though metrics-only thresholds would pass', () => {
+      // Regression: dare43321/hindi-tts-model-4 had great throughput
+      // (3220 tps) and low latency (4.23ms ITL) but 0% tool-call success
+      // rate. stage1-worker.ts correctly computed stage2Eligible: false
+      // (ITL && throughput && TTFT && contextWindow && toolCallGatePassed),
+      // but the old metric-only check() here only validated 3 of those 5
+      // conditions (no context window, no tool-calling) and returned
+      // proceed: true, burning a full Stage 2 batch eval cycle on a model
+      // that can never pass a tool-calling eval suite.
+      const gate = new Stage2Gate(createMockConfig());
+      const result = createStage1Result(
+        {
+          itl_p50_ms: 4.23,
+          itl_p99_ms: 8,
+          ttft_ms: 36.04,
+          throughput_tps: 3220.59,
+          duration_sec: 10,
+        },
+        {
+          stage2Eligible: false,
+          toolCallSuccessRate: 0,
+          singleToolSuccessRate: 0,
+        },
+      );
+
+      const decision = gate.check(result);
+
+      expect(decision.proceed).toBe(false);
+    });
+
+    it('proceeds when stage2Eligible is explicitly true, regardless of metric re-derivation', () => {
+      const gate = new Stage2Gate(createMockConfig());
+      const result = createStage1Result(
+        {
+          itl_p50_ms: 15,
+          itl_p99_ms: 20,
+          ttft_ms: 200,
+          throughput_tps: 50,
+          duration_sec: 60,
+        },
+        { stage2Eligible: true },
+      );
+
+      const decision = gate.check(result);
+
+      expect(decision.proceed).toBe(true);
+    });
+
+    it('falls back to metric-only thresholds when stage2Eligible is absent (legacy Stage1Result)', () => {
+      const gate = new Stage2Gate(createMockConfig());
+      const result = createStage1Result({
+        itl_p50_ms: 15,
+        itl_p99_ms: 20,
+        ttft_ms: 200,
+        throughput_tps: 50,
+        duration_sec: 60,
+      });
+      expect(result.stage2Eligible).toBeUndefined();
+
+      const decision = gate.check(result);
+
+      expect(decision.proceed).toBe(true);
+    });
+
+    it('still rejects a skipped result whose stage2Eligible is false', () => {
+      const gate = new Stage2Gate(createMockConfig());
+      const result = createStage1Result(null, {
+        status: 'skipped',
+        stage2Eligible: false,
+      });
+
+      const decision = gate.check(result);
+
+      expect(decision.proceed).toBe(false);
+    });
+
+    it('proceeds for a skipped resume/eval-only result with no eligibility info', () => {
+      const gate = new Stage2Gate(createMockConfig());
+      const result = createStage1Result(null, { status: 'skipped' });
+
+      const decision = gate.check(result);
+
+      expect(decision.proceed).toBe(true);
+      expect(decision.reason).toBe('Stage 1 skipped (eval-only/resume)');
+    });
   });
 });

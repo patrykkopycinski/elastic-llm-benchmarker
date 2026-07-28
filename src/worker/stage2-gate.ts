@@ -26,6 +26,20 @@ export class Stage2Gate {
       return { proceed: true, reason: 'Stage 1 skipped (eval-only/resume)' };
     }
 
+    // Trust the pre-computed eligibility from stage1-worker.ts when present:
+    // it's the authoritative combined signal (ITL + throughput + TTFT +
+    // context window + tool-call gate). The metric-only re-derivation below
+    // is a narrower legacy check (3 of those 5 conditions, no tool-calling)
+    // kept only as a fallback for Stage1Results produced before
+    // stage2Eligible existed. Without this short-circuit, a fast-but-not-
+    // tool-call-capable model (e.g. a fine-tune with 0% tool-call success but
+    // great throughput/latency) passes this gate and burns a full Stage 2
+    // batch eval cycle even though stage2Eligible already correctly flagged
+    // it ineligible upstream.
+    if (result.stage2Eligible === false) {
+      return { proceed: false, reason: 'Failed Stage 1 eligibility gate (see stage2Eligible metrics)' };
+    }
+
     if (!result.metrics) {
       return { proceed: false, reason: 'No metrics available' };
     }
