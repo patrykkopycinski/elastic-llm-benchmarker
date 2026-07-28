@@ -4,7 +4,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import dotenv from 'dotenv';
 import express from 'express';
-import { Client } from '@elastic/elasticsearch';
+import type { Client } from '@elastic/elasticsearch';
 import { createElasticsearchClient } from '../utils/es-client.js';
 import { QueueService } from '../services/queue-service.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
@@ -59,11 +59,12 @@ async function enrichRecommendationReport(
   let enriched: RecommendationReport = { ...report };
 
   if (
-    (enriched.toolCallSuccessRate == null || enriched.singleToolSuccessRate == null) &&
+    ((enriched.toolCallSuccessRate === null || enriched.toolCallSuccessRate === undefined) ||
+      (enriched.singleToolSuccessRate === null || enriched.singleToolSuccessRate === undefined)) &&
     latestBenchmark?.toolCallResults
   ) {
     const tc = latestBenchmark.toolCallResults;
-    let singleTool =
+    const singleTool =
       tc.singleToolSuccessRate ??
       (tc.successRate < 0.95 &&
       enriched.stage2Passed &&
@@ -633,7 +634,7 @@ export function createQueueServer(config: QueueServerConfig & {
       const enriched = await Promise.all(
         reports.map(async (r) => {
           const benchmark = await resultsStore.getBenchmarkForRecommendation(r);
-          let report = await enrichRecommendationReport(r, benchmark ?? undefined, matrixOutputDir);
+          const report = await enrichRecommendationReport(r, benchmark ?? undefined, matrixOutputDir);
           if (!benchmark) return report;
           return {
             ...report,
