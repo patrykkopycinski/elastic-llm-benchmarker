@@ -109,10 +109,17 @@ async function enrichRecommendationReport(
 
 const RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_LIMIT_MAX = 100;
+const DEFAULT_HOST = '127.0.0.1';
 
 // ─── Types ──────────────────────────────────────────────────────────
 export interface QueueServerConfig {
   port?: number;
+  /**
+   * Interface to bind. Defaults to loopback: the legacy `/api/queue` routes are
+   * deliberately unauthenticated for the internal UI, so loopback is the only
+   * safe boundary for them. Override with `HOST` only behind a trusted proxy.
+   */
+  host?: string;
   esUrl?: string;
   esApiKey?: string;
   esUsername?: string;
@@ -871,15 +878,45 @@ export function createQueueServer(config: QueueServerConfig & {
   return app;
 }
 
+/**
+ * Read a tri-state boolean env var. Returns `undefined` when unset so callers
+ * can pass it straight into an optional config field and let the `??` fallback
+ * fire — passing a concrete `false` would short-circuit that fallback instead.
+ */
+function optionalBooleanEnv(value: string | undefined): boolean | undefined {
+  if (value === undefined || value === '') return undefined;
+  return value === 'true';
+}
+
+/**
+ * Assemble the CLI entrypoint's config from the environment. Extracted from the
+ * `import.meta.url` guard below so the wiring is reachable from tests — in
+ * particular that `requireAuth` stays `undefined` when `REQUIRE_AUTH` is unset,
+ * which is what lets the `API_KEYS` fallback in `createQueueServer` fire.
+ */
+export function configFromEnv(): QueueServerConfig {
+  return {
+    port: Number(process.env.BENCHMARKER_API_PORT ?? process.env.PORT) || 3200,
+    host: process.env.HOST ?? DEFAULT_HOST,
+    esUrl: process.env.ES_URL ?? process.env.ELASTICSEARCH_URL,
+    esApiKey: process.env.ES_API_KEY ?? process.env.ELASTICSEARCH_API_KEY,
+    esUsername: process.env.ES_USERNAME,
+    esPassword: process.env.ES_PASSWORD,
+    apiKeys: process.env.API_KEYS?.split(',').map((k) => k.trim()).filter(Boolean),
+    requireAuth: optionalBooleanEnv(process.env.REQUIRE_AUTH),
+  };
+}
+
 // ─── Starter ────────────────────────────────────────────────────────
 export function startQueueServer(config: QueueServerConfig = {}) {
   const port =
     config.port ??
     Number(process.env.BENCHMARKER_API_PORT ?? process.env.PORT ?? 3200);
+  const host = config.host ?? process.env.HOST ?? DEFAULT_HOST;
   const app = createQueueServer(config);
-  const server = app.listen(port, () => {
+  const server = app.listen(port, host, () => {
     const logger = createLogger();
-    logger.info(`Queue API listening on port ${port}`);
+    logger.info(`Queue API listening on ${host}:${port}`);
   });
   return server;
 }
@@ -887,13 +924,5 @@ export function startQueueServer(config: QueueServerConfig = {}) {
 // ─── CLI entrypoint ─────────────────────────────────────────────────
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   dotenv.config();
-  startQueueServer({
-    port: Number(process.env.BENCHMARKER_API_PORT ?? process.env.PORT) || 3200,
-    esUrl: process.env.ES_URL ?? process.env.ELASTICSEARCH_URL,
-    esApiKey: process.env.ES_API_KEY ?? process.env.ELASTICSEARCH_API_KEY,
-    esUsername: process.env.ES_USERNAME,
-    esPassword: process.env.ES_PASSWORD,
-    apiKeys: process.env.API_KEYS?.split(',').map((k) => k.trim()).filter(Boolean),
-    requireAuth: process.env.REQUIRE_AUTH === 'true',
-  });
+  startQueueServer(configFromEnv());
 }
