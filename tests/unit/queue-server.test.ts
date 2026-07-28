@@ -1,6 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import request from 'supertest';
-import { createQueueServer } from '../../src/api/queue-server.js';
+import type { AddressInfo } from 'node:net';
+import type { Server } from 'node:http';
+import { createQueueServer, startQueueServer, configFromEnv } from '../../src/api/queue-server.js';
 import type { QueueService } from '../../src/services/queue-service.js';
 import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
 import type { Client } from '@elastic/elasticsearch';
@@ -300,6 +302,121 @@ describe('Queue Server', () => {
 
       expect(okCount).toBeLessThanOrEqual(100);
       expect(rateLimitedCount).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // The legacy `/api/queue` routes are deliberately unauthenticated for the
+  // internal UI, so the listen host is the only boundary protecting them.
+  // Binding the unspecified address exposed POST/DELETE to every tailnet node.
+  describe('listen host', () => {
+    let servers: Server[];
+    let savedHost: string | undefined;
+
+    beforeEach(() => {
+      servers = [];
+      savedHost = process.env.HOST;
+      delete process.env.HOST;
+    });
+
+    afterEach(async () => {
+      if (savedHost === undefined) delete process.env.HOST;
+      else process.env.HOST = savedHost;
+      await Promise.all(
+        servers.map((s) => new Promise<void>((resolve) => s.close(() => resolve()))),
+      );
+    });
+
+    function listen(config: Parameters<typeof startQueueServer>[0]): Promise<AddressInfo> {
+      const server = startQueueServer(config);
+      servers.push(server);
+      return new Promise((resolve) => {
+        server.once('listening', () => resolve(server.address() as AddressInfo));
+      });
+    }
+
+    it('should bind loopback by default', async () => {
+      const address = await listen({ esClient, port: 0 });
+      expect(address.address).toBe('127.0.0.1');
+    });
+
+    it('should bind the host from the HOST env var when set', async () => {
+      process.env.HOST = '0.0.0.0';
+      const address = await listen({ esClient, port: 0 });
+      expect(address.address).toBe('0.0.0.0');
+    });
+
+    it('should let an explicit config host win over HOST', async () => {
+      process.env.HOST = '0.0.0.0';
+      const address = await listen({ esClient, port: 0, host: '127.0.0.1' });
+      expect(address.address).toBe('127.0.0.1');
+    });
+  });
+
+  // `requireAuth` is optional so `createQueueServer` can fall back to
+  // "auth on when API_KEYS is present". Passing a concrete `false` from the CLI
+  // short-circuited that `??` and made API_KEYS silently dead.
+  describe('configFromEnv', () => {
+    const AUTH_ENV = ['REQUIRE_AUTH', 'API_KEYS', 'HOST'] as const;
+    let saved: Record<string, string | undefined>;
+
+    beforeEach(() => {
+      saved = Object.fromEntries(AUTH_ENV.map((k) => [k, process.env[k]]));
+      for (const key of AUTH_ENV) delete process.env[key];
+    });
+
+    afterEach(() => {
+      for (const key of AUTH_ENV) {
+        const value = saved[key];
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
+
+    it('should leave requireAuth undefined when REQUIRE_AUTH is unset', () => {
+      expect(configFromEnv().requireAuth).toBeUndefined();
+    });
+
+    it('should leave requireAuth undefined when REQUIRE_AUTH is empty', () => {
+      process.env.REQUIRE_AUTH = '';
+      expect(configFromEnv().requireAuth).toBeUndefined();
+    });
+
+    it('should set requireAuth true when REQUIRE_AUTH is "true"', () => {
+      process.env.REQUIRE_AUTH = 'true';
+      expect(configFromEnv().requireAuth).toBe(true);
+    });
+
+    it('should set requireAuth false when REQUIRE_AUTH is explicitly "false"', () => {
+      process.env.REQUIRE_AUTH = 'false';
+      expect(configFromEnv().requireAuth).toBe(false);
+    });
+
+    it('should default host to loopback', () => {
+      expect(configFromEnv().host).toBe('127.0.0.1');
+    });
+  });
+
+  describe('API_KEYS fallback', () => {
+    it('should require auth when apiKeys are set and requireAuth is omitted', async () => {
+      const { createHash } = await import('node:crypto');
+      const hash = createHash('sha256').update('fallback-token').digest('hex');
+      const app = createQueueServer({ esClient, queueService, resultsStore, apiKeys: [hash] });
+      const res = await request(app).get('/api/v1/queue');
+      expect(res.status).toBe(401);
+    });
+
+    it('should still allow an explicit requireAuth false to disable auth', async () => {
+      const { createHash } = await import('node:crypto');
+      const hash = createHash('sha256').update('fallback-token').digest('hex');
+      const app = createQueueServer({
+        esClient,
+        queueService,
+        resultsStore,
+        apiKeys: [hash],
+        requireAuth: false,
+      });
+      const res = await request(app).get('/api/v1/queue');
+      expect(res.status).toBe(200);
     });
   });
 });
