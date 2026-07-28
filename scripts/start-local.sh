@@ -11,10 +11,34 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+# Non-login/non-interactive SSH invocations (e.g. `ssh host "cmd"`, launchd with a
+# minimal environment) don't source /etc/zprofile, so Homebrew's bin dirs may be
+# missing from PATH even though brew-installed tools like tmux/cloudflared exist.
+# This has previously caused Stage 2 batch evals to fail immediately with
+# "tmux is required but not found" despite tmux being installed — the daemon just
+# couldn't see it. Make sure both Intel (/usr/local) and Apple Silicon
+# (/opt/homebrew) Homebrew prefixes are always on PATH before we do anything else.
+for brew_bin in /usr/local/bin /opt/homebrew/bin; do
+  if [[ -d "$brew_bin" && ":$PATH:" != *":$brew_bin:"* ]]; then
+    export PATH="$brew_bin:$PATH"
+  fi
+done
+
 if [[ ! -f config/local.json ]]; then
   echo "Error: config/local.json not found. Copy config/smoke-full.json and add your SSH/VM values." >&2
   exit 1
 fi
+
+# Fail loudly and immediately if a binary Stage 2's batch runner depends on isn't
+# reachable, instead of letting the daemon start "successfully" and then silently
+# failing every Stage 2 batch eval with a buried stderr line hours later.
+for required_bin in tmux; do
+  if ! command -v "$required_bin" >/dev/null 2>&1; then
+    echo "Error: required binary '$required_bin' not found on PATH (PATH=$PATH)." >&2
+    echo "Stage 2 batch evals will fail immediately without it. Install via 'brew install $required_bin' or fix PATH." >&2
+    exit 1
+  fi
+done
 
 export BOOT_POLL_ATTEMPTS="${BOOT_POLL_ATTEMPTS:-1800}"
 
