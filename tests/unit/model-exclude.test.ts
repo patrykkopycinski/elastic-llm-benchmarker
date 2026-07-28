@@ -41,7 +41,9 @@ describe('findMatchingExcludePattern', () => {
 
   it('does not match a newer generation (qwen3) against a qwen2 pattern', () => {
     expect(findMatchingExcludePattern('Qwen/Qwen3-30B-A3B-Instruct-2507', matchers)).toBeNull();
-    expect(findMatchingExcludePattern('cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit', matchers)).toBeNull();
+    expect(
+      findMatchingExcludePattern('cyankiwi/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit', matchers),
+    ).toBeNull();
   });
 
   // `qwen3-` (trailing dash) retires all of gen-3.0 while sparing gen-3.6:
@@ -50,14 +52,23 @@ describe('findMatchingExcludePattern', () => {
     const gen3Matchers = compileModelExcludeMatchers(['qwen2', 'qwen1', 'qwen3-']);
 
     it('matches gen-3.0 editions (30B / Next / Coder, base or quant)', () => {
-      expect(findMatchingExcludePattern('Qwen/Qwen3-30B-A3B-Instruct-2507', gen3Matchers)?.source).toBe('qwen3-');
-      expect(findMatchingExcludePattern('cyankiwi/Qwen3-Next-80B-A3B-Instruct-AWQ-4bit', gen3Matchers)?.source).toBe('qwen3-');
-      expect(findMatchingExcludePattern('Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8', gen3Matchers)?.source).toBe('qwen3-');
+      expect(
+        findMatchingExcludePattern('Qwen/Qwen3-30B-A3B-Instruct-2507', gen3Matchers)?.source,
+      ).toBe('qwen3-');
+      expect(
+        findMatchingExcludePattern('cyankiwi/Qwen3-Next-80B-A3B-Instruct-AWQ-4bit', gen3Matchers)
+          ?.source,
+      ).toBe('qwen3-');
+      expect(
+        findMatchingExcludePattern('Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8', gen3Matchers)?.source,
+      ).toBe('qwen3-');
     });
 
     it('does NOT match gen-3.6 (dot after qwen3, not dash)', () => {
       expect(findMatchingExcludePattern('Qwen/Qwen3.6-35B-A3B', gen3Matchers)).toBeNull();
-      expect(findMatchingExcludePattern('someone/Qwen3.6-35B-A3B-AWQ-4bit', gen3Matchers)).toBeNull();
+      expect(
+        findMatchingExcludePattern('someone/Qwen3.6-35B-A3B-AWQ-4bit', gen3Matchers),
+      ).toBeNull();
     });
   });
 

@@ -310,7 +310,9 @@ export const kibanaEvalConfigSchema = z.object({
   /** Tool name for tool calling evaluation. */
   toolCallTestToolName: z.string().default('get_current_time'),
   /** Tool prompt for tool calling evaluation. */
-  toolCallTestPrompt: z.string().default('What is the current time? Use the get_current_time tool.'),
+  toolCallTestPrompt: z
+    .string()
+    .default('What is the current time? Use the get_current_time tool.'),
 });
 
 /**
@@ -500,7 +502,10 @@ export const elasticAgentConfigSchema = z.object({
  */
 export const goldenClusterConfigSchema = z.object({
   enabled: z.boolean().default(false),
-  url: z.string().url().default('https://kbn-evals-serverless-ed035a.kb.us-central1.gcp.elastic.cloud'),
+  url: z
+    .string()
+    .url()
+    .default('https://kbn-evals-serverless-ed035a.kb.us-central1.gcp.elastic.cloud'),
   apiKey: z.string().optional(),
   forwardToGolden: z.boolean().default(false),
 });
@@ -531,9 +536,7 @@ const gitCloneUrlSchema = z
   .min(1)
   .refine(
     (value) =>
-      value.startsWith('https://') ||
-      value.startsWith('http://') ||
-      value.startsWith('git@'),
+      value.startsWith('https://') || value.startsWith('http://') || value.startsWith('git@'),
     { message: 'Must be an http(s):// or git@ clone URL' },
   );
 
@@ -806,9 +809,7 @@ export const discoverySchedulerConfigSchema = z.object({
    * primary sort (verified live: `instruct` → Qwen 30–32B instruct band,
    * `mistral small` → Devstral/Mistral-Small 24B). Set to [] to disable.
    */
-  fallbackSearchProbes: z
-    .array(z.string())
-    .default(['instruct', 'mistral small', 'mixtral']),
+  fallbackSearchProbes: z.array(z.string()).default(['instruct', 'mistral small', 'mixtral']),
   /**
    * Search terms run as an always-on discovery tier (not gated on "0
    * hardware-fit candidates" like `fallbackSearchProbes`) to actively surface
@@ -1108,7 +1109,10 @@ export const appConfigSchema = z.object({
   llmTemperature: z.number().min(0).max(2).default(0.3),
   /** EIS (Elastic Inference Service) configuration — preferred over llmApiKey when set. */
   eisApiKey: z.string().optional().describe('EIS CCM API key for Elastic Inference Service'),
-  eisModel: z.string().default('eis/anthropic-claude-4.6-opus').describe('EIS model ID for reasoning'),
+  eisModel: z
+    .string()
+    .default('eis/anthropic-claude-4.6-opus')
+    .describe('EIS model ID for reasoning'),
 });
 
 export type SSHConfig = z.infer<typeof sshConfigSchema>;
@@ -1148,11 +1152,7 @@ export function resolveMaxITLMs(
   thresholds: BenchmarkThresholds,
   parameterCountBillions: number | null,
 ): number {
-  return resolveTieredItlCap(
-    thresholds.maxITLMsTiers,
-    thresholds.maxITLMs,
-    parameterCountBillions,
-  );
+  return resolveTieredItlCap(thresholds.maxITLMsTiers, thresholds.maxITLMs, parameterCountBillions);
 }
 
 /**
