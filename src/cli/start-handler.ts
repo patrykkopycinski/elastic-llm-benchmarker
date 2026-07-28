@@ -78,6 +78,32 @@ export function resolveDiscoveryHardwareProfile(
   return profileRegistry.getProfile(hardwareProfileId);
 }
 
+/**
+ * The single hard gate for enabling the Buildkite CI-eval pipeline.
+ *
+ * `config.buildkite.enabled: false` is a standing operator kill-switch and
+ * must be an unconditional AND, never an alternate OR path. Before this fix,
+ * `(enableCIEvals || config.buildkite.enabled) && Boolean(apiToken)` meant the
+ * `--ci-evals` CLI flag alone could enable Buildkite even with
+ * `buildkite.enabled: false` in config, as long as an API token happened to
+ * be resolvable (env var, or the `~/.buildkite/token` file `start-local.sh`
+ * reads for unrelated tooling). That silently violated the standing policy
+ * and fired real on-demand Buildkite builds (~$8/build) against models that
+ * had already passed the local Stage 2 batch eval — see builds #316-326 on
+ * 2026-07-28, which mislabeled QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ and
+ * cyankiwi/Qwen3-Coder-30B-A3B-Instruct-AWQ-4bit as `failed`.
+ *
+ * Both call sites in this file must use this helper rather than re-deriving
+ * the condition inline.
+ */
+export function shouldEnableCIEvals(
+  enableCIEvals: boolean,
+  buildkiteEnabled: boolean,
+  buildkiteApiToken: string | undefined,
+): boolean {
+  return enableCIEvals && buildkiteEnabled && Boolean(buildkiteApiToken);
+}
+
 function resolveStartConfigPath(fallback: string): string {
   if (process.env['BENCHMARKER_CONFIG']) {
     return process.env['BENCHMARKER_CONFIG'];
@@ -333,8 +359,14 @@ export async function startHandler(
   }
   logger.info('Acquired GPU VM lease', { vmHost: config.ssh.host });
 
-  const ciEvalsEnabled =
-    (enableCIEvals || config.buildkite.enabled) && Boolean(config.buildkite.apiToken);
+  // config.buildkite.enabled is the hard kill-switch — it must gate Buildkite
+  // triggering unconditionally, not just serve as an alternate way to enable it.
+  // See shouldEnableCIEvals() docstring for the full incident writeup.
+  const ciEvalsEnabled = shouldEnableCIEvals(
+    enableCIEvals,
+    config.buildkite.enabled,
+    config.buildkite.apiToken,
+  );
 
   if (ciEvalsEnabled && config.buildkite.apiToken) {
     const buildkiteTrigger = new BuildkiteEvalTriggerImpl(
@@ -600,8 +632,12 @@ export async function startHandler(
   }
 
   // Optionally create CI evals pipeline
+  // Same hard-gate rule as ciEvalsEnabled above — see shouldEnableCIEvals().
   let ciEvalsOptions: CIEvalsOptions | undefined;
-  if ((enableCIEvals || config.buildkite.enabled) && config.buildkite.apiToken) {
+  if (
+    shouldEnableCIEvals(enableCIEvals, config.buildkite.enabled, config.buildkite.apiToken) &&
+    config.buildkite.apiToken
+  ) {
     const smokeTest = new ModelSmokeTestImpl(config.smokeTest, config.logLevel);
     const buildkiteTrigger = new BuildkiteEvalTriggerImpl(
       {

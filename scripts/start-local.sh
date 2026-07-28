@@ -32,6 +32,7 @@ fi
 # Fail loudly and immediately if a binary Stage 2's batch runner depends on isn't
 # reachable, instead of letting the daemon start "successfully" and then silently
 # failing every Stage 2 batch eval with a buried stderr line hours later.
+# shellcheck disable=SC2043 # single-item now; loop shape left in place for the next required bin
 for required_bin in tmux; do
   if ! command -v "$required_bin" >/dev/null 2>&1; then
     echo "Error: required binary '$required_bin' not found on PATH (PATH=$PATH)." >&2

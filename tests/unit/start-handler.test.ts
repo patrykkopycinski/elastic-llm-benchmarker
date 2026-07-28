@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { resolveDiscoveryHardwareProfile } from '../../src/cli/start-handler.js';
+import {
+  resolveDiscoveryHardwareProfile,
+  shouldEnableCIEvals,
+} from '../../src/cli/start-handler.js';
 import { HardwareProfileRegistry } from '../../src/services/hardware-profiles.js';
 
 describe('resolveDiscoveryHardwareProfile', () => {
@@ -53,5 +56,32 @@ describe('resolveDiscoveryHardwareProfile', () => {
 
     const profile = resolveDiscoveryHardwareProfile('custom-a60', customRegistry);
     expect(profile?.hardware.gpuType).toBe('nvidia-a60');
+  });
+});
+
+describe('shouldEnableCIEvals', () => {
+  // Regression (2026-07-28): the pre-fix expression
+  // `(enableCIEvals || buildkiteEnabled) && Boolean(apiToken)` let the
+  // `--ci-evals` CLI flag alone bypass the `config.buildkite.enabled: false`
+  // kill-switch whenever an API token happened to be resolvable (env var, or
+  // ~/.buildkite/token read by start-local.sh for unrelated tooling). That
+  // fired real on-demand Buildkite builds (#316-326, ~$8/build) against
+  // buildkite.enabled: false and mislabeled two models that had already
+  // passed the local Stage 2 batch eval as `failed`.
+  it('is false when buildkite.enabled is false, even with --ci-evals and a token present', () => {
+    expect(shouldEnableCIEvals(true, false, 'real-token')).toBe(false);
+  });
+
+  it('is false when --ci-evals is not passed, even with buildkite.enabled true and a token', () => {
+    expect(shouldEnableCIEvals(false, true, 'real-token')).toBe(false);
+  });
+
+  it('is false when no token is resolvable, even with both flags true', () => {
+    expect(shouldEnableCIEvals(true, true, undefined)).toBe(false);
+    expect(shouldEnableCIEvals(true, true, '')).toBe(false);
+  });
+
+  it('is true only when --ci-evals, buildkite.enabled, and a token are all present', () => {
+    expect(shouldEnableCIEvals(true, true, 'real-token')).toBe(true);
   });
 });
