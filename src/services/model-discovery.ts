@@ -241,6 +241,7 @@ export type RejectionCategory =
   | 'vram-budget-fast-reject'
   | 'config-fetch-failed'
   | 'config-fetch-rate-limited'
+  | 'wrong-pipeline-tag'
   | 'architecture-not-compatible'
   | 'context-window-too-small'
   | 'parameter-count-below-floor'
@@ -366,6 +367,7 @@ export class ModelDiscoveryService {
       'vram-budget-fast-reject': 0,
       'config-fetch-failed': 0,
       'config-fetch-rate-limited': 0,
+      'wrong-pipeline-tag': 0,
       'architecture-not-compatible': 0,
       'context-window-too-small': 0,
       'parameter-count-below-floor': 0,
@@ -490,6 +492,23 @@ export class ModelDiscoveryService {
     options: Required<ModelDiscoveryOptions>,
   ): Promise<{ candidate: ModelCandidate } | { reason: RejectionCategory }> {
     const id = rawModel.id;
+
+    // Step 0: Pipeline-tag gate. The HF search endpoint has no server-side
+    // filter for "chat-capable causal LM" — it returns any repo matching the
+    // text query regardless of head type. A repo can share a chat-capable
+    // base model's `config.model_type` (e.g. "llama") while actually being a
+    // fine-tuned classification/embedding/reranker head
+    // (`architectures: ["LlamaForSequenceClassification"]`,
+    // `pipeline_tag: "text-classification"`), which `getRecommendedToolCallParser`'s
+    // architecture-substring match cannot distinguish from a real chat model.
+    // Observed: hugging-3/results (pipeline_tag=text-classification, 36
+    // downloads) passed every downstream gate and deployed as Stage 1 —
+    // vLLM can technically load the weights but the server can only ever
+    // return classification logits, never chat completions. Reject before
+    // the config fetch since pipeline_tag ships free on the search result.
+    if (rawModel.pipeline_tag && rawModel.pipeline_tag !== 'text-generation') {
+      return { reason: 'wrong-pipeline-tag' };
+    }
 
     // Step 1: Fetch model config
     const { config, rateLimited } = await this.fetchModelConfigWithStatus(id);

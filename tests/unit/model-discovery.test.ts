@@ -1118,6 +1118,85 @@ describe('ModelDiscoveryService', () => {
     });
   });
 
+  describe('pipeline-tag rejection', () => {
+    it('rejects a text-classification fine-tune sharing a chat-capable model_type', async () => {
+      // Regression: hugging-3/results (LlamaForSequenceClassification,
+      // pipeline_tag: "text-classification", 36 downloads) shares
+      // config.model_type "llama" with real chat models, so
+      // getRecommendedToolCallParser's architecture-substring match treated
+      // it as instruct-capable and it deployed as a genuine Stage 1
+      // candidate. vLLM can load the weights but the head only produces
+      // classification logits, never chat completions.
+      const mockModel = createMockHFModel({
+        id: 'hugging-3/results',
+        pipeline_tag: 'text-classification',
+        tags: ['transformers', 'safetensors', 'llama', 'text-classification'],
+        config: { model_type: 'llama', architectures: ['LlamaForSequenceClassification'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map(),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.totalRejected).toBe(1);
+      expect(result.rejectionBreakdown['wrong-pipeline-tag']).toBe(1);
+    });
+
+    it('does not reject a model with no pipeline_tag on the search result', async () => {
+      // Some real chat models (e.g. mistralai/Mistral-Small-24B-Instruct-2501)
+      // return no pipeline_tag at all from the HF API — absence must not be
+      // treated as a rejection signal, only a confirmed non-text-generation tag.
+      const mockModel = createMockHFModel({
+        id: 'org/some-model-without-pipeline-tag',
+        pipeline_tag: undefined,
+        config: { model_type: 'mistral', architectures: ['MistralForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'mistral',
+        architectures: ['MistralForCausalLM'],
+        max_position_embeddings: 131072,
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map([['org/some-model-without-pipeline-tag', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(1);
+    });
+
+    it('accepts a normal text-generation model', async () => {
+      const mockModel = createMockHFModel({
+        id: 'org/normal-chat-model',
+        pipeline_tag: 'text-generation',
+        config: { model_type: 'qwen3', architectures: ['Qwen3ForCausalLM'] },
+      });
+      const mockConfig = createMockConfig({
+        model_type: 'qwen3',
+        architectures: ['Qwen3ForCausalLM'],
+        max_position_embeddings: 131072,
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map([['org/normal-chat-model', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(1);
+    });
+  });
+
   describe('parameter count extraction', () => {
     it('should extract parameter count from model name (e.g., 70B)', async () => {
       const mockModel = createMockHFModel({
