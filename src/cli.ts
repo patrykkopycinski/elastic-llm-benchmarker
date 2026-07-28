@@ -1120,7 +1120,7 @@ if (isQueueCliInvocation()) {
     .description('Enqueue a single model for benchmarking with optional hardware-fit dry-run')
     .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('--hardware-profile <id>', 'Hardware profile ID to check against', undefined)
-    .option('--priority <n>', 'Queue priority (1 = highest)', '5')
+    .option('--priority <n>', 'Queue priority (higher runs first)', '5')
     .option('--force', 'Skip hardware-fit check and enqueue anyway')
     .option('--reason <text>', 'Optional reason/note to store in metadata')
     .option('--skip-stage1', 'Skip Stage 1 deploy/benchmark (eval-only)')
