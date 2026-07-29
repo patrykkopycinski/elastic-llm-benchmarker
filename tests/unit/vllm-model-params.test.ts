@@ -41,4 +41,27 @@ describe('getVllmParamsForModel', () => {
       expect(getVllmParamsForModel('Qwen/Qwen2.5-7B-Instruct').toolCallParser).toBe('hermes');
     });
   });
+
+  describe('gpt-oss (Harmony response format)', () => {
+    // Regression: the "openai" tool-call parser alone is necessary but not
+    // sufficient for gpt-oss. Without --reasoning-parser openai_gptoss, Harmony's
+    // internal channel-routing control tokens leak into tool-call names (e.g.
+    // "platform_core_list_indices<|channel|>commentary"), silently failing every
+    // tool-using eval example with "Tool ... called but was not available".
+    // Verified live 2026-07-29 on an L4 GPU: zero tool-call errors across 67
+    // evaluators once both flags were set together.
+    it('sets the openai tool-call parser and the openai_gptoss reasoning parser', () => {
+      const params = getVllmParamsForModel('openai/gpt-oss-20b');
+      expect(params.toolCallParser).toBe('openai');
+      expect(params.extraArgs).toContain('--reasoning-parser openai_gptoss');
+      expect(params.family).toBe('OpenAI OSS');
+    });
+
+    it('also matches gpt-oss-120b and bare "openai/gpt" ids', () => {
+      expect(getVllmParamsForModel('openai/gpt-oss-120b').extraArgs).toContain(
+        '--reasoning-parser openai_gptoss',
+      );
+      expect(getVllmParamsForModel('openai/gpt-4-mini-oss-variant').toolCallParser).toBe('openai');
+    });
+  });
 });

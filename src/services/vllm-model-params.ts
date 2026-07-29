@@ -233,9 +233,26 @@ export function getVllmParamsForModel(
     };
   }
 
-  // ─── OpenAI OSS ─────────────────────────────────────────────────────────────
+  // ─── OpenAI OSS (gpt-oss) ───────────────────────────────────────────────────
+  // vLLM's Harmony response format requires the GptOssToolParser ("openai" —
+  // "pythonic"/"hermes"/the literal name "gpt_oss" are all rejected outright)
+  // AND --reasoning-parser openai_gptoss. Without the reasoning parser,
+  // Harmony's internal channel-routing control tokens (e.g. "<|channel|>commentary")
+  // leak out of the reasoning stream and get concatenated onto tool-call names —
+  // observed live: "platform_core_list_indices<|channel|>commentary" called but
+  // was not available, silently failing every tool-using eval example. There is
+  // no --enable-reasoning flag in vLLM v0.26.0; --reasoning-parser is the whole
+  // fix. Verified live 2026-07-29 on an L4 GPU running gpt-oss-20b: zero
+  // "not available" tool-call errors across 67 evaluators once both flags were
+  // set together (parser alone was insufficient — reasoning leaks still occurred).
   if (id.includes('gpt-oss') || id.includes('openai/gpt')) {
-    return { toolCallParser: 'openai', chatTemplate: null, extraArgs: [], family: 'OpenAI OSS', unslothTemplateKey: null };
+    return {
+      toolCallParser: 'openai',
+      chatTemplate: null,
+      extraArgs: ['--reasoning-parser openai_gptoss'],
+      family: 'OpenAI OSS',
+      unslothTemplateKey: null,
+    };
   }
 
   // ─── Kimi K2 ────────────────────────────────────────────────────────────────
