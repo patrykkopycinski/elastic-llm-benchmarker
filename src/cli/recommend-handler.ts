@@ -1,4 +1,5 @@
-import { Command } from 'commander';
+import type { Command } from 'commander';
+import { resolve } from 'node:path';
 import { loadConfig } from '../config/index.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import { createEsClient } from './start-handler.js';
@@ -7,7 +8,7 @@ import { printReport, printReportSummary } from './report-printer.js';
 
 function loadAppConfig(options: { config?: string; json?: boolean }): ReturnType<typeof loadConfig> | null {
   try {
-    return loadConfig(undefined, { configPath: options.config ? require('node:path').resolve(process.cwd(), options.config) : undefined });
+    return loadConfig(undefined, { configPath: options.config ? resolve(process.cwd(), options.config) : undefined });
   } catch (err) {
     if (!options.json) {
       console.error(`Error loading configuration: ${err instanceof Error ? err.message : String(err)}`);

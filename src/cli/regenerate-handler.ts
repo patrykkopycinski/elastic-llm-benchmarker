@@ -1,5 +1,6 @@
-import { Command } from 'commander';
+import type { Command } from 'commander';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { loadConfig } from '../config/index.js';
 import { ElasticsearchResultsStore } from '../services/elasticsearch-results-store.js';
 import { createEsClient } from './start-handler.js';
@@ -12,7 +13,7 @@ import type { PipelineRun, Stage2Result } from '../scheduler/pipeline-state.js';
 
 function loadAppConfig(options: { config?: string; json?: boolean }): ReturnType<typeof loadConfig> | null {
   try {
-    return loadConfig(undefined, { configPath: options.config ? require('node:path').resolve(process.cwd(), options.config) : undefined });
+    return loadConfig(undefined, { configPath: options.config ? resolve(process.cwd(), options.config) : undefined });
   } catch (err) {
     if (!options.json) {
       console.error(`Error loading configuration: ${err instanceof Error ? err.message : String(err)}`);
@@ -79,7 +80,7 @@ export async function regenerateRecommendationHandler(opts: Record<string, unkno
           // batch summary JSON — older Stage 2 docs were saved without
           // per-suite log paths but do carry `batchSummaryPath`, whose `results`
           // array maps each suite to its `log_file`.
-          let suiteLogPaths = new Map<string, string>();
+          const suiteLogPaths = new Map<string, string>();
           const hasLogPaths = persistedStage2.suiteResults.some((sr) => sr.logPath);
           if (!hasLogPaths && persistedStage2.batchSummaryPath) {
             try {

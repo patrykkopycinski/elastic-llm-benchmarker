@@ -86,7 +86,8 @@ export function buildRecommendationReport(
     const suitesRun = stage2.suiteResults.map((sr) => sr.suite);
     const suiteResults: Record<string, { score: number; passRate: number; durationSec: number }> = {};
     for (const sr of stage2.suiteResults) {
-      const durationSec = sr.durationMs != null ? Math.round(sr.durationMs / 1000) : 0;
+      const durationSec =
+        sr.durationMs !== null && sr.durationMs !== undefined ? Math.round(sr.durationMs / 1000) : 0;
       suiteResults[sr.suite] = {
         score: sr.score ?? 0,
         passRate: sr.score ?? 0,

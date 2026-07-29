@@ -1,6 +1,6 @@
-import { Command } from 'commander';
+import type { Command } from 'commander';
 import { gracefulShutdown, CliError } from './shutdown.js';
-import { Client } from '@elastic/elasticsearch';
+import type { Client } from '@elastic/elasticsearch';
 import { resolve, dirname } from 'node:path';
 import { mkdirSync, openSync } from 'node:fs';
 import { spawn, execSync } from 'node:child_process';
@@ -343,10 +343,12 @@ export async function startHandler(
       heldBy: held
         ? `${held.ownerHostname} (pid ${held.ownerPid}, heartbeat ${held.heartbeatAt})`
         : (leaseResult.error ?? 'unknown'),
-      heartbeatAgeSeconds: ageMs != null ? Math.round(ageMs / 1000) : undefined,
-      staleAfterSeconds: staleMs != null ? Math.round(staleMs / 1000) : undefined,
+      heartbeatAgeSeconds:
+        ageMs !== null && ageMs !== undefined ? Math.round(ageMs / 1000) : undefined,
+      staleAfterSeconds:
+        staleMs !== null && staleMs !== undefined ? Math.round(staleMs / 1000) : undefined,
       diagnosis:
-        ageMs != null && staleMs != null
+        ageMs !== null && ageMs !== undefined && staleMs !== null && staleMs !== undefined
           ? ageMs < staleMs
             ? 'live daemon holds the lease (single-owner rule: benchmarker runs on kibana-i9 ONLY)'
             : 'stale lease past threshold — safe to reclaim'
