@@ -11,6 +11,22 @@
   KeepAlive + RunAtLoad give crash-restart and boot-start. Recovery is safe: on
   restart the daemon reclaims stale in-flight entries (reclaimStaleEntries) and
   resumes/adopts the current run, so KeepAlive never double-processes a model.
+
+  KeepAlive is unconditional (not `{SuccessfulExit: false}`): the daemon's own
+  SIGTERM handler (src/cli/start-handler.ts `shutdown()`) always exits 0 after
+  a clean gracefulShutdown() -- that is the *normal* stop path (operator
+  `benchmarker-queue stop`, `launchctl kickstart -k`, a deploy bounce), not a
+  failure, and it must respawn too. A restart-on-crash-only policy left the
+  daemon permanently dead after every clean stop until a human noticed and
+  restarted it by hand.
+  This is safe to make unconditional: every startup/config-error path in
+  src/cli.ts and start-handler.ts (bad config, held lockfile, missing ES
+  client, ...) throws CliError and exits 1, never 0 -- so KeepAlive can't be
+  tricked into a 30s-throttled restart loop by a persistent misconfiguration.
+  gracefulShutdown() itself is bounded by shutdownDrainTimeoutMs (default 5m,
+  see scheduler.ts SchedulerOptions), so a hung in-flight drain still resolves
+  and calls process.exit(0) within 5 minutes -- it cannot wedge forever and
+  starve KeepAlive of the exit it needs to act on.
 -->
 <plist version="1.0">
 <dict>
@@ -36,12 +52,7 @@
   <true/>
 
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-    <key>Crashed</key>
-    <true/>
-  </dict>
+  <true/>
 
   <!-- Do not thrash-restart: wait 30s between respawns. -->
   <key>ThrottleInterval</key>
