@@ -155,7 +155,6 @@ The central orchestrator. Polls the queue every N ms, claims one entry at a time
 | `HardwareEstimator` | `src/services/hardware-estimator.ts` | VRAM estimation from model metadata |
 | `ModelSmokeTestImpl` | `src/services/model-smoke-test.ts` | 3-tier model validation |
 | `BuildkiteEvalTriggerImpl` | `src/services/buildkite-eval-trigger.ts` | Buildkite REST API (trigger, poll, artifacts) |
-| `GoldenForwarder` | `src/services/golden-forwarder.ts` | Async batch forwarding to shared ES |
 | `SlackNotifier` | `src/services/slack-notifier.ts` | Webhook notifications |
 | `RecommendationReportBuilder` | `src/services/recommendation-report-builder.ts` | Verdict computation from stage results |
 

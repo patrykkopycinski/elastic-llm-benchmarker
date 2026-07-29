@@ -27,6 +27,13 @@ export interface EvalRunOptions {
   modelId: string;
   suites?: string[];
   timeoutMs?: number;
+  /**
+   * kbn-evals profile for golden cluster forwarding. Set to 'dev-vault' to
+   * natively forward scores + traces to the golden kbn-evals cluster via
+   * `--profile dev-vault` (reads credentials from the vault config.json).
+   * Unset (default) runs with no golden export.
+   */
+  evalProfile?: string;
 }
 
 export interface EvalSuiteResult {
@@ -88,6 +95,7 @@ export class EvalSuiteRunner {
       modelId,
       suites = DEFAULT_SUITES,
       timeoutMs = DEFAULT_TIMEOUT_MS,
+      evalProfile,
     } = opts;
 
     const startedAt = new Date().toISOString();
@@ -104,11 +112,23 @@ export class EvalSuiteRunner {
       });
 
       try {
-        const { stdout } = await execFilePromise(
-          'node',
-          ['scripts/evals.js', 'run', '--suite', suite, '--endpoint', endpointUrl, '--model', modelId],
-          { cwd: repoPath, timeout: timeoutMs },
-        );
+        const args = [
+          'scripts/evals.js',
+          'run',
+          '--suite',
+          suite,
+          '--endpoint',
+          endpointUrl,
+          '--model',
+          modelId,
+        ];
+        if (evalProfile) {
+          args.push('--profile', evalProfile);
+        }
+        const { stdout } = await execFilePromise('node', args, {
+          cwd: repoPath,
+          timeout: timeoutMs,
+        });
 
         const parsed = this.parseOutput(stdout);
         const durationMs = Date.now() - suiteStart;
