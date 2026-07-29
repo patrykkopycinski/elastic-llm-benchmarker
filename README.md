@@ -282,7 +282,6 @@ src/
     model-smoke-test.ts               # 3-tier model validation
     buildkite-eval-trigger.ts         # Buildkite REST API integration
     buildkite-connector-builder.ts    # KIBANA_TESTING_AI_CONNECTORS builder
-    golden-forwarder.ts               # Async replication to shared ES
     recommendation-report-builder.ts  # Verdict computation
     hf-card-parser.ts                 # HuggingFace model card parsing
     es-index-mappings.ts              # ES index definitions

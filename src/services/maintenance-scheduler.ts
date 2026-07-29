@@ -53,8 +53,8 @@ export interface MaintenanceRunResult {
  *  2. Re-enqueues retriable quarantined (`failed`) entries older than the DLQ
  *     window, bounded and gated by the daily cost cap.
  *  3. Posts a Slack health digest and flags threshold breaches (stale daemon
- *     lease, cost cap engaged, DLQ growth, recent-error / golden-forward spikes,
- *     idle pipeline).
+ *     lease, cost cap engaged, DLQ growth, recent-error spikes, idle
+ *     pipeline).
  *
  * Never throws: a failed tick is logged and the timer keeps running.
  */
@@ -111,13 +111,12 @@ export class MaintenanceScheduler {
       const windowMs = windowHours * MS_PER_HOUR;
       const sinceIso = new Date(nowMs - windowMs).toISOString();
 
-      const [counts, terminalInWindow, benchmark, errorsInWindow, goldenErrors, leaseAgeMs] =
+      const [counts, terminalInWindow, benchmark, errorsInWindow, leaseAgeMs] =
         await Promise.all([
           this.deps.queueService.countByStatus(),
           this.deps.queueService.countTerminalSince(sinceIso),
           this.deps.queueService.sumBenchmarkMsSince(sinceIso),
           this.deps.resultsStore.countErrorsSince(sinceIso),
-          this.deps.resultsStore.countErrorsSince(sinceIso, 'golden-forward'),
           this.readLeaseAgeMs(nowMs),
         ]);
 
@@ -173,8 +172,8 @@ export class MaintenanceScheduler {
         },
         {
           label: 'Errors logged',
-          value: `${errorsInWindow} total · ${goldenErrors} golden-forward`,
-          alert: goldenErrors > 0,
+          value: `${errorsInWindow} total`,
+          alert: false,
         },
         {
           label: 'DLQ re-tried',

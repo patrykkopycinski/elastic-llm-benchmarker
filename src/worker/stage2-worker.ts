@@ -30,6 +30,7 @@ export interface Stage2WorkerDependencies {
 }
 
 export class Stage2WorkerImpl implements Stage2Worker {
+  private readonly config: AppConfig;
   private readonly gate: Stage2Gate;
   private readonly repoService: KibanaRepoService;
   private readonly evalRunner: EvalSuiteRunner;
@@ -37,6 +38,7 @@ export class Stage2WorkerImpl implements Stage2Worker {
   private readonly logger: Logger | undefined;
 
   constructor(deps: Stage2WorkerDependencies) {
+    this.config = deps.config;
     this.gate = deps.gate;
     this.repoService = deps.repoService;
     this.evalRunner = deps.evalRunner;
@@ -111,6 +113,7 @@ export class Stage2WorkerImpl implements Stage2Worker {
         repoPath: this.repoService.getRepoPath(),
         endpointUrl,
         modelId: run.modelId,
+        evalProfile: this.config.stage2Local?.exportProfile === 'dev-vault' ? 'dev-vault' : undefined,
       });
 
       // 5. Build Stage2Result

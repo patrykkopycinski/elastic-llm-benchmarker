@@ -499,6 +499,16 @@ export const elasticAgentConfigSchema = z.object({
 
 /**
  * Golden cluster configuration for centralized tracking.
+ *
+ * @deprecated Unused — the `GoldenForwarder` service that consumed this
+ * config was dead code (defined, never instantiated) and has been removed.
+ * Golden cluster forwarding now happens natively via kbn-evals'
+ * `--profile dev-vault` flag (see `stage2Local.exportProfile` /
+ * `EvalRunOptions.evalProfile`), which reads credentials directly from the
+ * kbn-evals vault `config.json` rather than these env-var-sourced fields.
+ * Left in place (schema + env var mapping) only so existing deployments with
+ * `GOLDEN_CLUSTER_*` env vars set still validate; do not wire new behavior
+ * to it.
  */
 export const goldenClusterConfigSchema = z.object({
   enabled: z.boolean().default(false),
