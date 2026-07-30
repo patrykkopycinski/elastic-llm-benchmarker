@@ -777,14 +777,16 @@ export class SSHClientPool {
       if (config.privateKeyPath) {
         try {
           const keyData = fs.readFileSync(config.privateKeyPath);
+          connectConfig.privateKey = keyData;
           if (config.passphrase) {
-            connectConfig.privateKey = keyData;
             connectConfig.passphrase = config.passphrase;
-          } else if (!sshAuthSock) {
-            connectConfig.privateKey = keyData;
           }
-          // When agent is available and no passphrase, skip setting privateKey
-          // to avoid ssh2 failing on encrypted OpenSSH keys. The agent handles it.
+          // Offer privateKey in addition to agent (when SSH_AUTH_SOCK is set).
+          // Under launchd the daemon inherits an agent socket that may have no
+          // identities loaded (e.g. `ssh-add -l` -> "The agent has no
+          // identities."), which would otherwise leave the valid on-disk key
+          // unoffered and auth failing. ssh2 walks auth methods in order, so
+          // offering both agent and privateKey is safe.
         } catch (err) {
           if (!sshAuthSock) {
             reject(

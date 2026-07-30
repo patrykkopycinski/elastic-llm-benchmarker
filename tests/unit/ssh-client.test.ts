@@ -540,6 +540,38 @@ describe('SSHClientPool', () => {
       const result = await pool.exec(config, 'echo test');
       expect(result.success).toBe(true);
     });
+
+    it('should offer both agent and privateKey when SSH_AUTH_SOCK is set and privateKeyPath is readable', async () => {
+      const originalSshAuthSock = process.env['SSH_AUTH_SOCK'];
+      process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
+
+      try {
+        const { Client } = await import('ssh2');
+        const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+        vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_rsa',
+        });
+        const result = await pool.exec(config, 'echo test');
+
+        expect(result.success).toBe(true);
+        expect(mockClient.connect).toHaveBeenCalledTimes(1);
+        const connectConfig = mockClient.connect.mock.calls[0]?.[0] as {
+          agent?: unknown;
+          privateKey?: unknown;
+        };
+        expect(connectConfig.agent).toBe('/private/tmp/com.apple.launchd.test/Listeners');
+        expect(connectConfig.privateKey).toBeDefined();
+      } finally {
+        if (originalSshAuthSock === undefined) {
+          delete process.env['SSH_AUTH_SOCK'];
+        } else {
+          process.env['SSH_AUTH_SOCK'] = originalSshAuthSock;
+        }
+      }
+    });
   });
 
   describe('upload', () => {
