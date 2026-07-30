@@ -1,4 +1,4 @@
-import { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2';
+import { Client, utils as ssh2Utils, type ConnectConfig, type SFTPWrapper } from 'ssh2';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
@@ -777,16 +777,52 @@ export class SSHClientPool {
       if (config.privateKeyPath) {
         try {
           const keyData = fs.readFileSync(config.privateKeyPath);
-          connectConfig.privateKey = keyData;
-          if (config.passphrase) {
-            connectConfig.passphrase = config.passphrase;
+          // Probe parseability before offering privateKey. ssh2's Client.connect()
+          // calls parseKey() synchronously on connectConfig.privateKey and *throws*
+          // (not rejects) when the key is encrypted and no/wrong passphrase is
+          // available -- this happens before any auth method, including the agent,
+          // is ever attempted. So unconditionally setting privateKey turns a working
+          // agent-only connection into a synchronous throw on hosts with an
+          // encrypted key. ssh2.utils.parseKey() mirrors that check but *returns*
+          // an Error instead of throwing, so we can gate on it safely.
+          const parsed = ssh2Utils.parseKey(keyData, config.passphrase);
+          const keyParses = !(parsed instanceof Error);
+
+          if (keyParses) {
+            // Offer privateKey in addition to agent (when SSH_AUTH_SOCK is set).
+            // Under launchd the daemon inherits an agent socket that may have no
+            // identities loaded (e.g. `ssh-add -l` -> "The agent has no
+            // identities."), which would otherwise leave the valid on-disk key
+            // unoffered and auth failing. ssh2 walks auth methods in order, so
+            // offering both agent and privateKey is safe.
+            connectConfig.privateKey = keyData;
+            if (config.passphrase) {
+              connectConfig.passphrase = config.passphrase;
+            }
+          } else if (sshAuthSock) {
+            // Key does not parse with the available passphrase (e.g. encrypted,
+            // no passphrase given) but an agent is present -- fall back to
+            // agent-only auth, the pre-fix behavior, narrowed to the case that
+            // actually needs it.
+            this.logger.warn(
+              `Private key at ${config.privateKeyPath} could not be parsed (${
+                parsed instanceof Error ? parsed.message : 'unknown error'
+              }); falling back to SSH agent auth only`,
+            );
+          } else {
+            // Key does not parse and there is no agent to fall back to -- this
+            // is a hard error worth surfacing, not swallowing.
+            reject(
+              new SSHError(
+                `Failed to parse private key: ${config.privateKeyPath}: ${
+                  parsed instanceof Error ? parsed.message : 'unknown error'
+                }`,
+                config.host,
+                parsed instanceof Error ? parsed : undefined,
+              ),
+            );
+            return;
           }
-          // Offer privateKey in addition to agent (when SSH_AUTH_SOCK is set).
-          // Under launchd the daemon inherits an agent socket that may have no
-          // identities loaded (e.g. `ssh-add -l` -> "The agent has no
-          // identities."), which would otherwise leave the valid on-disk key
-          // unoffered and auth failing. ssh2 walks auth methods in order, so
-          // offering both agent and privateKey is safe.
         } catch (err) {
           if (!sshAuthSock) {
             reject(
