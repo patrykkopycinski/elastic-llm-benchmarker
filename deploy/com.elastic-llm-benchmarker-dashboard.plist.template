@@ -44,13 +44,15 @@
   <key>RunAtLoad</key>
   <true/>
 
+  <!--
+    KeepAlive is unconditional (not SuccessfulExit false): the dashboard
+    queue-server exits 0 on SIGTERM (operator stop, deploy bounce, OS
+    shutdown), and a restart-on-crash-only policy leaves it permanently dead
+    until a human restarts it by hand. The dashboard is stateless, so respawn
+    is always safe.
+  -->
   <key>KeepAlive</key>
-  <dict>
-    <key>SuccessfulExit</key>
-    <false/>
-    <key>Crashed</key>
-    <true/>
-  </dict>
+  <true/>
 
   <!-- Do not thrash-restart: wait 30s between respawns. -->
   <key>ThrottleInterval</key>

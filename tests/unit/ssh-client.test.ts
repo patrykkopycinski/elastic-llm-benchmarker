@@ -90,14 +90,29 @@ class MockClient extends EventEmitter {
   }
 }
 
-// Mock the ssh2 module
-vi.mock('ssh2', () => ({
-  Client: vi.fn().mockImplementation(() => new MockClient()),
-  utils: {
+// Mock the ssh2 module. ssh2-client.ts imports the default export
+// (`import ssh2, { Client } from 'ssh2'`) and reads `ssh2.utils` off it --
+// see ssh-client.ts:1-16 for why. Vitest's CJS interop does not synthesize a
+// default from named exports, so the mock must supply `default` explicitly
+// with the same shape, or `ssh2.utils` is undefined at import time.
+// vi.mock factories are hoisted above imports/module-scope vars, so the
+// shared mock objects have to be created via vi.hoisted() to be visible here.
+const { mockUtils, mockClientCtor } = vi.hoisted(() => {
+  return {
     // Default: key parses cleanly (not an Error). Individual tests override
     // with mockReturnValueOnce(new Error(...)) to simulate an encrypted key
     // that cannot be parsed with the given passphrase.
-    parseKey: vi.fn().mockReturnValue({}),
+    mockUtils: { parseKey: vi.fn().mockReturnValue({}) },
+    mockClientCtor: vi.fn(),
+  };
+});
+mockClientCtor.mockImplementation(() => new MockClient());
+vi.mock('ssh2', () => ({
+  Client: mockClientCtor,
+  utils: mockUtils,
+  default: {
+    Client: mockClientCtor,
+    utils: mockUtils,
   },
 }));
 
