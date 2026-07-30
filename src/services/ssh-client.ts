@@ -1,9 +1,19 @@
-import { Client, utils as ssh2Utils, type ConnectConfig, type SFTPWrapper } from 'ssh2';
+// ssh2 is CommonJS. `utils` is a nested object literal inside its module.exports
+// (node_modules/ssh2/lib/index.js:34), which cjs-module-lexer cannot detect as a
+// named export -- unlike `Client: require(...)`, which it can. So
+// `import { utils } from 'ssh2'` type-checks and bundles fine but throws
+// SyntaxError: Named export 'utils' not found at runtime under ESM (package.json
+// "type": "module"), killing the daemon at import time. Reach utils through the
+// default (= module.exports) instead.
+import ssh2, { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2';
+
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import type { SSHConfig } from '../types/config.js';
 import { createLogger } from '../utils/logger.js';
+
+const ssh2Utils = ssh2.utils;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
