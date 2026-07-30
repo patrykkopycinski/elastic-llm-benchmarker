@@ -93,6 +93,12 @@ class MockClient extends EventEmitter {
 // Mock the ssh2 module
 vi.mock('ssh2', () => ({
   Client: vi.fn().mockImplementation(() => new MockClient()),
+  utils: {
+    // Default: key parses cleanly (not an Error). Individual tests override
+    // with mockReturnValueOnce(new Error(...)) to simulate an encrypted key
+    // that cannot be parsed with the given passphrase.
+    parseKey: vi.fn().mockReturnValue({}),
+  },
 }));
 
 // Mock fs for file operations
@@ -539,6 +545,135 @@ describe('SSHClientPool', () => {
       });
       const result = await pool.exec(config, 'echo test');
       expect(result.success).toBe(true);
+    });
+
+    it('should offer both agent and privateKey when SSH_AUTH_SOCK is set and privateKeyPath is readable', async () => {
+      const originalSshAuthSock = process.env['SSH_AUTH_SOCK'];
+      process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
+
+      try {
+        const { Client } = await import('ssh2');
+        const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+        vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_rsa',
+        });
+        const result = await pool.exec(config, 'echo test');
+
+        expect(result.success).toBe(true);
+        expect(mockClient.connect).toHaveBeenCalledTimes(1);
+        const connectConfig = mockClient.connect.mock.calls[0]?.[0] as {
+          agent?: unknown;
+          privateKey?: unknown;
+        };
+        expect(connectConfig.agent).toBe('/private/tmp/com.apple.launchd.test/Listeners');
+        expect(connectConfig.privateKey).toBeDefined();
+      } finally {
+        if (originalSshAuthSock === undefined) {
+          delete process.env['SSH_AUTH_SOCK'];
+        } else {
+          process.env['SSH_AUTH_SOCK'] = originalSshAuthSock;
+        }
+      }
+    });
+
+    // Regression matrix for the encrypted-key-blocks-agent-auth bug: ssh2's
+    // Client.connect() calls parseKey() synchronously on connectConfig.privateKey
+    // and *throws* (not rejects) when the key is encrypted and unparseable with
+    // the given passphrase -- before any auth method, including the agent, is
+    // ever attempted. Unconditionally setting privateKey (the original fix in
+    // PR #25) turns a working agent-only connection into a synchronous throw on
+    // any host with an encrypted key. These four cases cover encrypted/plain key
+    // crossed with agent-present/agent-absent.
+    describe('encrypted key + agent auth matrix', () => {
+      afterEach(() => {
+        delete process.env['SSH_AUTH_SOCK'];
+      });
+
+      it('plain key + agent present: offers both privateKey and agent', async () => {
+        process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
+        const { Client, utils } = await import('ssh2');
+        vi.mocked(utils.parseKey).mockReturnValueOnce({} as ReturnType<typeof utils.parseKey>);
+
+        const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+        vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_ed25519_plain',
+        });
+
+        await expect(pool.exec(config, 'echo test')).resolves.toMatchObject({ success: true });
+        const connectConfig = mockClient.connect.mock.calls[0]?.[0] as {
+          agent?: unknown;
+          privateKey?: unknown;
+        };
+        expect(connectConfig.agent).toBe('/private/tmp/com.apple.launchd.test/Listeners');
+        expect(connectConfig.privateKey).toBeDefined();
+      });
+
+      it('plain key + no agent: offers privateKey only', async () => {
+        const { Client, utils } = await import('ssh2');
+        vi.mocked(utils.parseKey).mockReturnValueOnce({} as ReturnType<typeof utils.parseKey>);
+
+        const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+        vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_ed25519_plain',
+        });
+
+        await expect(pool.exec(config, 'echo test')).resolves.toMatchObject({ success: true });
+        const connectConfig = mockClient.connect.mock.calls[0]?.[0] as {
+          agent?: unknown;
+          privateKey?: unknown;
+        };
+        expect(connectConfig.agent).toBeUndefined();
+        expect(connectConfig.privateKey).toBeDefined();
+      });
+
+      it('encrypted key (unparseable) + agent present: falls back to agent-only, does not throw', async () => {
+        process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
+        const { Client, utils } = await import('ssh2');
+        vi.mocked(utils.parseKey).mockReturnValueOnce(
+          new Error('Encrypted private OpenSSH key detected, but no passphrase given'),
+        );
+
+        const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+        vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_ed25519_encrypted',
+        });
+
+        await expect(pool.exec(config, 'echo test')).resolves.toMatchObject({ success: true });
+        const connectConfig = mockClient.connect.mock.calls[0]?.[0] as {
+          agent?: unknown;
+          privateKey?: unknown;
+        };
+        expect(connectConfig.agent).toBe('/private/tmp/com.apple.launchd.test/Listeners');
+        expect(connectConfig.privateKey).toBeUndefined();
+      });
+
+      it('encrypted key (unparseable) + no agent: rejects with SSHError, does not throw synchronously', async () => {
+        const { utils } = await import('ssh2');
+        // mockReturnValue (not Once): the pool retries on failure, so parseKey
+        // must return unparseable on every attempt for this assertion to hold.
+        vi.mocked(utils.parseKey).mockReturnValue(
+          new Error('Encrypted private OpenSSH key detected, but no passphrase given'),
+        );
+
+        const config = createMockSSHConfig({
+          password: undefined,
+          privateKeyPath: '/home/user/.ssh/id_ed25519_encrypted',
+        });
+
+        await expect(pool.exec(config, 'echo test')).rejects.toBeInstanceOf(SSHError);
+      });
     });
   });
 
