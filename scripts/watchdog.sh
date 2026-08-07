@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # elastic-llm-benchmarker watchdog — health check + self-heal
-# Daemon runs on kibana-i9. This watchdog runs on M4 and probes i9 remotely.
-set -euo pipefail
+# Daemon runs locally on this M4 (moved off kibana-i9 on 2026-08-07T15:05).
+# Worker + dashboard are local launchd jobs; only the GPU VM is remote.
+set -uo pipefail
 BENCH_DIR="$HOME/Projects/elastic-llm-benchmarker"
 LOG="$BENCH_DIR/.smoke-logs/watchdog.log"
-I9="kibana-i9"
-I9_API="http://localhost:3456"
-SSH_KEY="$HOME/.ssh/id_ed25519"
+API_URL="http://localhost:3200"
 VM_HOST="34.29.5.12"
+VM_SSH_KEY="$HOME/.ssh/id_ed25519"
+VM_USER="patryk"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
 mkdir -p "$(dirname "$LOG")"
@@ -27,38 +28,43 @@ add_finding() { FINDINGS="$FINDINGS
 add_healed() { HEALED="$HEALED
 - $1"; }
 
-# 1. i9 launchd jobs (remote check)
-for label in com.i9.benchmarker-worker com.elastic-llm-benchmarker-dashboard; do
-  PID=$(ssh -o ConnectTimeout=3 "$I9" "launchctl list 2>/dev/null | grep '$label' | awk '{print \$1}'" 2>/dev/null || true)
-  if [ -z "$PID" ] || [ "$PID" = "-" ]; then
-    add_finding "$label not loaded on i9"
-    ssh -o ConnectTimeout=3 "$I9" "launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/$label.plist 2>/dev/null" && add_healed "Reloaded $label on i9" || true
+# 1. Local launchd jobs
+for label in com.elastic-llm-benchmarker com.elastic-llm-benchmarker-dashboard; do
+  STATE=$(launchctl list "$label" 2>/dev/null | head -1)
+  if [ -z "$STATE" ]; then
+    add_finding "$label not loaded locally"
+    launchctl load "$HOME/Library/LaunchAgents/$label.plist" 2>/dev/null && add_healed "Reloaded $label locally" || true
   fi
 done
 
-# 2. API check (via SSH tunnel or direct if on same network)
+# 2. Local API check (dashboard/queue-server, port 3200)
 API_OK=false
-ssh -o ConnectTimeout=3 "$I9" "curl -sf --connect-timeout 3 '$I9_API/api/queue'" >/dev/null 2>&1 && API_OK=true || add_finding "i9 API :3456 not responding"
+curl -sf --connect-timeout 3 "$API_URL/api/queue" >/dev/null 2>&1 && API_OK=true || add_finding "local API :3200 not responding"
 
-# 3. Worker process on i9 (with 30s startup grace period)
-WORKER_ALIVE=$(ssh -o ConnectTimeout=3 "$I9" "pgrep -f 'benchmarker-queue start' | head -1" 2>/dev/null || true)
+# 3. Worker process locally (with 30s startup grace period)
+WORKER_ALIVE=$(pgrep -f 'benchmarker-queue start' | head -1 || true)
 if [ -z "$WORKER_ALIVE" ]; then
-  # Check if launchd job was bootstrapped very recently (within 60s) — give it time to start
-  LAST_EXIT=$(ssh -o ConnectTimeout=3 "$I9" "launchctl list com.i9.benchmarker-worker 2>/dev/null | head -1" 2>/dev/null || echo "-")
+  LAST_EXIT=$(launchctl list com.elastic-llm-benchmarker 2>/dev/null | head -1 || echo "-")
   if [ "$LAST_EXIT" = "1" ]; then
-    # Exit code 1 = lease contention during restart, not a real crash — wait for next tick
     log "Worker exit code 1 (likely lease contention during restart) — skipping this tick"
     WORKER_ALIVE="starting"
   else
-    add_finding "Worker process dead on i9 (launchd should restart)"
+    add_finding "Worker process dead locally (launchd should restart)"
   fi
 fi
 
-# 4. Stale lockfile on i9
+# 4. Stale lockfile locally
 LOCKFILE="$BENCH_DIR/.benchmarker-queue.lock"
-ssh -o ConnectTimeout=3 "$I9" "if [ -f '$LOCKFILE' ]; then LOCK_PID=\$(cat '$LOCKFILE' 2>/dev/null || echo ''); if [ -n \"\$LOCK_PID\" ] && ! kill -0 \"\$LOCK_PID\" 2>/dev/null; then rm -f '$LOCKFILE'; echo STALE_REMOVED; fi; fi" 2>/dev/null | grep -q STALE_REMOVED && { add_finding "Stale lockfile on i9"; add_healed "Removed stale lockfile on i9"; } || true
+if [ -f "$LOCKFILE" ]; then
+  LOCK_PID=$(cat "$LOCKFILE" 2>/dev/null || echo '')
+  if [ -n "$LOCK_PID" ] && ! kill -0 "$LOCK_PID" 2>/dev/null; then
+    rm -f "$LOCKFILE"
+    add_finding "Stale lockfile locally"
+    add_healed "Removed stale lockfile locally"
+  fi
+fi
 
-# 5. Stale ES lease (only clear if worker is dead)
+# 5. Stale ES lease (only clear if worker is dead — never while WORKER_ALIVE is a live pid)
 if [ -n "$ES_URL" ] && [ -n "$ES_KEY" ] && [ -z "$WORKER_ALIVE" ]; then
   LEASE_COUNT=$(curl -sf -H "Authorization: ApiKey $ES_KEY" "$ES_URL/benchmarker-daemon-lease/_count" 2>/dev/null | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('count',0))" 2>/dev/null || echo 0)
   if [ "$LEASE_COUNT" -gt 0 ]; then
@@ -69,23 +75,28 @@ if [ -n "$ES_URL" ] && [ -n "$ES_KEY" ] && [ -z "$WORKER_ALIVE" ]; then
   fi
 fi
 
-# 6. VM reachability (via i9 → GPU VM)
+# 6. GPU VM reachability (direct SSH from this host, no i9 hop)
 VM_OK=false
-ssh -o ConnectTimeout=3 "$I9" "ssh -o ConnectTimeout=3 -i ~/.ssh/id_ed25519_benchmarker patryk@$VM_HOST 'echo OK'" >/dev/null 2>&1 && VM_OK=true || add_finding "GPU VM unreachable from i9"
+ssh -o ConnectTimeout=5 -o BatchMode=yes -i "$VM_SSH_KEY" "$VM_USER@$VM_HOST" "echo OK" >/dev/null 2>&1 && VM_OK=true || add_finding "GPU VM unreachable directly"
 
 # 7. VM disk space
 if [ "$VM_OK" = true ]; then
-  VM_DISK_PCT=$(ssh -o ConnectTimeout=3 "$I9" "ssh -o ConnectTimeout=3 -i ~/.ssh/id_ed25519_benchmarker patryk@$VM_HOST 'df / | tail -1 | awk \"{print \\\$5}\" | tr -d %'" 2>/dev/null || echo 0)
-  [ "$VM_DISK_PCT" -gt 90 ] && add_finding "VM disk at ${VM_DISK_PCT}%"
+  VM_DISK_PCT=$(ssh -o ConnectTimeout=5 -i "$VM_SSH_KEY" "$VM_USER@$VM_HOST" "df / | tail -1 | awk '{print \$5}' | tr -d %" 2>/dev/null || echo 0)
+  if [ "${VM_DISK_PCT:-0}" -gt 90 ] 2>/dev/null; then
+    add_finding "VM disk at ${VM_DISK_PCT}%"
+    ssh -o ConnectTimeout=5 -i "$VM_SSH_KEY" "$VM_USER@$VM_HOST" "sudo docker system prune -af --volumes --filter 'label!=keep' 2>&1 | tail -5" >/dev/null 2>&1 || true
+    add_healed "Ran docker system prune on VM (disk was ${VM_DISK_PCT}%)"
+  fi
 fi
 
-# 8. Queue stats
+# 8. Queue stats + auto-refill if idle
 if [ "$API_OK" = true ]; then
-  STATS=$(ssh -o ConnectTimeout=3 "$I9" "curl -sf '$I9_API/api/queue' 2>/dev/null" | python3 -c "
+  STATS_JSON=$(curl -sf "$API_URL/api/queue" 2>/dev/null || echo '[]')
+  STATS=$(echo "$STATS_JSON" | python3 -c "
 import sys, json
 data = json.loads(sys.stdin.read())
 done = len([e for e in data if e.get('status') == 'completed'])
-active = len([e for e in data if e.get('status') in ('processing', 'benchmarking')])
+active = len([e for e in data if e.get('status') in ('processing', 'benchmarking', 'deploying')])
 pending = len([e for e in data if e.get('status') == 'pending'])
 print(f'{done} done, {active} active, {pending} pending')
 " 2>/dev/null || echo "error")
@@ -96,4 +107,4 @@ fi
 [ -n "$FINDINGS" ] && log "FINDINGS:$FINDINGS"
 [ -n "$HEALED" ] && log "HEALED:$HEALED"
 [ -z "$FINDINGS" ] && log "OK — worker=${WORKER_ALIVE:-none} api=$API_OK vm=$VM_OK"
-
+exit 0
