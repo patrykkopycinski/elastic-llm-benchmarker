@@ -6,8 +6,8 @@ set -uo pipefail
 BENCH_DIR="$HOME/Projects/elastic-llm-benchmarker"
 LOG="$BENCH_DIR/.smoke-logs/watchdog.log"
 API_URL="http://localhost:3200"
-VM_HOST="34.29.5.12"
-VM_SSH_KEY="$HOME/.ssh/id_ed25519"
+VM_HOST="136.115.231.66"
+VM_SSH_KEY="$HOME/.ssh/benchmarker_ed25519"
 VM_USER="patryk"
 TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -90,17 +90,24 @@ if [ "$VM_OK" = true ]; then
 fi
 
 # 8. Queue stats + auto-refill if idle
+# NOTE: GET /api/queue (no filter) is capped at size=100 sorted by priority desc.
+# With 200+ historical entries this silently truncates away live pending/
+# benchmarking entries that sort below old priority=100 rows — the watchdog
+# was reporting "0 active, 0 pending" while a benchmark was actually running
+# (discovered 2026-08-10). Query per-status via the server-side status filter
+# instead, which applies the filter in ES before the size cap.
 if [ "$API_OK" = true ]; then
-  STATS_JSON=$(curl -sf "$API_URL/api/queue" 2>/dev/null || echo '[]')
-  STATS=$(echo "$STATS_JSON" | python3 -c "
-import sys, json
-data = json.loads(sys.stdin.read())
-done = len([e for e in data if e.get('status') == 'completed'])
-active = len([e for e in data if e.get('status') in ('processing', 'benchmarking', 'deploying')])
-pending = len([e for e in data if e.get('status') == 'pending'])
-print(f'{done} done, {active} active, {pending} pending')
-" 2>/dev/null || echo "error")
-  log "Queue: $STATS"
+  DONE_CT=$(curl -sf "$API_URL/api/queue?status=completed" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+  PENDING_CT=$(curl -sf "$API_URL/api/queue?status=pending" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "?")
+  ACTIVE_CT=0
+  for s in processing benchmarking deploying; do
+    N=$(curl -sf "$API_URL/api/queue?status=$s" 2>/dev/null | python3 -c "import sys,json; print(len(json.load(sys.stdin)))" 2>/dev/null || echo 0)
+    ACTIVE_CT=$((ACTIVE_CT + N))
+  done
+  log "Queue: $DONE_CT done, $ACTIVE_CT active, $PENDING_CT pending"
+  if [ "$ACTIVE_CT" -eq 0 ] 2>/dev/null && [ "$PENDING_CT" -eq 0 ] 2>/dev/null; then
+    add_finding "Queue idle (0 active, 0 pending)"
+  fi
 fi
 
 # Report
