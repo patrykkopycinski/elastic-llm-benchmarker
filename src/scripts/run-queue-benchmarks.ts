@@ -95,7 +95,7 @@ async function main() {
     },
   });
 
-  const entries = await queueService.getQueue({ status: 'pending' });
+  const entries = await queueService.getQueue({ status: 'pending' }, 1000);
   logger.info(`Found ${entries.length} pending models in queue`);
 
   if (entries.length === 0) {

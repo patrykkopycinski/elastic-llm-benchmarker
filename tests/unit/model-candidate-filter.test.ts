@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { ModelCandidateFilter } from '../../src/services/model-candidate-filter.js';
+import {
+  ModelCandidateFilter,
+  getBytesPerParamForQuantizations,
+} from '../../src/services/model-candidate-filter.js';
 import type { ModelInfo } from '../../src/types/benchmark.js';
 
 // ─── Test Helpers ─────────────────────────────────────────────────────────────
@@ -935,6 +938,36 @@ describe('ModelCandidateFilter', () => {
 
       expect(result.passed).toBe(false);
       expect(result.rejections.some((r) => r.criterion === 'model_size')).toBe(true);
+    });
+  });
+
+  describe('4-bit quantization families (regression: over-estimated as fp16)', () => {
+    // Before the fix these names were absent from BYTES_PER_PARAM, so the lookup
+    // fell through to the fp16 default of 2 bytes/param. A 24B 4-bit model was
+    // estimated at ~53GB and hard-rejected on every GPU smaller than an A100,
+    // which starved the discovery queue on the 1xL4 (23GB) profile.
+    it('resolves NVFP4 / compressed-tensors to 4-bit', () => {
+      expect(getBytesPerParamForQuantizations(['nvfp4-pack-quantized'])).toBe(0.5);
+      expect(getBytesPerParamForQuantizations(['nvfp4'])).toBe(0.5);
+      expect(getBytesPerParamForQuantizations(['w4a16'])).toBe(0.5);
+    });
+
+    it('resolves bitsandbytes nf4 to 4-bit even alongside bfloat16', () => {
+      // bnb configs carry torch_dtype: bfloat16; the 4-bit signal must win.
+      expect(getBytesPerParamForQuantizations(['bfloat16', 'nf4'])).toBe(0.5);
+      expect(getBytesPerParamForQuantizations(['bfloat16', '4bit'])).toBe(0.5);
+      expect(getBytesPerParamForQuantizations(['bnb-4bit'])).toBe(0.5);
+    });
+
+    it('keeps unquantized models at fp16 (negative control)', () => {
+      expect(getBytesPerParamForQuantizations(['bfloat16'])).toBe(2);
+      expect(getBytesPerParamForQuantizations([])).toBe(2);
+    });
+
+    it('lets a 24B 4-bit model fit a 23GB L4 while bf16 does not', () => {
+      const vram = (bytes: number) => (24e9 * bytes) / 1024 ** 3 * 1.2;
+      expect(vram(getBytesPerParamForQuantizations(['nvfp4']))).toBeLessThan(23);
+      expect(vram(getBytesPerParamForQuantizations(['bfloat16']))).toBeGreaterThan(23);
     });
   });
 });

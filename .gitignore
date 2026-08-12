@@ -23,6 +23,7 @@ deploy/gcp/.terraform.tfstate.lock.info
 # Local operator config (copy from config/default.json — never commit real hosts/keys)
 config/local.json
 config/*-local.json
+config/l4-test.json
 
 # IDE
 .vscode/

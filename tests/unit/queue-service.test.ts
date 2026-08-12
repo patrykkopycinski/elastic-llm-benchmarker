@@ -40,6 +40,7 @@ describe('QueueService lease fencing + reclaim', () => {
   let search: ReturnType<typeof vi.fn>;
   let update: ReturnType<typeof vi.fn>;
   let get: ReturnType<typeof vi.fn>;
+  let count: ReturnType<typeof vi.fn>;
   let esClient: Client;
   let service: QueueService;
 
@@ -47,7 +48,8 @@ describe('QueueService lease fencing + reclaim', () => {
     search = vi.fn();
     update = vi.fn().mockResolvedValue({ result: 'updated' });
     get = vi.fn();
-    esClient = { search, update, get } as unknown as Client;
+    count = vi.fn().mockResolvedValue({ count: 0 });
+    esClient = { search, update, get, count } as unknown as Client;
     service = new QueueService(esClient);
   });
 
@@ -381,6 +383,35 @@ describe('QueueService lease fencing + reclaim', () => {
 
       expect(runs).toBe(1);
       expect(benchmarkMs).toBe(60 * 60 * 1000);
+    });
+  });
+
+  describe('getQueue paging', () => {
+    beforeEach(() => {
+      search.mockResolvedValue({ hits: { hits: [], total: { value: 0 } } });
+    });
+
+    it('defaults to a 100-entry page (backwards compatible)', async () => {
+      await service.getQueue();
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ size: 100 }));
+    });
+
+    it('honours an explicit limit so callers can read past the 100 cap', async () => {
+      // The hardcoded `size: 100` sorted by priority desc, so low-priority
+      // discovery entries (priority 9-10, below the page's cutoff of 40) were
+      // invisible — /api/queue reported an empty queue mid-benchmark.
+      await service.getQueue(undefined, 1000);
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ size: 1000 }));
+    });
+
+    it('clamps a limit above the ES max window', async () => {
+      await service.getQueue(undefined, 999_999);
+      expect(search).toHaveBeenCalledWith(expect.objectContaining({ size: 10_000 }));
+    });
+
+    it('countQueue reports the true total independent of the page cap', async () => {
+      count.mockResolvedValue({ count: 219 });
+      await expect(service.countQueue()).resolves.toBe(219);
     });
   });
 });

@@ -523,7 +523,7 @@ export async function startHandler(
             config,
             gate: new Stage2Gate(config),
             repoService: new KibanaRepoService({ config, logger }),
-            evalRunner: new EvalSuiteRunner({ esStore: resultsStore, logger }),
+            evalRunner: new EvalSuiteRunner({ esStore: resultsStore, logger, config }),
             resultsStore,
             logger,
           })

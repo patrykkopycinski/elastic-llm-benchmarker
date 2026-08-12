@@ -216,8 +216,23 @@ export class MaintenanceScheduler {
     if (days <= 0 || cap <= 0) return 0;
     const beforeIso = new Date(nowMs - days * 24 * MS_PER_HOUR).toISOString();
     const failed = await this.deps.queueService.findFailedEntries(beforeIso, 100);
+
+    // Never resurrect a model that is still under an active cooldown. The DLQ
+    // sweep only checks `retriable`, so without this it re-enqueues models the
+    // scheduler just quarantined — the two schedulers fight and the model burns
+    // GPU time on a loop.
+    let cooledDown = new Set<string>();
+    try {
+      const active = await this.deps.queueService.loadActiveModelCooldowns();
+      cooledDown = new Set(active.map((a) => a.modelId));
+    } catch {
+      // Cooldown store unavailable — fall back to the previous behavior rather
+      // than stalling the DLQ sweep entirely.
+    }
+
     const retriable = failed
       .filter((e) => classifyFailure(e.errorMessage).retriable)
+      .filter((e) => !cooledDown.has(e.modelId))
       .slice(0, cap)
       .map((e) => e.id);
     if (retriable.length === 0) return 0;

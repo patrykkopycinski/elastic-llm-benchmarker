@@ -475,6 +475,44 @@ export class HFCardParser {
       if (typeof qc.bits === 'number') {
         quants.add(`${qc.quant_method}-${qc.bits}bit`);
       }
+
+      // bitsandbytes advertises width via `_load_in_4bit` / `_load_in_8bit`
+      // rather than `quant_method`, and carries `torch_dtype: bfloat16` at the
+      // top level. Without an explicit width the estimator sees only bf16 and
+      // over-estimates the model by 4x.
+      if (qc._load_in_4bit === true || qc.load_in_4bit === true) {
+        quants.add('4bit');
+      }
+      if (qc._load_in_8bit === true || qc.load_in_8bit === true) {
+        quants.add('8bit');
+      }
+      if (typeof qc.bnb_4bit_quant_type === 'string') {
+        quants.add(qc.bnb_4bit_quant_type); // nf4 / fp4
+      }
+
+      // compressed-tensors (NVFP4, W4A16, ...) nests the real format under
+      // config_groups.<group>.format, e.g. "nvfp4-pack-quantized".
+      if (qc.config_groups && typeof qc.config_groups === 'object') {
+        for (const group of Object.values(qc.config_groups as Record<string, unknown>)) {
+          if (!group || typeof group !== 'object') continue;
+          const fmt = (group as Record<string, unknown>).format;
+          if (typeof fmt === 'string') {
+            const lower = fmt.toLowerCase();
+            quants.add(lower);
+            // "nvfp4-pack-quantized" -> also record the bare family name so the
+            // bytes-per-param lookup matches without needing every suffix.
+            const family = lower.split('-')[0];
+            if (family) quants.add(family);
+          }
+          const wq = (group as Record<string, unknown>).weights;
+          if (wq && typeof wq === 'object') {
+            const numBits = (wq as Record<string, unknown>).num_bits;
+            if (typeof numBits === 'number') {
+              quants.add(`${numBits}bit`);
+            }
+          }
+        }
+      }
     }
 
     if (typeof configJson?.['torch_dtype'] === 'string') {

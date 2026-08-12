@@ -13,6 +13,7 @@ export const INDEX_NAMES = {
   BENCHMARKER_CI_EVALS: 'benchmarker-ci-evals',
   BENCHMARKER_DAEMON_LEASE: 'benchmarker-daemon-lease',
   BENCHMARKER_VM_COST: 'benchmarker-vm-cost',
+  BENCHMARKER_MODEL_COOLDOWN: 'benchmarker-model-cooldown',
 } as const;
 
 export const INDEX_MAPPINGS: Record<
@@ -434,6 +435,25 @@ export const INDEX_MAPPINGS: Record<
         estimated_cost_usd: { type: 'float' },
         runs_in_window: { type: 'integer' },
         low_utilization: { type: 'boolean' },
+      },
+    },
+    settings: { number_of_shards: 1, number_of_replicas: 0 },
+  },
+  /**
+   * Model cooldowns (auto-blacklist). Persisted so a daemon restart does not
+   * clear the 3-strike quarantine — the in-memory-only tracker previously let
+   * a known-bad model be re-queued indefinitely across restarts.
+   * Doc id is the model id.
+   */
+  [INDEX_NAMES.BENCHMARKER_MODEL_COOLDOWN]: {
+    mappings: {
+      properties: {
+        model_id: { type: 'keyword' },
+        expire_at: { type: 'date' },
+        error_type: { type: 'keyword' },
+        failure_count: { type: 'integer' },
+        last_error: { type: 'text' },
+        updated_at: { type: 'date' },
       },
     },
     settings: { number_of_shards: 1, number_of_replicas: 0 },

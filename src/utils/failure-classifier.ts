@@ -52,6 +52,19 @@ const RULES: Rule[] = [
   { category: 'model-arch', retriable: false, pattern: /Kibana\s+CI\s+eval\s+failed|Stage\s*2.*(eval|score).*(fail|below)|eval\s+score[s]?\s+below/i },
   { category: 'model-arch', retriable: false, pattern: /failed\s+stage2\s+eligibility|did\s+not\s+pass.*threshold/i },
 
+  // --- resource-fit at LOAD time (permanent — quarantine) ---
+  // A model that OOMs during startup/health-check never reached the benchmark,
+  // so no concurrency was applied and there is nothing to back off to. The
+  // model simply does not fit this GPU. Retrying re-downloads the weights and
+  // reproduces the identical OOM, burning a full deploy cycle each time.
+  // Ordered ABOVE the generic OOM rule so first-match-wins picks it.
+  {
+    category: 'resource-fit',
+    retriable: false,
+    pattern:
+      /health\s+check\s+failed.*(out\s+of\s+memory|OOM)|(out\s+of\s+memory|OOM).*(loading|load\s+model|model\s+weights|requires\s+more\s+GPU|during\s+startup)|requires\s+more\s+GPU\s+VRAM\s+than\s+available|No\s+available\s+memory\s+for\s+the\s+cache\s+blocks/i,
+  },
+
   // --- resource-fit (retriable at lower concurrency) ---
   { category: 'resource-fit', retriable: true, pattern: /out\s+of\s+memory|CUDA\s+out\s+of\s+memory|OOM|cannot\s+allocate\s+memory|KV\s+cache.*(insufficient|too\s+small)/i },
   { category: 'resource-fit', retriable: true, pattern: /Benchmark\s+failed\s+at\s+concurrency\s+level/i },

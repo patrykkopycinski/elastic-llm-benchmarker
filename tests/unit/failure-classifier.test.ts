@@ -84,4 +84,35 @@ describe('classifyFailure', () => {
     expect(c.category).toBe('model-arch');
     expect(c.retriable).toBe(false);
   });
+
+  describe('OOM at load time vs under concurrency', () => {
+    // Every OOM in the live queue (13/13) happened during the health check, i.e.
+    // before any concurrency was applied. Retrying those re-downloads the
+    // weights and reproduces the identical OOM, so they must NOT be retriable.
+    const loadTimeOoms = [
+      'Health check failed for model ArliAI/GLM-4.6-Derestricted-v3: CUDA out of memory: the model requires more GPU VRAM than available',
+      'Health check failed for model zai-org/GLM-4.5-Air: CUDA out of memory',
+      'CUDA out of memory while loading model weights',
+      'ValueError: No available memory for the cache blocks',
+    ];
+
+    for (const msg of loadTimeOoms) {
+      it(`quarantines load-time OOM: "${msg.slice(0, 45)}..."`, () => {
+        const c = classifyFailure(msg);
+        expect(c.category).toBe('resource-fit');
+        expect(c.retriable).toBe(false);
+      });
+    }
+
+    it('keeps a concurrency-level OOM retriable (backing off may genuinely help)', () => {
+      const c = classifyFailure('Benchmark failed at concurrency level 64: CUDA out of memory');
+      expect(c.category).toBe('resource-fit');
+      expect(c.retriable).toBe(true);
+    });
+
+    it('leaves health-check TIMEOUTs retriable (a slow load really can be a blip)', () => {
+      const c = classifyFailure('Health check timed out after 3600000ms');
+      expect(c.retriable).toBe(true);
+    });
+  });
 });

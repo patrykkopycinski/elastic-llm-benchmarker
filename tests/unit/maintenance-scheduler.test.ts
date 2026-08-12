@@ -49,6 +49,7 @@ describe('MaintenanceScheduler', () => {
     sumBenchmarkMsSince: ReturnType<typeof vi.fn>;
     findFailedEntries: ReturnType<typeof vi.fn>;
     requeueFailedEntries: ReturnType<typeof vi.fn>;
+    loadActiveModelCooldowns: ReturnType<typeof vi.fn>;
   };
   let resultsStore: { countErrorsSince: ReturnType<typeof vi.fn> };
   let esIndex: ReturnType<typeof vi.fn>;
@@ -65,6 +66,7 @@ describe('MaintenanceScheduler', () => {
       sumBenchmarkMsSince: vi.fn().mockResolvedValue({ runs: 4, benchmarkMs: 12 * 60 * 60 * 1000 }),
       findFailedEntries: vi.fn().mockResolvedValue([]),
       requeueFailedEntries: vi.fn().mockResolvedValue(0),
+      loadActiveModelCooldowns: vi.fn().mockResolvedValue([]),
     };
     resultsStore = { countErrorsSince: vi.fn().mockResolvedValue(0) };
     esIndex = vi.fn().mockResolvedValue({});
@@ -137,6 +139,25 @@ describe('MaintenanceScheduler', () => {
 
     expect(res.requeuedFromDlq).toBe(2);
     expect(queueService.requeueFailedEntries).toHaveBeenCalledWith(['a', 'c']);
+  });
+
+  it('does not re-enqueue a model that is still under an active cooldown', async () => {
+    // The DLQ sweep only filtered on `retriable`, so it happily resurrected a
+    // model the scheduler had just quarantined — the two schedulers fought and
+    // the model burned GPU time on a loop.
+    queueService.findFailedEntries.mockResolvedValue([
+      failedEntry('a', 'ECONNRESET: fetch failed'), // retriable
+      failedEntry('c', 'CUDA out of memory'), // retriable, but cooled down
+    ]);
+    queueService.loadActiveModelCooldowns.mockResolvedValue([
+      { modelId: 'org/c', expireAt: Date.now() + 60 * 60 * 1000 },
+    ]);
+    queueService.requeueFailedEntries.mockResolvedValue(1);
+
+    const scheduler = build();
+    await scheduler.runOnce();
+
+    expect(queueService.requeueFailedEntries).toHaveBeenCalledWith(['a']);
   });
 
   it('skips the DLQ sweep when the cost cap is engaged', async () => {

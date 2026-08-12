@@ -112,6 +112,22 @@ export const BYTES_PER_PARAM: Record<string, number> = {
   awq: 0.5,
   '4bit': 0.5,
   '8bit': 1,
+  // 4-bit families that HF exposes under names the older map missed. Without
+  // these the lookup falls through to the fp16 default (2 bytes/param), which
+  // over-estimates a 24B 4-bit model at ~53GB and hard-rejects it on any GPU
+  // smaller than an A100. See `nvfp4`/`bnb` handling in hf-card-parser.
+  nvfp4: 0.5,
+  'nvfp4-pack-quantized': 0.5,
+  fp4: 0.5,
+  nf4: 0.5,
+  bnb: 0.5,
+  'bnb-4bit': 0.5,
+  bitsandbytes: 0.5,
+  w4a16: 0.5,
+  'compressed-tensors': 0.5,
+  int3: 0.375,
+  w8a8: 1,
+  'fp8-dynamic': 1,
 };
 
 /**

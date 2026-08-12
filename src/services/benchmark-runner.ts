@@ -227,17 +227,17 @@ export class BenchmarkRunnerService {
     const allSucceeded = runs.every((r) => r.success);
 
     // Evaluate against thresholds (tiered by model size when param count known)
-    const rejectionReasons = this.evaluateThresholds(
+    const thresholdEvaluation = this.evaluateThresholds(
       runs,
       thresholds,
       parameterCountBillions ?? null,
     );
-    const passed = allSucceeded && rejectionReasons.length === 0;
+    const passed = allSucceeded && thresholdEvaluation.passed;
 
     this.logger.info(`Benchmark suite completed for model: ${modelId}`, {
       allSucceeded,
       passed,
-      rejectionReasons,
+      rejectionReasons: thresholdEvaluation.reasons,
       totalRuns: runs.length,
       successfulRuns: runs.filter((r) => r.success).length,
     });
@@ -247,7 +247,7 @@ export class BenchmarkRunnerService {
       runs,
       combinedRawOutput,
       allSucceeded,
-      rejectionReasons,
+      rejectionReasons: thresholdEvaluation.reasons,
       passed,
     };
   }
@@ -404,30 +404,34 @@ export class BenchmarkRunnerService {
   /**
    * Evaluates benchmark run results against configured thresholds.
    * Uses tiered ITL thresholds by model size when parameterCountBillions is provided.
+   * Enforces a hard floor: at least one run must succeed, including the
+   * concurrency=1 baseline, and all configured latency thresholds must pass.
    *
    * @param runs - Array of benchmark run results
    * @param thresholds - Threshold configuration
    * @param parameterCountBillions - Model parameter count in billions (for tiered ITL)
-   * @returns Array of rejection reason strings (empty if all thresholds pass)
+   * @returns Rejection reasons and an explicit passed flag
    */
   private evaluateThresholds(
     runs: BenchmarkRunResult[],
     thresholds: BenchmarkThresholds,
     parameterCountBillions: number | null,
-  ): string[] {
+  ): { reasons: string[]; passed: boolean } {
     const reasons: string[] = [];
     const successfulRuns = runs.filter((r) => r.success);
 
     if (successfulRuns.length === 0) {
       reasons.push('No successful benchmark runs completed');
-      return reasons;
+      return { reasons, passed: false };
     }
 
     const maxITLMs = resolveMaxITLMs(thresholds, parameterCountBillions);
 
-    // Evaluate ITL threshold for concurrency=1 (baseline single-user latency)
+    // Evaluate ITL threshold for concurrency=1 (baseline single-user latency floor)
     const singleUserRun = successfulRuns.find((r) => r.concurrencyLevel === 1);
-    if (singleUserRun && singleUserRun.metrics.itlMs > maxITLMs) {
+    if (!singleUserRun) {
+      reasons.push('Missing successful concurrency=1 run required for floor');
+    } else if (singleUserRun.metrics.itlMs > maxITLMs) {
       reasons.push(
         `ITL at concurrency=1 (${singleUserRun.metrics.itlMs.toFixed(2)}ms) exceeds threshold (${maxITLMs}ms)`,
       );
@@ -450,7 +454,7 @@ export class BenchmarkRunnerService {
       reasons.push(`Benchmark failed at concurrency level(s): ${failedLevels}`);
     }
 
-    return reasons;
+    return { reasons, passed: reasons.length === 0 };
   }
 
   /**

@@ -94,6 +94,9 @@ function createMockQueueService(): QueueService {
     findPending: vi.fn(),
     hasPending: vi.fn(),
     shouldAutoStop: vi.fn(),
+    persistModelCooldown: vi.fn().mockResolvedValue(undefined),
+    loadActiveModelCooldowns: vi.fn().mockResolvedValue([]),
+    clearModelCooldown: vi.fn().mockResolvedValue(undefined),
   } as unknown as QueueService;
 }
 

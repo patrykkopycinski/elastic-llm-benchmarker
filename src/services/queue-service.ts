@@ -316,7 +316,20 @@ export class QueueService {
     return toEntry(getRes._id!, getRes._source!);
   }
 
-  async getQueue(filters?: { status?: string; source?: string }): Promise<QueueEntry[]> {
+  /**
+   * List queue entries, highest priority first.
+   *
+   * `limit` defaults to 100 for backwards compatibility, but the cap is now
+   * explicit and callers can raise it. The previously-hardcoded `size: 100`
+   * silently truncated the result: with 219 entries the lowest priority on the
+   * page was 40, so freshly-discovered entries at priority 9-10 were invisible
+   * to `/api/queue` entirely and the endpoint reported an empty queue while a
+   * benchmark was actively running.
+   */
+  async getQueue(
+    filters?: { status?: string; source?: string },
+    limit = 100,
+  ): Promise<QueueEntry[]> {
     const must: object[] = [];
     if (filters?.status) must.push({ term: { status: filters.status } });
     if (filters?.source) must.push({ term: { source: filters.source } });
@@ -326,10 +339,21 @@ export class QueueService {
       index: INDEX,
       query,
       sort: [{ priority: { order: 'desc' } }, { requested_at: { order: 'asc' } }],
-      size: 100,
+      size: Math.min(Math.max(limit, 1), 10_000),
+      track_total_hits: true,
     });
 
     return res.hits.hits.map((h) => toEntry(h._id!, h._source!));
+  }
+
+  /** Total entries matching the same filters as {@link getQueue}, ignoring any page cap. */
+  async countQueue(filters?: { status?: string; source?: string }): Promise<number> {
+    const must: object[] = [];
+    if (filters?.status) must.push({ term: { status: filters.status } });
+    if (filters?.source) must.push({ term: { source: filters.source } });
+    const query = must.length > 0 ? { bool: { must } } : { match_all: {} };
+    const res = await this.esClient.count({ index: INDEX, query });
+    return res.count ?? 0;
   }
 
   /**
@@ -997,5 +1021,67 @@ export class QueueService {
     if (!startedAt) return false;
     const elapsed = Date.now() - new Date(startedAt).getTime();
     return elapsed > maxDurationMs;
+  }
+
+  /**
+   * Persist a model cooldown (auto-blacklist) so it survives a daemon restart.
+   *
+   * The scheduler's 3-strike tracker was in-memory only, so every restart
+   * silently cleared every quarantine and a known-bad model could be re-queued
+   * forever. Observed live: one model accumulated 16 failures, and another
+   * logged 4 consecutive identical non-retriable Stage 2 failures without ever
+   * tripping the 3-strike cooldown.
+   */
+  async persistModelCooldown(
+    modelId: string,
+    expireAt: number,
+    errorType: string,
+    failureCount: number,
+  ): Promise<void> {
+    await this.esClient.index({
+      index: INDEX_NAMES.BENCHMARKER_MODEL_COOLDOWN,
+      id: modelId,
+      document: {
+        model_id: modelId,
+        expire_at: new Date(expireAt).toISOString(),
+        error_type: errorType,
+        failure_count: failureCount,
+        updated_at: new Date().toISOString(),
+      },
+      refresh: true,
+    });
+  }
+
+  /** Load all still-active (non-expired) cooldowns. Used to rehydrate on boot. */
+  async loadActiveModelCooldowns(): Promise<Array<{ modelId: string; expireAt: number }>> {
+    try {
+      const res = await this.esClient.search<{ model_id: string; expire_at: string }>({
+        index: INDEX_NAMES.BENCHMARKER_MODEL_COOLDOWN,
+        size: 500,
+        query: { range: { expire_at: { gt: 'now' } } },
+      });
+      return res.hits.hits
+        .map((h) => h._source)
+        .filter((s): s is { model_id: string; expire_at: string } => Boolean(s))
+        .map((s) => ({ modelId: s.model_id, expireAt: new Date(s.expire_at).getTime() }));
+    } catch (err: unknown) {
+      // Index may not exist yet on first boot — that is not an error.
+      if (isStatusCode(err, 404)) return [];
+      throw err;
+    }
+  }
+
+  /** Drop a persisted cooldown (expired, or manually cleared by an operator). */
+  async clearModelCooldown(modelId: string): Promise<void> {
+    try {
+      await this.esClient.delete({
+        index: INDEX_NAMES.BENCHMARKER_MODEL_COOLDOWN,
+        id: modelId,
+        refresh: true,
+      });
+    } catch (err: unknown) {
+      if (isStatusCode(err, 404)) return;
+      throw err;
+    }
   }
 }

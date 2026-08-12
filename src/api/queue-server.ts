@@ -497,10 +497,13 @@ export function createQueueServer(config: QueueServerConfig & {
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
       const source = typeof req.query.source === 'string' ? req.query.source : undefined;
-      const entries = await queueService.getQueue({ status, source });
+      const parsed = Number(req.query.limit);
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
+      const entries = await queueService.getQueue({ status, source }, limit);
+      const total = await queueService.countQueue({ status, source });
       const pendingCount = await queueService.getPending();
       const current = await queueService.getCurrent();
-      res.json({ entries, pendingCount, current });
+      res.json({ entries, total, truncated: total > entries.length, pendingCount, current });
     } catch (err) {
       logger.error('GET /api/v1/queue failed', { err });
       res.status(500).json({ error: 'Internal server error' });
@@ -792,7 +795,17 @@ export function createQueueServer(config: QueueServerConfig & {
     try {
       const status = typeof req.query.status === 'string' ? req.query.status : undefined;
       const source = typeof req.query.source === 'string' ? req.query.source : undefined;
-      const entries = await queueService.getQueue({ status, source });
+      // Raise the page cap explicitly. The response stays a bare array — the
+      // dashboard (public/dashboard.html) consumes it directly — but the
+      // truncation is now surfaced in a header instead of being silent.
+      const parsed = Number(req.query.limit);
+      const limit = Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
+      const [entries, total] = await Promise.all([
+        queueService.getQueue({ status, source }, limit),
+        queueService.countQueue({ status, source }),
+      ]);
+      res.set('X-Total-Count', String(total));
+      res.set('X-Truncated', String(total > entries.length));
       res.json(entries);
     } catch (err) {
       logger.error('GET /api/queue failed', { err });

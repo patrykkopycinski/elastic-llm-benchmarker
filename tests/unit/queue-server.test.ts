@@ -41,6 +41,7 @@ function createMockQueueService(): QueueService {
         requestedBy: 'test-user',
       },
     ]),
+    countQueue: vi.fn().mockResolvedValue(1),
     getCurrent: vi.fn().mockResolvedValue({
       id: 'eval-456',
       modelId: 'meta-llama/Llama-3-70B',
