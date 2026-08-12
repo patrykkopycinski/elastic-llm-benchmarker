@@ -191,13 +191,17 @@ export class EvalSuiteRunner {
       });
 
       try {
+        // kbn-evals derives one Playwright project per *connector*, not per model
+        // (`createPlaywrightEvalsConfig` maps over `getAvailableConnectors()`), so
+        // `--project <modelId>` fails with:
+        //   Project(s) "<modelId>" not found. Available projects: "<connectorId>"
         const args = [
           'scripts/evals.js',
           'run',
           '--suite',
           suite,
           '--project',
-          modelId,
+          connectorId ?? modelId,
         ];
         if (connectorId) {
           args.push('--judge', connectorId);

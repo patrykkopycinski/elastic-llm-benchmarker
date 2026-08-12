@@ -292,7 +292,7 @@ describe('EvalSuiteRunner', () => {
           '--suite',
           'latency',
           '--project',
-          'mistral/Mistral-7B',
+          'bedrock-claude',
           '--judge',
           'bedrock-claude',
           '--evaluations-kbn-url',
@@ -332,6 +332,25 @@ describe('EvalSuiteRunner', () => {
       expect(Object.keys(decoded)).toContain('vllm-mistral-mistral-7b');
       expect(decoded['vllm-mistral-mistral-7b'].actionTypeId).toBe('.gen-ai');
       expect(decoded['vllm-mistral-mistral-7b'].config.defaultModel).toBe('mistral/Mistral-7B');
+    });
+
+    it('passes the connector id as --project, since Playwright names projects per connector', async () => {
+      // kbn-evals builds one Playwright project per connector. Passing the model
+      // id produced: Project(s) "<modelId>" not found. Available projects: "<connectorId>"
+      mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.5 }));
+
+      await runner.run({
+        ...baseOpts,
+        modelId: 'bodenmaurice/dendrite-qwen3.6-35b-stages-v2',
+        endpointUrl: 'http://host:8080',
+        suites: ['latency'],
+        connectorId: 'vllm-bodenmaurice-dendrite-qwen3.6-35b-stages-v2',
+      });
+
+      const args = execFileMock.mock.calls[0]![1] as string[];
+      const projectValue = args[args.indexOf('--project') + 1];
+      expect(projectValue).toBe('vllm-bodenmaurice-dendrite-qwen3.6-35b-stages-v2');
+      expect(projectValue).not.toBe('bodenmaurice/dendrite-qwen3.6-35b-stages-v2');
     });
 
     it('merges the vLLM connector into an inherited connector map instead of dropping it', async () => {
