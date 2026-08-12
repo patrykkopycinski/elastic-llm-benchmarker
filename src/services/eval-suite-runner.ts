@@ -181,7 +181,26 @@ export class EvalSuiteRunner {
 
     this.logger.info('Starting eval suite run', { modelId, suites, endpointUrl });
 
-    const connectorId = providedConnectorId ?? (await this.createConnectorId(endpointUrl, modelId));
+    // `createConnectorId()` registers a connector through Kibana's API and
+    // returns its generated UUID. kbn-evals never consults that API: it builds
+    // its project list from `KIBANA_TESTING_AI_CONNECTORS`, whose keys are the
+    // *derived* connector names (`buildConnectorPayload`). Feeding it the UUID
+    // therefore always failed with
+    //   "Evaluation connector id <uuid> was not found, pick one from eis-..."
+    // even though the env payload was injected correctly — the id and the map
+    // key simply came from two different sources.
+    //
+    // Derive the id the same way the payload does, so the two always agree.
+    // The Kibana-side connector is still created (Stage 2 needs it to exist for
+    // the model endpoint), but it no longer decides the id kbn-evals resolves.
+    const derivedConnectorId = buildConnectorPayload({
+      endpointUrl,
+      modelId,
+    }).connectorId;
+    if (!providedConnectorId) {
+      await this.createConnectorId(endpointUrl, modelId);
+    }
+    const connectorId = providedConnectorId ?? derivedConnectorId;
     if (!connectorId) {
       this.logger.warn('No evaluation connector ID available; eval CLI will likely fail', {
         modelId,

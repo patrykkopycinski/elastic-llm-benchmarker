@@ -353,6 +353,41 @@ describe('EvalSuiteRunner', () => {
       expect(projectValue).not.toBe('bodenmaurice/dendrite-qwen3.6-35b-stages-v2');
     });
 
+    it('uses a connector id that matches the injected env map key when none is provided', async () => {
+      // Root cause of the live Stage 2 failure: with no connectorId supplied,
+      // the runner used the UUID returned by Kibana's connectors API, while
+      // KIBANA_TESTING_AI_CONNECTORS is keyed by the *derived* connector name.
+      // kbn-evals resolves against the env map, so the UUID could never match:
+      //   "Evaluation connector id 9a6d3ca7-... was not found, pick one from eis-..."
+      mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.5 }));
+
+      await runner.run({
+        ...baseOpts,
+        modelId: 'mistral/Mistral-7B',
+        endpointUrl: 'http://host:8080',
+        suites: ['latency'],
+        // deliberately no connectorId
+      });
+
+      const call = execFileMock.mock.calls[0]!;
+      const args = call[1] as string[];
+      const env = (call[2] as { env?: NodeJS.ProcessEnv }).env ?? {};
+
+      const projectId = args[args.indexOf('--project') + 1]!;
+      const encoded = env.KIBANA_TESTING_AI_CONNECTORS;
+      expect(encoded).toBeDefined();
+      const decoded = JSON.parse(Buffer.from(String(encoded), 'base64').toString('utf8'));
+
+      // The invariant that was broken: the id handed to the CLI must be a key
+      // in the connector map the CLI reads.
+      expect(Object.keys(decoded)).toContain(projectId);
+      expect(env.EVALUATION_CONNECTOR_ID).toBe(projectId);
+      // And it must not be a Kibana API UUID.
+      expect(projectId).not.toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+      );
+    });
+
     it('surfaces stderr when the eval output cannot be parsed', async () => {
       // Production produced "Unable to parse eval output. Raw stdout:" with
       // nothing after the colon — stdout was empty and stderr was discarded,
