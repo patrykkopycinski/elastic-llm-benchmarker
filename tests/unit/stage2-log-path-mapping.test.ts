@@ -81,3 +81,34 @@ describe('ElasticsearchResultsStore Stage 2 log_path round-trip', () => {
     expect(result?.suiteResults?.[0]?.logPath).toBe('/tmp/agent-builder.log');
   });
 });
+
+describe('ElasticsearchResultsStore Stage 2 write idempotency', () => {
+  it('keys the doc by run + model so a repeated save overwrites instead of duplicating', async () => {
+    // Stage2WorkerImpl.execute() saves the result AND the scheduler saves the
+    // same result again, so an auto-id append produced 477 docs for 314
+    // distinct run_ids — every status aggregation over-counted.
+    const { client, indexArgs } = createMockClient(null);
+    const store = new ElasticsearchResultsStore(client, 'error');
+    await store.initialize();
+
+    const result: Stage2Result = {
+      runId: 'run-dup',
+      modelId: 'my-org/my-model',
+      status: 'failed',
+      scores: {},
+      suiteResults: [],
+      startedAt: '2026-08-12T00:00:00Z',
+      completedAt: '2026-08-12T01:00:00Z',
+    };
+
+    await store.saveStage2Result(result);
+    await store.saveStage2Result(result);
+
+    const ids = indexArgs.map((a) => (a as { id?: string }).id);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe('run-dup:my-org/my-model');
+    // Same id both times => ES overwrites rather than appending a second row.
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).toBeDefined();
+  });
+});

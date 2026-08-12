@@ -962,8 +962,16 @@ export class ElasticsearchResultsStore {
       started_at: result.startedAt,
       completed_at: result.completedAt,
     };
+    // A Stage 2 result is saved by `Stage2WorkerImpl.execute()` *and* again by
+    // the scheduler at each call site, so an auto-id append wrote the same
+    // result 2-3x: 477 docs for 314 distinct run_ids. Every consumer that
+    // aggregates by status (matrix reports, failure counts) was therefore
+    // over-counting. Key the doc by run + model so a repeat write is an
+    // idempotent overwrite instead of a duplicate row.
+    const docId = `${result.runId}:${result.modelId}`;
     await this.esClient.index({
       index,
+      id: docId,
       document: doc,
     });
     this.logger.info('Stored stage2 result', { modelId: result.modelId, index, status: result.status });

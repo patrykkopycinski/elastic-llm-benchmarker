@@ -253,8 +253,15 @@ export class Stage2WorkerImpl implements Stage2Worker {
       // 6. Persist result (ignore errors)
       try {
         await this.resultsStore.saveStage2Result(result);
-      } catch {
-        // swallow — result should still be returned
+      } catch (err) {
+        // Non-fatal: the result is still returned to the caller. But a silent
+        // swallow means a persistence outage looks identical to "Stage 2 never
+        // ran", so record it.
+        this.logger?.warn('Stage 2: failed to persist result', {
+          runId: run.runId,
+          modelId: run.modelId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       return result;
