@@ -16,8 +16,14 @@ function execFilePromise(
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
       if (error) {
-        Object.assign(error, { stdout, stderr });
-        reject(error);
+        // Node already attaches stdout/stderr to the error for some failure
+        // modes. Blindly assigning the callback's values can *erase* those
+        // diagnostics with empty strings, which is how a real eval failure
+        // ended up reported as a bare "Command failed".
+        const err = error as NodeJS.ErrnoException & { stdout?: string; stderr?: string };
+        err.stdout = stdout || err.stdout || '';
+        err.stderr = stderr || err.stderr || '';
+        reject(err);
       } else {
         resolve({ stdout, stderr });
       }
@@ -215,13 +221,13 @@ export class EvalSuiteRunner {
         if (evalProfile) {
           args.push('--profile', evalProfile);
         }
-        const { stdout } = await execFilePromise('node', args, {
+        const { stdout, stderr } = await execFilePromise('node', args, {
           cwd: repoPath,
           timeout: timeoutMs,
           env: this.buildEvalEnv(connectorId, endpointUrl, modelId),
         });
 
-        const parsed = this.parseOutput(stdout);
+        const parsed = this.parseOutput(stdout, stderr);
         const durationMs = Date.now() - suiteStart;
 
         const status = parsed.error ? 'fail' : 'pass';
@@ -241,9 +247,12 @@ export class EvalSuiteRunner {
         const durationMs = Date.now() - suiteStart;
         const exitCode = err && typeof err === 'object' && 'code' in err ? (err.code as number | null) : null;
         const stdout = err && typeof err === 'object' && 'stdout' in err ? String(err.stdout) : '';
+        const stderr = err && typeof err === 'object' && 'stderr' in err ? String(err.stderr) : '';
 
         const errorMessage = err instanceof Error ? err.message : String(err);
-        const parsedFallback = stdout ? this.parseOutput(stdout) : null;
+        // `execFile` attaches both streams to the error; using only stdout threw
+        // away the diagnostics that explain *why* the eval exited non-zero.
+        const parsedFallback = stdout || stderr ? this.parseOutput(stdout, stderr) : null;
 
         suiteResults.push({
           suite,
@@ -346,11 +355,23 @@ export class EvalSuiteRunner {
     };
   }
 
-  private parseOutput(stdout: string): { score?: number; error?: string } {
+  /**
+   * The eval CLI prints its JSON result on stdout, but Playwright/Node write
+   * the actual diagnostics (stack traces, config errors, connector problems)
+   * to *stderr*. Reporting only stdout produced the useless
+   * "Unable to parse eval output. Raw stdout:" with nothing after the colon —
+   * the failure text existed, it was just being discarded.
+   */
+  private parseOutput(stdout: string, stderr = ''): { score?: number; error?: string } {
     const lines = stdout.split('\n').map((l) => l.trim()).filter(Boolean);
 
     if (lines.length === 0) {
-      return { error: 'Empty stdout from eval script' };
+      const detail = stderr.trim();
+      return {
+        error: detail
+          ? `Empty stdout from eval script. Stderr:\n${detail.slice(0, 2000)}`
+          : 'Empty stdout from eval script (stderr also empty)',
+      };
     }
 
     const lastLine = lines[lines.length - 1]!;
@@ -363,7 +384,13 @@ export class EvalSuiteRunner {
       if (parsed) return parsed;
     }
 
-    return { error: `Unable to parse eval output. Raw stdout:\n${stdout.slice(0, 2000)}` };
+    const stderrDetail = stderr.trim();
+    return {
+      error:
+        `Unable to parse eval output.` +
+        `\nRaw stdout:\n${stdout.slice(0, 1500)}` +
+        (stderrDetail ? `\nStderr:\n${stderrDetail.slice(0, 1500)}` : '\nStderr: (empty)'),
+    };
   }
 
   private tryParseJson(line: string): { score?: number; error?: string } | null {

@@ -353,6 +353,51 @@ describe('EvalSuiteRunner', () => {
       expect(projectValue).not.toBe('bodenmaurice/dendrite-qwen3.6-35b-stages-v2');
     });
 
+    it('surfaces stderr when the eval output cannot be parsed', async () => {
+      // Production produced "Unable to parse eval output. Raw stdout:" with
+      // nothing after the colon — stdout was empty and stderr was discarded,
+      // so the stored reason named the suites but not the fault.
+      mockExecFileSuccess('', 'Error: connector refused connection at 127.0.0.1:18000');
+
+      const result = await runner.run({
+        ...baseOpts,
+        endpointUrl: 'http://host:8080',
+        suites: ['latency'],
+        connectorId: 'bedrock-claude',
+      });
+
+      const error = result.suiteResults[0]!.error ?? '';
+      expect(error).toContain('connector refused connection');
+      expect(error).not.toBe('Empty stdout from eval script');
+    });
+
+    it('surfaces stderr when the eval exits non-zero', async () => {
+      execFileMock.mockImplementation((_file, _args, _options, _callback) => {
+        let callback = _callback;
+        if (typeof _options === 'function') {
+          callback = _options;
+        }
+        const err = Object.assign(new Error('Command failed'), {
+          code: 1,
+          stdout: '',
+          stderr: 'Error: Project(s) "x" not found. Available projects: "y"',
+        });
+        if (callback) {
+          process.nextTick(() => callback(err, '', ''));
+        }
+        return null as unknown as ReturnType<typeof execFile>;
+      });
+
+      const result = await runner.run({
+        ...baseOpts,
+        endpointUrl: 'http://host:8080',
+        suites: ['latency'],
+        connectorId: 'bedrock-claude',
+      });
+
+      expect(result.suiteResults[0]!.error ?? '').toContain('not found');
+    });
+
     it('merges the vLLM connector into an inherited connector map instead of dropping it', async () => {
       mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.5 }));
 
