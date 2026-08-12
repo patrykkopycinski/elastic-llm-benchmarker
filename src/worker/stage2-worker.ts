@@ -29,6 +29,67 @@ export interface Stage2WorkerDependencies {
   logger?: Logger;
 }
 
+/** Max length of the persisted reason — enough to diagnose, small enough to index. */
+const MAX_REASON_LENGTH = 600;
+
+/**
+ * Pulls the actionable line out of an eval CLI failure.
+ *
+ * The raw `error` is a wall of `Command failed: node scripts/evals.js ...`
+ * followed by Babel deopt notices and a Playwright stack trace. The one line
+ * that says what actually broke ("Evaluation connector id ... was not found",
+ * "Project(s) ... not found") sits in the middle, so a naive first-line or
+ * truncation-based summary throws the diagnosis away.
+ */
+function extractFailureCause(error: string): string {
+  const lines = error
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  const meaningful = lines.find(
+    (l) =>
+      /^Error:/.test(l) ||
+      /\bnot found\b/.test(l) ||
+      /\b(ECONNREFUSED|ENOENT|ETIMEDOUT)\b/.test(l),
+  );
+  if (meaningful) {
+    return meaningful.replace(/^Error:\s*/, '');
+  }
+
+  // Fall back to the first line that is not the command echo.
+  const nonCommand = lines.find((l) => !l.startsWith('Command failed:'));
+  return nonCommand ?? lines[0] ?? 'unknown failure';
+}
+
+/** Builds a one-line, indexable summary of which suites failed and why. */
+export function summarizeSuiteFailures(
+  suiteResults: Array<{ suite: string; status: string; error?: string }>,
+): string {
+  const failed = suiteResults.filter((sr) => sr.status === 'fail' || sr.status === 'error');
+  if (failed.length === 0) {
+    return 'Stage 2 failed with no failing suite recorded';
+  }
+
+  const causes = new Map<string, string[]>();
+  for (const sr of failed) {
+    const cause = sr.error ? extractFailureCause(sr.error) : 'no error recorded';
+    const suites = causes.get(cause) ?? [];
+    suites.push(sr.suite);
+    causes.set(cause, suites);
+  }
+
+  // Identical causes across suites collapse into one entry — an infra fault
+  // hits every suite the same way, and repeating it 3x buries the signal.
+  const summary = [...causes.entries()]
+    .map(([cause, suites]) => `${suites.join(', ')}: ${cause}`)
+    .join(' | ');
+
+  return summary.length > MAX_REASON_LENGTH
+    ? `${summary.slice(0, MAX_REASON_LENGTH - 1)}…`
+    : summary;
+}
+
 export class Stage2WorkerImpl implements Stage2Worker {
   private readonly config: AppConfig;
   private readonly gate: Stage2Gate;
@@ -176,6 +237,13 @@ export class Stage2WorkerImpl implements Stage2Worker {
         runId: run.runId,
         modelId: run.modelId,
         status,
+        // Without this, a `failed` Stage 2 lands in ES with an empty `reason`
+        // and the only record of *why* is the daemon log — which is how two
+        // separate harness bugs (connector id, --project) stayed invisible in
+        // 251 stored failures. Summarize the failing suites into the doc.
+        ...(status === 'failed'
+          ? { reason: summarizeSuiteFailures(evalResult.suiteResults) }
+          : {}),
         scores,
         suiteResults,
         startedAt,

@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { Stage2WorkerImpl, type Stage2WorkerDependencies } from '../../src/worker/stage2-worker.js';
+import {
+  Stage2WorkerImpl,
+  summarizeSuiteFailures,
+  type Stage2WorkerDependencies,
+} from '../../src/worker/stage2-worker.js';
 import type { PipelineRun, Stage1Result, Stage2Result } from '../../src/scheduler/pipeline-state.js';
 import type { AppConfig } from '../../src/types/config.js';
 import type { Stage2Gate } from '../../src/worker/stage2-gate.js';
@@ -276,6 +280,53 @@ describe('Stage2WorkerImpl', () => {
     expect(saved.status).toBe('failed');
   });
 
+  it('persists a populated reason on a failed Stage 2, not an empty field', async () => {
+    // 251 stored failures carried status:failed with reason undefined, so the
+    // only record of why was the daemon log. The reason must reach the doc.
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
+    vi.mocked(evalRunner.run).mockResolvedValue({
+      modelId: 'meta-llama/Llama-3-8B',
+      endpointUrl: 'http://localhost:8000',
+      status: 'failed',
+      suiteResults: [
+        {
+          suite: 'security-alert-triage',
+          status: 'error',
+          durationMs: 0,
+          error:
+            'Command failed: node scripts/evals.js run\nError: Project(s) "x" not found. Available projects: "y"\n    at Object.filterProjects',
+        },
+      ],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const result = await worker.execute(createPipelineRun(), createStage1Result());
+
+    const saved = vi.mocked(resultsStore.saveStage2Result).mock.calls[0]![0] as Stage2Result;
+    expect(saved.reason).toBeTruthy();
+    expect(saved.reason).toContain('security-alert-triage');
+    expect(saved.reason).toContain('not found');
+    expect(result.reason).toBe(saved.reason);
+  });
+
+  it('does not attach a reason when Stage 2 succeeds', async () => {
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
+    vi.mocked(evalRunner.run).mockResolvedValue({
+      modelId: 'meta-llama/Llama-3-8B',
+      endpointUrl: 'http://localhost:8000',
+      status: 'success',
+      suiteResults: [{ suite: 'tool_calls', status: 'pass', durationMs: 10, score: 1 }],
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+    });
+
+    const result = await worker.execute(createPipelineRun(), createStage1Result());
+
+    expect(result.status).toBe('success');
+    expect(result.reason).toBeUndefined();
+  });
+
   it('returns failed status on repo clone/pull failure', async () => {
     vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
     vi.mocked(repoService.cloneOrPull).mockResolvedValue({ success: false, error: 'git clone failed' });
@@ -328,5 +379,53 @@ describe('Stage2WorkerImpl', () => {
     expect(result.status).toBe('success');
     expect(result.scores).toEqual({ tool_calls: 0.95 });
     expect(resultsStore.saveStage2Result).toHaveBeenCalledOnce();
+  });
+});
+
+describe('summarizeSuiteFailures', () => {
+  // Captured verbatim from .smoke-logs/daemon.log — the real payload that was
+  // being discarded, not a hand-written approximation.
+  const REAL_PROJECT_NOT_FOUND_ERROR = `Command failed: node scripts/evals.js run --suite security-alert-triage --project bodenmaurice/dendrite-qwen3.6-35b-stages-v2 --judge 9a6d3ca7-fab1-43b1-91fb-86e5b25319a0
+Error: Project(s) "bodenmaurice/dendrite-qwen3.6-35b-stages-v2" not found. Available projects: "9a6d3ca7-fab1-43b1-91fb-86e5b25319a0"
+    at Object.filterProjects (/Users/patrykkopycinski/Projects/elastic-llm-benchmarker/.kibana-cache/node_modules/playwright/lib/runner/index.js:2096:11)
+    at runTests (/Users/patrykkopycinski/Projects/elastic-llm-benchmarker/.kibana-cache/node_modules/playwright/lib/cli/testActions.js:61:30)
+    at _Command.<anonymous> (/Users/patrykkopycinski/Projects/elastic-llm-benchmarker/.kibana-cache/node_modules/playwright/lib/program.js:53:7)
+`;
+
+  it('extracts the actionable cause from a real eval CLI failure', () => {
+    const summary = summarizeSuiteFailures([
+      { suite: 'security-alert-triage', status: 'error', error: REAL_PROJECT_NOT_FOUND_ERROR },
+    ]);
+
+    expect(summary).toContain('security-alert-triage');
+    expect(summary).toContain('not found');
+    // The command echo and the Playwright stack must not crowd out the cause.
+    expect(summary).not.toContain('Command failed: node scripts/evals.js');
+    expect(summary).not.toContain('at Object.filterProjects');
+  });
+
+  it('collapses one shared infra cause across suites instead of repeating it', () => {
+    const err = 'Error: Evaluation connector id abc was not found, pick one from ';
+    const summary = summarizeSuiteFailures([
+      { suite: 'a', status: 'error', error: err },
+      { suite: 'b', status: 'error', error: err },
+      { suite: 'c', status: 'error', error: err },
+    ]);
+
+    expect(summary).toBe('a, b, c: Evaluation connector id abc was not found, pick one from');
+    expect(summary.match(/was not found/g)).toHaveLength(1);
+  });
+
+  it('caps the reason so it stays indexable', () => {
+    const summary = summarizeSuiteFailures([
+      { suite: 's', status: 'error', error: `Error: ${'x'.repeat(5000)}` },
+    ]);
+    expect(summary.length).toBeLessThanOrEqual(600);
+  });
+
+  it('ignores passing suites and reports when nothing failed', () => {
+    expect(summarizeSuiteFailures([{ suite: 'ok', status: 'pass' }])).toBe(
+      'Stage 2 failed with no failing suite recorded',
+    );
   });
 });
