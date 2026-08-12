@@ -559,6 +559,14 @@ export const kibanaRepoConfigSchema = z.object({
   branch: z.string().default('main'),
   autoPull: z.boolean().default(true),
   bootstrapTimeoutMs: z.number().int().positive().default(1_800_000),
+  /**
+   * Absolute path to a live Scout `local.json` (`.scout/servers/local.json`).
+   * When set, Stage 2 copies it into the Kibana cache before evals run so
+   * Playwright does not die on "Directory with servers configuration is missing".
+   * Optional — when unset, the service tries well-known local checkouts and
+   * no-ops if none are found (leaving a prior copy intact).
+   */
+  scoutServersSource: z.string().optional(),
 });
 
 /**

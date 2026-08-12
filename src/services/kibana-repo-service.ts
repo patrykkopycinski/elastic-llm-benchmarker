@@ -132,6 +132,10 @@ export class KibanaRepoService {
       const packageStat = fs.statSync(packageJsonPath);
       if (packageStat.mtimeMs <= markerStat.mtimeMs) {
         this.logger.info('Bootstrap marker exists and package.json is unchanged, skipping bootstrap');
+        // Still ensure Scout servers config exists — a skip used to leave a
+        // fresh cache without `.scout/servers/local.json`, which made every
+        // Stage 2 suite die on "Directory with servers configuration is missing".
+        this.ensureScoutServersConfig(repoPath);
         return ok(undefined);
       }
     }
@@ -149,6 +153,48 @@ export class KibanaRepoService {
 
     fs.mkdirSync(path.dirname(markerPath), { recursive: true });
     fs.writeFileSync(markerPath, new Date().toISOString());
+    this.ensureScoutServersConfig(repoPath);
     return ok(undefined);
+  }
+
+  /**
+   * Copy a live Scout `local.json` into the Kibana cache so Playwright can
+   * resolve hosts. Without this, Stage 2 dies with:
+   *   Directory with servers configuration is missing or does not exist: …/.scout/servers
+   * even when the connector id and env payload are correct.
+   *
+   * Preference order: `kibanaRepo.scoutServersSource` → `$HOME/Projects/kibana/.scout/servers/local.json`.
+   * Best-effort: missing source leaves any prior copy intact and only warns.
+   */
+  ensureScoutServersConfig(repoPath: string = this.getRepoPath()): void {
+    const destDir = path.join(repoPath, '.scout', 'servers');
+    const dest = path.join(destDir, 'local.json');
+    const candidates = [
+      this.config.scoutServersSource,
+      path.join(process.env.HOME ?? '', 'Projects', 'kibana', '.scout', 'servers', 'local.json'),
+    ].filter((p): p is string => Boolean(p && p.trim()));
+
+    const source = candidates.find((p) => fs.existsSync(p));
+    if (!source) {
+      if (!fs.existsSync(dest)) {
+        this.logger.warn(
+          'Scout servers config missing and no source found — Stage 2 will fail until local.json is provisioned',
+          { tried: candidates, dest },
+        );
+      }
+      return;
+    }
+
+    try {
+      fs.mkdirSync(destDir, { recursive: true });
+      fs.copyFileSync(source, dest);
+      this.logger.info('Provisioned Scout servers config for Stage 2', { source, dest });
+    } catch (err: unknown) {
+      this.logger.warn('Failed to provision Scout servers config', {
+        source,
+        dest,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }

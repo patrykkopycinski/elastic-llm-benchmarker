@@ -19,6 +19,7 @@ vi.mock('node:fs', async () => {
     statSync: vi.fn(),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    copyFileSync: vi.fn(),
   };
 });
 
@@ -40,6 +41,7 @@ const existsSyncMock = vi.mocked(fs.existsSync);
 const statSyncMock = vi.mocked(fs.statSync);
 const mkdirSyncMock = vi.mocked(fs.mkdirSync);
 const writeFileSyncMock = vi.mocked(fs.writeFileSync);
+const copyFileSyncMock = vi.mocked(fs.copyFileSync);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -247,4 +249,55 @@ describe('KibanaRepoService', () => {
       }
     });
   });
+
+  describe('ensureScoutServersConfig', () => {
+    it('copies scoutServersSource into the cache .scout/servers/local.json', () => {
+      const source = '/tmp/source-scout/local.json';
+      existsSyncMock.mockImplementation((p) => typeof p === 'string' && p === source);
+
+      const service = new KibanaRepoService({
+        config: { kibanaRepo: createConfig({ scoutServersSource: source }) },
+      });
+      service.ensureScoutServersConfig('/tmp/kibana-cache');
+
+      expect(mkdirSyncMock).toHaveBeenCalled();
+      expect(copyFileSyncMock).toHaveBeenCalledWith(
+        source,
+        '/tmp/kibana-cache/.scout/servers/local.json',
+      );
+    });
+
+    it('falls back to ~/Projects/kibana/.scout/servers/local.json when config unset', () => {
+      const fallback = `${process.env.HOME}/Projects/kibana/.scout/servers/local.json`;
+      existsSyncMock.mockImplementation((p) => typeof p === 'string' && p === fallback);
+
+      const service = new KibanaRepoService({ config: { kibanaRepo: createConfig() } });
+      service.ensureScoutServersConfig('/tmp/kibana-cache');
+
+      expect(copyFileSyncMock).toHaveBeenCalledWith(
+        fallback,
+        '/tmp/kibana-cache/.scout/servers/local.json',
+      );
+    });
+
+    it('is invoked even when bootstrap is skipped', async () => {
+      const source = '/tmp/source-scout/local.json';
+      existsSyncMock.mockImplementation((p) => {
+        if (typeof p === 'string' && p.endsWith('.bootstrap-complete')) return true;
+        if (typeof p === 'string' && p.endsWith('package.json')) return true;
+        if (typeof p === 'string' && p === source) return true;
+        return true;
+      });
+      statSyncMock.mockReturnValue({ mtimeMs: 1000 } as fs.Stats);
+
+      const service = new KibanaRepoService({
+        config: { kibanaRepo: createConfig({ scoutServersSource: source }) },
+      });
+      const spy = vi.spyOn(service, 'ensureScoutServersConfig');
+      await service.bootstrap();
+      expect(spy).toHaveBeenCalled();
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+  });
 });
+
