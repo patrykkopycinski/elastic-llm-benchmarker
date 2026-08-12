@@ -496,12 +496,23 @@ export class HealthCheckService {
     const logBasedClassification = logs ? this.classifyContainerLogs(logs) : null;
     const finalClassification = logBasedClassification ?? timeoutClassification;
 
+    // A 30-minute timeout that logs only a category is undiagnosable: 28 such
+    // timeouts (~14 GPU-hours) left no record of *why* the model never came up,
+    // because the container output was fetched during polling and then dropped.
+    // Emit the tail so an unrecognised startup failure can be classified later
+    // instead of silently repeating.
+    const logTail = logs
+      ? logs.split('\n').filter((l) => l.trim()).slice(-15).join('\n').slice(-2000)
+      : null;
+
     this.logger.error(
       `Health check TIMED OUT for '${containerName}' after ${totalTimeMs}ms`,
       {
         modelId,
         pollAttempts,
         category: finalClassification.category,
+        matchedKnownPattern: logBasedClassification !== null,
+        containerLogTail: logTail ?? '(no container logs captured)',
       },
     );
 

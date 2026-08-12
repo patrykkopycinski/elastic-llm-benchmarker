@@ -570,6 +570,54 @@ describe('HealthCheckService', () => {
       expect(heartbeats.some((c) => /— 0s \//.test(String(c[0])))).toBe(false);
     });
 
+    it('includes the container log tail in the timeout error, not just a category', async () => {
+      // 28 health-check timeouts (~14 GPU-hours) recorded only
+      // category=timeout, with no record of why the model never came up: the
+      // container output was fetched during polling and then dropped. An
+      // unrecognised startup failure must leave enough evidence to classify.
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker inspect')) {
+          // Container stays up — the "still loading forever" case.
+          return Promise.resolve(createCommandResult({ stdout: 'true', success: true }));
+        }
+        if (command.includes('docker logs')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: 'ValueError: Unknown quantization method: exl3',
+              success: true,
+            }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ stdout: '', success: false }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new HealthCheckService(pool, 'error', {
+        timeoutMs: 4_000,
+        intervalMs: 200,
+      });
+
+      const errorSpy = vi
+        .spyOn(
+          (service as unknown as { logger: { error: (...a: unknown[]) => void } }).logger,
+          'error',
+        )
+        .mockImplementation(() => undefined);
+
+      await service
+        .waitForHealthy(testSSHConfig, 'stuck-container', 'org/stuck-model')
+        .catch(() => {
+          /* times out by design */
+        });
+
+      const timeoutLog = errorSpy.mock.calls.find((c) =>
+        String(c[0]).includes('TIMED OUT'),
+      );
+      expect(timeoutLog).toBeDefined();
+      const meta = timeoutLog![1] as { containerLogTail?: string };
+      expect(meta.containerLogTail).toContain('Unknown quantization method');
+    });
+
     it('throws HealthCheckServiceError on fatal error', async () => {
       mockExec.mockImplementation((_config: SSHConfig, command: string) => {
         if (command.includes('docker inspect')) {
