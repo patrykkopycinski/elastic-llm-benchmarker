@@ -39,6 +39,16 @@ vi.mock('../../src/utils/otel-span-recorder.js', async () => {
   };
 });
 
+vi.mock('../../src/services/kibana-connector.js', () => ({
+  KibanaConnectorService: vi.fn().mockImplementation(() => ({
+    createConnector: vi.fn().mockResolvedValue({
+      success: true,
+      connector: { id: 'mock-connector-id' },
+      error: null,
+    }),
+  })),
+}));
+
 import { execFile } from 'node:child_process';
 import { EvalSuiteRunner, EvalSuiteError, type EvalRunOptions } from '../../src/services/eval-suite-runner.js';
 import type { ElasticsearchResultsStore } from '../../src/services/elasticsearch-results-store.js';
@@ -135,13 +145,17 @@ describe('EvalSuiteRunner', () => {
       expect(store.saveEvalResult).toHaveBeenCalledOnce();
     });
 
-    it('uses default suites when not specified', async () => {
+    it('uses default suites from the Stage 2 local config when not specified', async () => {
       mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.8 }));
 
       const result = await runner.run(baseOpts);
 
-      expect(result.suiteResults).toHaveLength(2);
-      expect(result.suiteResults.map((r) => r.suite)).toEqual(['tool_calls', 'latency']);
+      expect(result.suiteResults).toHaveLength(3);
+      expect(result.suiteResults.map((r) => r.suite)).toEqual([
+        'security-alert-triage',
+        'security-alerts-rag-regression',
+        'security-esql-generation-regression',
+      ]);
     });
 
     it('parses score from JSON lines fallback (non-last line)', async () => {
@@ -264,15 +278,92 @@ describe('EvalSuiteRunner', () => {
         modelId: 'mistral/Mistral-7B',
         endpointUrl: 'http://host:8080',
         suites: ['latency'],
+        connectorId: 'bedrock-claude',
+        kibanaUrl: 'http://kibana:5601',
+        kibanaApiKey: 'kbn-api-key',
         timeoutMs: 120_000,
       });
 
       expect(execFileMock).toHaveBeenCalledWith(
         'node',
-        ['scripts/evals.js', 'run', '--suite', 'latency', '--endpoint', 'http://host:8080', '--model', 'mistral/Mistral-7B'],
-        { cwd: '/tmp/kibana', timeout: 120_000 },
+        [
+          'scripts/evals.js',
+          'run',
+          '--suite',
+          'latency',
+          '--project',
+          'mistral/Mistral-7B',
+          '--judge',
+          'bedrock-claude',
+          '--evaluations-kbn-url',
+          'http://kibana:5601',
+          '--evaluations-kbn-api-key',
+          'kbn-api-key',
+        ],
+        {
+          cwd: '/tmp/kibana',
+          timeout: 120_000,
+          env: expect.objectContaining({ EVALUATION_CONNECTOR_ID: 'bedrock-claude' }),
+        },
         expect.any(Function),
       );
+    });
+
+    it('injects KIBANA_TESTING_AI_CONNECTORS so kbn-evals can resolve the connector id', async () => {
+      // kbn-evals reads connectors from this env var, not Kibana's connectors API.
+      // Without it the run dies with "Evaluation connector id <id> was not found".
+      mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.5 }));
+
+      await runner.run({
+        ...baseOpts,
+        modelId: 'mistral/Mistral-7B',
+        endpointUrl: 'http://host:8080',
+        suites: ['latency'],
+        connectorId: 'vllm-mistral-mistral-7b',
+      });
+
+      const options = execFileMock.mock.calls[0]![2] as { env?: NodeJS.ProcessEnv };
+      expect(options.env?.EVALUATION_CONNECTOR_ID).toBe('vllm-mistral-mistral-7b');
+
+      const encoded = options.env?.KIBANA_TESTING_AI_CONNECTORS;
+      expect(encoded).toBeTruthy();
+
+      const decoded = JSON.parse(Buffer.from(String(encoded), 'base64').toString('utf8'));
+      expect(Object.keys(decoded)).toContain('vllm-mistral-mistral-7b');
+      expect(decoded['vllm-mistral-mistral-7b'].actionTypeId).toBe('.gen-ai');
+      expect(decoded['vllm-mistral-mistral-7b'].config.defaultModel).toBe('mistral/Mistral-7B');
+    });
+
+    it('merges the vLLM connector into an inherited connector map instead of dropping it', async () => {
+      mockExecFileSuccess(JSON.stringify({ type: 'result', score: 0.5 }));
+
+      const inherited = Buffer.from(
+        JSON.stringify({ 'eis-preexisting': { name: 'eis', actionTypeId: '.gen-ai' } }),
+      ).toString('base64');
+      const previous = process.env.KIBANA_TESTING_AI_CONNECTORS;
+      process.env.KIBANA_TESTING_AI_CONNECTORS = inherited;
+
+      try {
+        await runner.run({
+          ...baseOpts,
+          modelId: 'mistral/Mistral-7B',
+          endpointUrl: 'http://host:8080',
+          suites: ['latency'],
+          connectorId: 'vllm-mistral-mistral-7b',
+        });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.KIBANA_TESTING_AI_CONNECTORS;
+        } else {
+          process.env.KIBANA_TESTING_AI_CONNECTORS = previous;
+        }
+      }
+
+      const options = execFileMock.mock.calls[0]![2] as { env?: NodeJS.ProcessEnv };
+      const decoded = JSON.parse(
+        Buffer.from(String(options.env?.KIBANA_TESTING_AI_CONNECTORS), 'base64').toString('utf8'),
+      );
+      expect(Object.keys(decoded).sort()).toEqual(['eis-preexisting', 'vllm-mistral-mistral-7b']);
     });
   });
 

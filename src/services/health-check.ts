@@ -303,6 +303,14 @@ export class HealthCheckService {
   private readonly options: Required<HealthCheckOptions>;
 
   /**
+   * How often (in elapsed-time terms) `waitForHealthy` emits an `info`-level
+   * heartbeat while a container is still loading. Not a constructor option:
+   * it is a diagnostic cadence, not tuning surface. Exposed as a field purely
+   * so tests can scale it down without mocking the clock.
+   */
+  private heartbeatIntervalMs = 120_000;
+
+  /**
    * Creates a new HealthCheckService instance.
    *
    * @param sshPool - SSH client pool for remote command execution
@@ -426,6 +434,37 @@ export class HealthCheckService {
       }
 
       // Log progress
+      //
+      // Heartbeat at `info` every ~2 minutes. Per-poll detail stays at `debug`
+      // so this doesn't spam the log, but a long deploy must not look like a
+      // hung daemon: the daemon runs at `info`, and a 30-minute health check
+      // previously emitted NOTHING between "Starting health check" and
+      // "Health check TIMED OUT" — 30 minutes of total silence with a busy
+      // GPU and no way to tell loading from wedged without SSHing to the VM.
+      // Observed 2026-08-12 on hehua2008/Mistral-Small-3.2-24B-...-abliterated
+      // (timed out after 1806967ms having logged nothing in between).
+      const HEARTBEAT_INTERVAL_MS = this.heartbeatIntervalMs;
+      // Guard against elapsedMs ~0 on the first poll: floor(0/N) > floor(-x/N)
+      // is true, which fired a redundant "still waiting — 0s" line immediately
+      // after "Starting health check" (observed 5x live on 2026-08-12).
+      // Only emit once a full heartbeat interval has actually elapsed.
+      const crossedHeartbeat =
+        elapsedMs >= HEARTBEAT_INTERVAL_MS &&
+        Math.floor(elapsedMs / HEARTBEAT_INTERVAL_MS) >
+          Math.floor((elapsedMs - this.options.intervalMs) / HEARTBEAT_INTERVAL_MS);
+      if (crossedHeartbeat) {
+        this.logger.info(
+          `Health check still waiting for '${containerName}' — ${Math.round(elapsedMs / 1000)}s / ${Math.round(timeoutMs / 1000)}s elapsed`,
+          {
+            modelId,
+            attempt: pollAttempts,
+            containerRunning: lastPollResult.containerRunning,
+            healthEndpointOk: lastPollResult.healthEndpointOk,
+            modelsEndpointOk: lastPollResult.modelsEndpointOk,
+          },
+        );
+      }
+
       this.logger.debug(
         `Health check pending for '${containerName}' (${Math.round(elapsedMs / 1000)}s / ${Math.round(timeoutMs / 1000)}s)`,
         {
@@ -502,11 +541,16 @@ export class HealthCheckService {
     const containerRunning = await this.isContainerRunning(sshConfig, containerName);
 
     if (!containerRunning) {
-      // Container exited — get logs and classify
+      // Container exited / inspect auth-failed closed — always fatal.
+      // classifyContainerLogs() returns null when logs don't match a known
+      // pattern; previously that left errorClassification=null and
+      // waitForHealthy kept polling until timeout (~50 inspects on a 5s
+      // test, 30min in prod). A down container must abort on first poll.
       const logs = await this.getContainerLogs(sshConfig, containerName);
-      const classification = logs
-        ? this.classifyContainerLogs(logs)
-        : this.createDefaultClassification('container_crash', 'Container exited unexpectedly');
+      const fromLogs = logs ? this.classifyContainerLogs(logs) : null;
+      const classification =
+        fromLogs ??
+        this.createDefaultClassification('container_crash', 'Container exited unexpectedly');
 
       return {
         healthy: false,
@@ -752,14 +796,35 @@ export class HealthCheckService {
           );
           return false;
         }
-        // Genuinely ambiguous: non-zero exit from a permission/daemon hiccup or
-        // unexpected stdout. Retry before assuming running to avoid false
-        // container_crash while vLLM is still starting.
+        // Auth / sudo failures are NOT transient SSH flakes — they will never
+        // resolve by retrying. Treating them as "still running" burned a full
+        // 30-minute health-check timeout against an already-Exited container
+        // (verified 2026-08-12 on 34.29.5.12: bare `docker inspect` =
+        // permission denied; `sudo -n docker inspect` = false). Fail closed.
+        if (/permission denied|sudo: a password is required|a terminal is required/i.test(stderr)) {
+          this.logger.error(
+            `isContainerRunning: docker inspect auth failure — cannot determine container state (fail closed as not running)`,
+            { containerName, stderr },
+          );
+          return false;
+        }
+        // Genuinely ambiguous: non-zero exit from a daemon hiccup or unexpected
+        // stdout. Retry before assuming running to avoid false container_crash
+        // while vLLM is still starting.
         throw new Error(
           `docker inspect ambiguous (success=${result.success}, stdout="${out}", stderr="${stderr}")`,
         );
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        // Same auth-failure fail-closed as above, for errors thrown by the
+        // SSH layer rather than returned as a failed CommandResult.
+        if (/permission denied|sudo: a password is required|a terminal is required/i.test(msg)) {
+          this.logger.error(
+            `isContainerRunning: docker inspect auth failure — cannot determine container state (fail closed as not running)`,
+            { containerName, error: msg },
+          );
+          return false;
+        }
         if (attempt < MAX_SSH_ATTEMPTS) {
           this.logger.warn(
             `isContainerRunning: inspect attempt ${attempt}/${MAX_SSH_ATTEMPTS} inconclusive; retrying (container status unknown, NOT declaring crash)`,

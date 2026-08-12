@@ -114,8 +114,16 @@ export function getVllmParamsForModel(
     if (isQwen35Plus) extraArgs.push('--language-model-only');
     // ponytail: Qwen3+ thinking mode must stay enabled — disabling it breaks tool calling.
     // The hermes parser handles <think> blocks transparently.
+    //
+    // Dense Qwen3.5/3.6 emit Qwen3-Coder-style XML tool calls
+    // (<function=name><parameter=x>), which the hermes parser cannot read —
+    // it returns tool_calls: null and the model scores ~0 on tool calling.
+    // Verified live 2026-08-12 (ThinkingCap-Qwen3.6-27B, 2xA100): hermes ->
+    // tool_calls NONE; qwen3_coder -> parsed correctly. MoE variants keep
+    // hermes (verified separately via the Ornith-1.0-35B run).
+    const isDenseQwen35Plus = isQwen35Plus && !arch.includes('moe') && !id.includes('moe');
     return {
-      toolCallParser: 'hermes',
+      toolCallParser: isDenseQwen35Plus ? 'qwen3_coder' : 'hermes',
       chatTemplate: null,
       extraArgs,
       family: 'Qwen',

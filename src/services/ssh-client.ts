@@ -978,7 +978,15 @@ export class SSHClientPool {
       if (sudoPassword) {
         actualCommand = `echo ${this.shellEscape(sudoPassword)} | sudo -S -p '' ${wrappedCmd}`;
       } else {
-        actualCommand = `sudo ${wrappedCmd}`;
+        // Key-auth hosts (no SSH password) must use non-interactive sudo.
+        // Bare `sudo` prompts on stdin and hangs the SSH exec until timeout —
+        // observed 2026-08-12: HealthCheckService.isContainerRunning then
+        // treated the inconclusive inspect as "still running" and waited the
+        // full 30-minute health-check timeout against an already-Exited
+        // container (permission denied without sudo; `sudo -n docker inspect`
+        // correctly returned false). Fail closed with -n so a missing
+        // passwordless-sudo rule surfaces as a real error instead of a hang.
+        actualCommand = `sudo -n ${wrappedCmd}`;
       }
     }
 

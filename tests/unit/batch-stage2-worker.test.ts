@@ -80,6 +80,10 @@ describe('createBatchStage2Worker', () => {
         stage2Local: {
           pauseAlwaysOnStack: false,
           teardownBatchStack: true,
+          // Stage 2 requires Kibana connector config; without it the worker
+          // short-circuits to `skipped` (infrastructure gap, not model failure).
+          kibanaUrl: 'http://localhost:5601',
+          kibanaApiKey: 'test-api-key',
           evalSuites: [
             'security-alert-triage',
             'security-esql-generation-regression',
@@ -110,6 +114,38 @@ describe('createBatchStage2Worker', () => {
 
     expect(result.status).toBe('failed');
     expect(result.reason).toBe('No deployment endpoint');
+    expect(batchRunner.run).not.toHaveBeenCalled();
+  });
+
+  it('returns skipped (not failed) when Stage 2 Kibana connector config is missing', async () => {
+    // Regression: a missing kibanaUrl/apiKey makes every eval suite exit
+    // non-zero within seconds. That used to be reported as status 'failed'
+    // with all suites failed, which computeVerdict() maps to `reject` —
+    // recording a false negative against a model that was never evaluated.
+    // Infrastructure gaps must be inconclusive (`skipped` -> `investigate`).
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'ok' });
+
+    const noKibanaWorker = createBatchStage2Worker({
+      config: {
+        stage2Local: {
+          pauseAlwaysOnStack: false,
+          teardownBatchStack: true,
+          evalSuites: ['security-alert-triage'],
+        },
+      } as AppConfig,
+      gate,
+      batchRunner,
+      resultsStore,
+      logger: logger as unknown as Logger,
+    });
+
+    const result = await noKibanaWorker.execute(createPipelineRun(), createStage1Result());
+
+    expect(result.status).toBe('skipped');
+    expect(result.status).not.toBe('failed');
+    expect(result.reason).toContain('infrastructure not configured');
+    expect(result.reason).toContain('kibanaUrl');
+    // Critically: no suites are run, so no false "all suites failed" evidence.
     expect(batchRunner.run).not.toHaveBeenCalled();
   });
 

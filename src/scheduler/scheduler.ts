@@ -173,9 +173,19 @@ export class Scheduler {
       const expireAt = now + 6 * 60 * 60 * 1000; // 6 hours
       this.modelCooldown.set(modelId, expireAt);
       this.logger.warn(
-        `Scheduler: auto-blacklisted ${modelId} for 6h — 3 consecutive Stage 2 failures (${errorType})`,
+        `Scheduler: auto-blacklisted ${modelId} for 6h — 3 consecutive failures (${errorType})`,
         { modelId, failureCount: existing.count, expireAt: new Date(expireAt).toISOString() },
       );
+      // Persist so the quarantine survives a daemon restart. Without this the
+      // cooldown lived only in memory, so every restart re-armed a known-bad
+      // model for another round of GPU time.
+      void this.queueService
+        .persistModelCooldown(modelId, expireAt, errorType, existing.count)
+        .catch((err: unknown) => {
+          this.logger.warn(`Scheduler: failed to persist cooldown for ${modelId}`, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       existing.count = 0; // Reset for next cycle
     }
 
@@ -197,6 +207,10 @@ export class Scheduler {
     const now = Date.now();
     if (now >= expireAt) {
       this.modelCooldown.delete(modelId);
+      // Drop the persisted row too, otherwise expired docs accumulate forever.
+      void this.queueService.clearModelCooldown(modelId).catch(() => {
+        /* best-effort: the expire_at range query already excludes it */
+      });
       return false;
     }
 
@@ -233,6 +247,25 @@ export class Scheduler {
   }
 
   async start(): Promise<void> {
+    // Rehydrate persisted cooldowns before the first poll, so a restart cannot
+    // re-queue a model that is still quarantined. Best-effort: a cooldown-store
+    // failure must not prevent the scheduler from starting.
+    try {
+      const active = await this.queueService.loadActiveModelCooldowns();
+      for (const { modelId, expireAt } of active) {
+        this.modelCooldown.set(modelId, expireAt);
+      }
+      if (active.length > 0) {
+        this.logger.info(`Scheduler: rehydrated ${active.length} active model cooldown(s)`, {
+          models: active.map((a) => a.modelId).slice(0, 20),
+        });
+      }
+    } catch (err: unknown) {
+      this.logger.warn('Scheduler: failed to rehydrate model cooldowns', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
     // Immediately check once, then set interval
     await this.poll();
     this.timer = setInterval(() => this.poll(), this.options.pollIntervalMs);
@@ -558,7 +591,10 @@ export class Scheduler {
 
     // === Format compatibility check (P0-1) ===
     // Reject models with unsupported formats that waste GPU time on vLLM health checks.
-    const formatCheck = checkModelFormatCompatibility(entry.modelId);
+    const formatCheck = checkModelFormatCompatibility(
+      entry.modelId,
+      this.config?.vmHardwareProfile?.gpuType ?? undefined,
+    );
     if (!formatCheck.compatible) {
       this.logger.error('Scheduler: rejecting queue entry — unsupported model format', {
         modelId: entry.modelId,
@@ -961,6 +997,29 @@ export class Scheduler {
     // repeats trip the 6h auto-blacklist so we stop burning GPU time on a
     // model whose failures are infrastructure-shaped, not model-shaped.
     this.recordModelFailure(entry.modelId, classification.category);
+
+    // A non-retriable failure (model-arch: unsupported architecture, no tool-call
+    // parser, eval scores below gate) is deterministic — the next attempt
+    // reproduces it exactly. Waiting for 3 strikes just burns three deploys, and
+    // because auto-retry is already skipped for these, the strikes only ever
+    // accrue via discovery re-queueing the model later. Quarantine on the first
+    // occurrence instead. Observed live: one model logged 4 consecutive
+    // identical non-retriable Stage 2 failures.
+    if (!classification.retriable && !this.isModelCooldown(entry.modelId)) {
+      const expireAt = Date.now() + 6 * 60 * 60 * 1000;
+      this.modelCooldown.set(entry.modelId, expireAt);
+      this.logger.warn(
+        `Scheduler: quarantined ${entry.modelId} for 6h — non-retriable ${classification.category} failure`,
+        { modelId: entry.modelId, category: classification.category },
+      );
+      void this.queueService
+        .persistModelCooldown(entry.modelId, expireAt, classification.category, 1)
+        .catch((err: unknown) => {
+          this.logger.warn(`Scheduler: failed to persist quarantine for ${entry.modelId}`, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }
 
     if (willRetry) {
       try {

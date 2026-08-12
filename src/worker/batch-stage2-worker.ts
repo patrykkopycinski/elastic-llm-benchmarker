@@ -147,6 +147,39 @@ export function createBatchStage2Worker(deps: BatchStage2WorkerDeps): Stage2Work
         };
       }
 
+      // Stage 2 needs a Kibana instance to create the evaluation connector
+      // against. When neither `stage2Local.kibanaUrl` nor `kibanaConnector.url`
+      // is configured, `EvalSuiteRunner.buildConnectorConfig()` returns null,
+      // no connector is created, and every suite exits non-zero within seconds.
+      //
+      // That is an INFRASTRUCTURE gap, not evidence about the model — but it
+      // used to surface as status 'failed' with all suites failed, which
+      // `computeVerdict()` maps to `reject`. Good models were being recorded as
+      // rejected because a URL was missing from config. Report it as `skipped`
+      // (-> verdict `investigate`, confidence `low`) so the run is visibly
+      // inconclusive instead of a false negative.
+      const stage2KibanaUrl = deps.config.stage2Local?.kibanaUrl ?? deps.config.kibanaConnector?.url;
+      const stage2KibanaApiKey =
+        deps.config.stage2Local?.kibanaApiKey ?? deps.config.kibanaConnector?.apiKey;
+      if (!stage2KibanaUrl || !stage2KibanaApiKey) {
+        const missing = [
+          !stage2KibanaUrl ? 'kibanaUrl' : null,
+          !stage2KibanaApiKey ? 'kibanaApiKey' : null,
+        ].filter(Boolean);
+        logger?.warn(
+          'Stage 2: no Kibana connector configuration — skipping (infrastructure gap, not a model failure)',
+          { modelId: run.modelId, missing },
+        );
+        return {
+          runId: run.runId,
+          modelId: run.modelId,
+          status: 'skipped',
+          reason: `Stage 2 infrastructure not configured: missing ${missing.join(' + ')}`,
+          startedAt,
+          completedAt: now(),
+        };
+      }
+
       try {
         const tiers = resolveEvalSuiteTiers(deps.config.stage2Local);
         const skipSuites = run.skipStage2Suites ?? [];

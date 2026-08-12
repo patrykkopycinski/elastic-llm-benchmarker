@@ -6,6 +6,7 @@ import {
   normalizeArchitectureFromConfig,
 } from './hf-config-utils.js';
 import { createLogger } from '../utils/logger.js';
+import { checkModelFormatCompatibility } from '../utils/model-format-validator.js';
 import {
   TOOL_CALLING_WHITELIST,
   VLLM_SUPPORTED_ARCHITECTURES,
@@ -241,6 +242,7 @@ export type RejectionCategory =
   | 'vram-budget-fast-reject'
   | 'config-fetch-failed'
   | 'config-fetch-rate-limited'
+  | 'config-fetch-gated'
   | 'wrong-pipeline-tag'
   | 'architecture-not-compatible'
   | 'context-window-too-small'
@@ -366,6 +368,7 @@ export class ModelDiscoveryService {
       'architecture-not-whitelisted': 0,
       'vram-budget-fast-reject': 0,
       'config-fetch-failed': 0,
+      'config-fetch-gated': 0,
       'config-fetch-rate-limited': 0,
       'wrong-pipeline-tag': 0,
       'architecture-not-compatible': 0,
@@ -419,6 +422,19 @@ export class ModelDiscoveryService {
       `Discovery complete: ${models.length} accepted, ${totalRejected} rejected from ${totalScanned} scanned` +
         (breakdownSummary ? ` (${breakdownSummary})` : ''),
     );
+
+    // Gated repos are the one rejection class that is fixable by a human in
+    // ~10 seconds (accept the license on huggingface.co with the account
+    // owning HUGGINGFACE_TOKEN). Surface it as a warning with the model ids
+    // rather than letting it sit as one number among a dozen in the breakdown.
+    const gatedCount = rejectionBreakdown['config-fetch-gated'] ?? 0;
+    if (gatedCount > 0) {
+      this.logger.warn(
+        `Discovery: ${gatedCount} model(s) skipped — gated repo, HF token lacks license acceptance ` +
+          `(actionable: accept the license on huggingface.co to unlock them)`,
+        { gatedCount },
+      );
+    }
 
     return {
       models,
@@ -506,14 +522,24 @@ export class ModelDiscoveryService {
     // vLLM can technically load the weights but the server can only ever
     // return classification logits, never chat completions. Reject before
     // the config fetch since pipeline_tag ships free on the search result.
-    if (rawModel.pipeline_tag && rawModel.pipeline_tag !== 'text-generation') {
+    // `image-text-to-text` is the tag HF assigns to multimodal *chat* models
+    // (vision-language). These serve chat completions through vLLM exactly like
+    // `text-generation` models — the tag describes accepted input modality, not
+    // head type. Observed: bottlecapai/ThinkingCap-Qwen3.6-27B
+    // (Qwen3_5ForConditionalGeneration, 35k downloads, conversational) is a
+    // pure chat finetune tagged image-text-to-text. The architecture gate in
+    // Step 2 remains the real guard against classification/embedding heads.
+    const CHAT_CAPABLE_PIPELINE_TAGS = new Set(['text-generation', 'image-text-to-text']);
+    if (rawModel.pipeline_tag && !CHAT_CAPABLE_PIPELINE_TAGS.has(rawModel.pipeline_tag)) {
       return { reason: 'wrong-pipeline-tag' };
     }
 
     // Step 1: Fetch model config
-    const { config, rateLimited } = await this.fetchModelConfigWithStatus(id);
-    if (!config)
+    const { config, rateLimited, gated } = await this.fetchModelConfigWithStatus(id);
+    if (!config) {
+      if (gated) return { reason: 'config-fetch-gated' };
       return { reason: rateLimited ? 'config-fetch-rate-limited' : 'config-fetch-failed' };
+    }
 
     // Step 2: Architecture compatibility
     const architecture = this.normalizeArchitecture(config);
@@ -589,6 +615,26 @@ export class ModelDiscoveryService {
    * expensive deep evaluation.
    */
   private fastReject(model: HFModelEntry): { category: RejectionCategory; reason: string } | null {
+    // 0a. Serving-format compatibility (GGUF / EXL2 / EXL3 / bnb-4bit, and
+    // NVFP4 on pre-Blackwell GPUs). This is the SAME check the scheduler runs
+    // immediately before deploy — running it here too means an incompatible
+    // model is never enqueued in the first place.
+    //
+    // Without this, discovery happily enqueues formats vLLM cannot load; the
+    // scheduler then rejects them at deploy time. The deploy-time gate saves
+    // the GPU time (verified: EXL3 burned 30 min/attempt, NVFP4 5-30 min), but
+    // the entries still consume queue slots and a scheduler cycle each, and
+    // every one is a guaranteed-terminal failure the queue had to carry.
+    // Rejecting at discovery keeps the deploy-time gate as defence-in-depth
+    // for user-enqueued models, which bypass discovery entirely.
+    const formatCheck = checkModelFormatCompatibility(model.id, this.hardwareProfile?.gpuType);
+    if (!formatCheck.compatible) {
+      return {
+        category: 'cuda-incompatible-packaging',
+        reason: formatCheck.reason ?? 'model format not loadable by vLLM',
+      };
+    }
+
     // 0. CUDA-incompatible packaging (e.g. MLX — Apple Silicon only). These
     // quantize with fields (`bits` with no `quant_method`) that the VRAM
     // estimator misreads as a real vLLM-loadable quantization, drastically
@@ -693,6 +739,41 @@ export class ModelDiscoveryService {
         if (bits) quants.add(`${method}-${bits}bit`);
       } else if (bits) {
         quants.add(`${bits}bit`);
+      }
+
+      // Not every 4-bit family advertises `quant_method`. bitsandbytes uses
+      // `_load_in_4bit` and compressed-tensors (NVFP4/W4A16) nests the real
+      // format under config_groups.<group>.format. Missing these made the
+      // bytes-per-param lookup fall back to fp16, over-estimating a 24B 4-bit
+      // model at ~53GB and hard-rejecting it on the 1xL4 (23GB) profile.
+      const qc = config.quantization_config as unknown as Record<string, unknown>;
+
+      if (qc._load_in_4bit === true || qc.load_in_4bit === true) {
+        quants.add('4bit');
+      }
+      if (qc._load_in_8bit === true || qc.load_in_8bit === true) {
+        quants.add('8bit');
+      }
+      if (typeof qc.bnb_4bit_quant_type === 'string') {
+        quants.add(qc.bnb_4bit_quant_type.toLowerCase());
+      }
+
+      if (qc.config_groups && typeof qc.config_groups === 'object') {
+        for (const group of Object.values(qc.config_groups as Record<string, unknown>)) {
+          if (!group || typeof group !== 'object') continue;
+          const fmt = (group as Record<string, unknown>).format;
+          if (typeof fmt === 'string') {
+            const lower = fmt.toLowerCase();
+            quants.add(lower);
+            const family = lower.split('-')[0];
+            if (family) quants.add(family);
+          }
+          const weights = (group as Record<string, unknown>).weights;
+          if (weights && typeof weights === 'object') {
+            const numBits = (weights as Record<string, unknown>).num_bits;
+            if (typeof numBits === 'number') quants.add(`${numBits}bit`);
+          }
+        }
       }
     }
 
@@ -914,9 +995,9 @@ export class ModelDiscoveryService {
    */
   private async fetchModelConfigWithStatus(
     modelId: string,
-  ): Promise<{ config: HFModelConfig | null; rateLimited: boolean }> {
+  ): Promise<{ config: HFModelConfig | null; rateLimited: boolean; gated: boolean }> {
     if (this.configCache.has(modelId)) {
-      return { config: this.configCache.get(modelId)!, rateLimited: false };
+      return { config: this.configCache.get(modelId)!, rateLimited: false, gated: false };
     }
     try {
       const response = await this.fetchWithAuth(
@@ -925,15 +1006,27 @@ export class ModelDiscoveryService {
       if (!response.ok) {
         this.logger.debug(`Failed to fetch config for ${modelId}: ${response.status}`);
         this.configCache.set(modelId, null);
-        return { config: null, rateLimited: response.status === 429 };
+        return {
+          config: null,
+          rateLimited: response.status === 429,
+          // 401/403 = gated repo whose license has not been accepted by the
+          // configured HF token. Unlike a 404 (adapter/dataset repo with no
+          // config.json — genuine search noise), these are REAL models that a
+          // one-click license acceptance on huggingface.co would unlock.
+          // Verified 2026-08-12: bottlecapai/ThinkingCap-Qwen3.6-27B — the
+          // model we benchmarked by explicit request — returns 403 gated=auto,
+          // so discovery could never have found it on its own. Bucketing these
+          // with generic failures made a fixable access problem invisible.
+          gated: response.status === 403 || response.status === 401,
+        };
       }
       const config = (await response.json()) as HFModelConfig;
       this.configCache.set(modelId, config);
-      return { config, rateLimited: false };
+      return { config, rateLimited: false, gated: false };
     } catch (error) {
       this.logger.debug(`Error fetching config for ${modelId}: ${error}`);
       this.configCache.set(modelId, null);
-      return { config: null, rateLimited: false };
+      return { config: null, rateLimited: false, gated: false };
     }
   }
 

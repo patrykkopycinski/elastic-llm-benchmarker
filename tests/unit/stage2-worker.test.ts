@@ -27,7 +27,12 @@ function createMockConfig(): AppConfig {
     daemon: { enabled: false, sleepIntervalMs: 60000, maxConsecutiveErrors: 10, maxCycles: 0, recursionLimit: 25, stateFilePath: './data/daemon-state.json', pauseWindows: [], errorBackoffMultiplier: 1.5, maxSleepIntervalMs: 300000 },
     tunnel: { enabled: false },
     engine: {},
-    kibanaConnector: {},
+    kibanaConnector: {
+      // Stage 2 requires Kibana connector config; without it the worker
+      // short-circuits to `skipped` (infrastructure gap, not model failure).
+      url: 'http://localhost:5601',
+      apiKey: 'test-api-key',
+    },
     notifications: {},
     kibanaEval: {},
     elasticsearch: {},
@@ -35,6 +40,10 @@ function createMockConfig(): AppConfig {
     goldenCluster: {},
     edotCollector: {},
     kibanaRepo: {},
+    stage2Local: {
+      kibanaUrl: 'http://localhost:5601',
+      kibanaApiKey: 'test-api-key',
+    },
     stage2Thresholds: { maxItlP50Ms: 20, minThroughputTps: 10, maxTtftMs: 5000, minContextWindow: 128000 },
   } as unknown as AppConfig;
 }
@@ -141,6 +150,38 @@ describe('Stage2WorkerImpl', () => {
     expect(result.reason).toBe('No deployment endpoint');
     expect(repoService.cloneOrPull).not.toHaveBeenCalled();
     expect(resultsStore.saveStage2Result).not.toHaveBeenCalled();
+  });
+
+  it('returns skipped (not failed) when Stage 2 Kibana connector config is missing', async () => {
+    // Live path regression: enableStage2=true / evalTier=local wires
+    // Stage2WorkerImpl, NOT createBatchStage2Worker. A missing kibanaUrl/apiKey
+    // makes every eval suite exit non-zero within seconds and used to surface
+    // as status 'failed' -> computeVerdict() `reject`. Infrastructure gaps
+    // must be inconclusive (`skipped` -> `investigate`).
+    vi.mocked(gate.check).mockReturnValue({ proceed: true, reason: 'All thresholds passed' });
+
+    const noKibanaDeps: Stage2WorkerDependencies = {
+      config: {
+        ...createMockConfig(),
+        kibanaConnector: {},
+        stage2Local: {},
+      } as AppConfig,
+      gate,
+      repoService,
+      evalRunner,
+      resultsStore,
+      logger: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as any,
+    };
+    const noKibanaWorker = new Stage2WorkerImpl(noKibanaDeps);
+
+    const result = await noKibanaWorker.execute(createPipelineRun(), createStage1Result());
+
+    expect(result.status).toBe('skipped');
+    expect(result.status).not.toBe('failed');
+    expect(result.reason).toContain('infrastructure not configured');
+    expect(result.reason).toContain('kibanaUrl');
+    expect(repoService.cloneOrPull).not.toHaveBeenCalled();
+    expect(evalRunner.run).not.toHaveBeenCalled();
   });
 
   it('returns full success path', async () => {

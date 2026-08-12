@@ -223,7 +223,8 @@ program
     const stats = await store.getStats();
     const queue = new QueueService(esClient);
     const current = await queue.getCurrent();
-    const pendingCount = (await queue.getQueue({ status: 'pending' })).length;
+    // Count via ES, not the length of a capped page (was silently wrong >100).
+    const pendingCount = await queue.countQueue({ status: 'pending' });
 
     const currentDuration =
       current?.startedAt ? formatDuration(Date.now() - new Date(current.startedAt).getTime()) : null;
@@ -835,9 +836,9 @@ program
 
     try {
       if (queueId) {
-        // Get specific entry
-        const allEntries = await queueService.getQueue();
-        const entry = allEntries.find(e => e.id === queueId);
+        // Fetch by id directly. Scanning a capped getQueue() page missed any
+        // entry below the 100-item priority cutoff and reported "not found".
+        const entry = await queueService.getById(queueId);
 
         if (!entry) {
           console.error(`Queue entry ${queueId} not found`);
@@ -854,9 +855,12 @@ program
         if (entry.completedAt) console.log(`  Completed: ${entry.completedAt}`);
         if (entry.errorMessage) console.log(`  Error: ${entry.errorMessage}`);
       } else {
-        // Get all entries
-        const entries = await queueService.getQueue();
-        console.log(`Queue: ${entries.length} entries\n`);
+        // Get all entries (raise the page cap so the listing is not truncated)
+        const entries = await queueService.getQueue(undefined, 1000);
+        const total = await queueService.countQueue();
+        console.log(
+          `Queue: ${entries.length} entries${total > entries.length ? ` (of ${total} total)` : ''}\n`,
+        );
 
         if (entries.length === 0) {
           console.log('  (empty)');
@@ -888,9 +892,8 @@ program
 program
   .command('bootstrap-kibana')
   .description('Clone and bootstrap Kibana repository for evals')
-  .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
-  .action(async (opts) => {
-    const configPath = opts['config'] as string;
+  .action(async () => {
+    const configPath = program.opts()['config'] as string;
     const config = loadAppConfig({ config: configPath, json: false });
     if (!config) process.exit(1);
 
@@ -917,7 +920,6 @@ if (isQueueCliInvocation()) {
   program
     .command('start')
     .description('Start the scheduler polling loop for pending queue entries')
-    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('--poll-interval <ms>', 'Polling interval in milliseconds', '30000')
     .option('--stage2', 'Enable Stage 2 eval pipeline', false)
     .option('--stage3', 'Enable Stage 3 reasoning pipeline', true)
@@ -947,11 +949,10 @@ if (isQueueCliInvocation()) {
   program
     .command('queue <modelId>')
     .description('Add a model to the benchmark queue')
-    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('-p, --priority <n>', 'Queue priority (higher runs first)', '5')
     .option('-s, --source <source>', 'Queue entry source', 'user')
     .action(async (modelId: string, opts) => {
-      const configPath = opts['config'] as string;
+      const configPath = program.opts()['config'] as string;
       const priority = parseInt(opts['priority'] as string, 10);
       const source = opts['source'] as string;
 
@@ -1040,10 +1041,9 @@ if (isQueueCliInvocation()) {
   program
     .command('reasoning <runId>')
     .description('Run Stage 3 reasoning on a benchmark run')
-    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('-m, --model <modelId>', 'Model identifier (defaults to runId)')
     .action(async (runId: string, opts) => {
-      const configPath = opts['config'] as string;
+      const configPath = program.opts()['config'] as string;
       const modelId = (opts['model'] as string) || runId;
 
       const config = loadAppConfig({ config: configPath, json: false });
@@ -1118,7 +1118,6 @@ if (isQueueCliInvocation()) {
   program
     .command('enqueue <modelId>')
     .description('Enqueue a single model for benchmarking with optional hardware-fit dry-run')
-    .option('-c, --config <path>', 'Path to configuration file', 'config/default.json')
     .option('--hardware-profile <id>', 'Hardware profile ID to check against', undefined)
     .option('--priority <n>', 'Queue priority (higher runs first)', '5')
     .option('--force', 'Skip hardware-fit check and enqueue anyway')
@@ -1128,7 +1127,7 @@ if (isQueueCliInvocation()) {
     .option('--deployment-name <name>', 'Deployment name for eval-only teardown')
     .option('--skip-passed-suites', 'Resume: skip suites already passed in batch jsonl/ES')
     .action(async (modelId: string, opts) => {
-      const configPath = opts['config'] as string;
+      const configPath = program.opts()['config'] as string;
       const config = loadAppConfig({ config: configPath, json: false });
       if (!config) process.exit(1);
 

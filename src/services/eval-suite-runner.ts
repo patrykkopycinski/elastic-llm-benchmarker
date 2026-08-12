@@ -3,11 +3,15 @@ import type { ElasticsearchResultsStore } from './elasticsearch-results-store.js
 import { createLogger } from '../utils/logger.js';
 import { OTelSpanRecorder } from '../utils/otel-span-recorder.js';
 import type { Logger } from 'winston';
+import type { AppConfig, KibanaConnectorConfig } from '../types/config.js';
+import { stage2LocalConfigSchema } from '../types/config.js';
+import { KibanaConnectorService } from './kibana-connector.js';
+import { buildConnectorPayload } from './buildkite-connector-builder.js';
 
 function execFilePromise(
   file: string,
   args: string[],
-  options: { cwd: string; timeout: number },
+  options: { cwd: string; timeout: number; env?: NodeJS.ProcessEnv },
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     execFile(file, args, options, (error, stdout, stderr) => {
@@ -34,6 +38,12 @@ export interface EvalRunOptions {
    * Unset (default) runs with no golden export.
    */
   evalProfile?: string;
+  /** Kibana connector ID for the LLM-as-a-judge evaluator (--judge). */
+  connectorId?: string;
+  /** Kibana base URL for eval score ingestion (--evaluations-kbn-url). */
+  kibanaUrl?: string;
+  /** Kibana API key for eval score ingestion (--evaluations-kbn-api-key). */
+  kibanaApiKey?: string;
 }
 
 export interface EvalSuiteResult {
@@ -66,26 +76,85 @@ export class EvalSuiteError extends Error {
   }
 }
 
-const DEFAULT_SUITES = ['tool_calls', 'latency'];
 const DEFAULT_TIMEOUT_MS = 300_000;
+const DEFAULT_SUITES: readonly string[] = stage2LocalConfigSchema.parse({}).evalSuites;
 
 export class EvalSuiteRunner {
   private readonly esStore: ElasticsearchResultsStore;
   private readonly logger: Logger;
   private readonly spanRecorder: OTelSpanRecorder;
+  private readonly config?: AppConfig;
 
   constructor({
     esStore,
     logger,
     spanRecorder,
+    config,
   }: {
     esStore: ElasticsearchResultsStore;
     logger?: Logger;
     spanRecorder?: OTelSpanRecorder;
+    config?: AppConfig;
   }) {
     this.esStore = esStore;
     this.logger = logger ?? createLogger('info');
     this.spanRecorder = spanRecorder ?? new OTelSpanRecorder();
+    this.config = config;
+  }
+
+  /**
+   * kbn-evals resolves connector ids from the `KIBANA_TESTING_AI_CONNECTORS`
+   * env var (see `createPlaywrightEvalsConfig` -> `getAvailableConnectors`),
+   * NOT from Kibana's connectors API. Passing only `--judge <uuid>` for a
+   * connector created via the API therefore always fails with
+   * "Evaluation connector id <id> was not found, pick one from ".
+   *
+   * So we build the same base64 `.gen-ai` payload the Buildkite path uses and
+   * inject it alongside `EVALUATION_CONNECTOR_ID` for the local run.
+   *
+   * The daemon's own environment may already carry a connector map (e.g. the
+   * operator's EIS connectors). Merging — rather than skipping when set —
+   * matters: an inherited map never contains the per-model vLLM connector, so
+   * skipping would leave the id unresolvable exactly like passing nothing.
+   */
+  private buildEvalEnv(
+    connectorId: string | undefined,
+    endpointUrl: string,
+    modelId: string,
+  ): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    if (!connectorId) {
+      return env;
+    }
+
+    const { connectorJson } = buildConnectorPayload({
+      endpointUrl,
+      modelId,
+      connectorId,
+    });
+
+    let merged: Record<string, unknown> = JSON.parse(
+      Buffer.from(connectorJson, 'base64').toString('utf8'),
+    );
+
+    const inherited = env.KIBANA_TESTING_AI_CONNECTORS;
+    if (inherited) {
+      try {
+        const decoded = JSON.parse(Buffer.from(inherited, 'base64').toString('utf8'));
+        if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+          // Our per-model connector wins on id collision.
+          merged = { ...(decoded as Record<string, unknown>), ...merged };
+        }
+      } catch {
+        this.logger.warn('Ignoring unparseable inherited KIBANA_TESTING_AI_CONNECTORS', {
+          modelId,
+        });
+      }
+    }
+
+    env.KIBANA_TESTING_AI_CONNECTORS = Buffer.from(JSON.stringify(merged)).toString('base64');
+    env.EVALUATION_CONNECTOR_ID = connectorId;
+    return env;
   }
 
   async run(opts: EvalRunOptions): Promise<EvalSuiteResult> {
@@ -93,15 +162,25 @@ export class EvalSuiteRunner {
       repoPath,
       endpointUrl,
       modelId,
-      suites = DEFAULT_SUITES,
+      suites = this.config?.stage2Local.evalSuites ?? [...DEFAULT_SUITES],
       timeoutMs = DEFAULT_TIMEOUT_MS,
       evalProfile,
+      connectorId: providedConnectorId,
+      kibanaUrl,
+      kibanaApiKey,
     } = opts;
 
     const startedAt = new Date().toISOString();
     const suiteResults: EvalSuiteResult['suiteResults'] = [];
 
     this.logger.info('Starting eval suite run', { modelId, suites, endpointUrl });
+
+    const connectorId = providedConnectorId ?? (await this.createConnectorId(endpointUrl, modelId));
+    if (!connectorId) {
+      this.logger.warn('No evaluation connector ID available; eval CLI will likely fail', {
+        modelId,
+      });
+    }
 
     for (const suite of suites) {
       const suiteStart = Date.now();
@@ -117,17 +196,25 @@ export class EvalSuiteRunner {
           'run',
           '--suite',
           suite,
-          '--endpoint',
-          endpointUrl,
-          '--model',
+          '--project',
           modelId,
         ];
+        if (connectorId) {
+          args.push('--judge', connectorId);
+        }
+        if (kibanaUrl) {
+          args.push('--evaluations-kbn-url', kibanaUrl);
+        }
+        if (kibanaApiKey) {
+          args.push('--evaluations-kbn-api-key', kibanaApiKey);
+        }
         if (evalProfile) {
           args.push('--profile', evalProfile);
         }
         const { stdout } = await execFilePromise('node', args, {
           cwd: repoPath,
           timeout: timeoutMs,
+          env: this.buildEvalEnv(connectorId, endpointUrl, modelId),
         });
 
         const parsed = this.parseOutput(stdout);
@@ -201,6 +288,58 @@ export class EvalSuiteRunner {
     }
 
     return result;
+  }
+
+  /**
+   * Creates or reuses a Kibana connector for the vLLM endpoint when the local
+   * Stage 2 config provides Kibana credentials. Returns undefined when no
+   * credentials are configured so the caller can fall back to a pre-created
+   * connector passed via EvalRunOptions.
+   */
+  private async createConnectorId(
+    endpointUrl: string,
+    modelId: string,
+  ): Promise<string | undefined> {
+    const connectorConfig = this.buildConnectorConfig();
+    if (!connectorConfig) {
+      return undefined;
+    }
+
+    const service = new KibanaConnectorService({
+      config: connectorConfig,
+      logLevel: this.logger.level,
+    });
+
+    const result = await service.createConnector({ apiUrl: endpointUrl, modelId });
+    if (!result.success || !result.connector) {
+      this.logger.warn('Failed to create Kibana connector for eval run', {
+        modelId,
+        error: result.error ?? 'unknown error',
+      });
+      return undefined;
+    }
+
+    return result.connector.id;
+  }
+
+  private buildConnectorConfig(): KibanaConnectorConfig | null {
+    if (!this.config) {
+      return null;
+    }
+
+    const url = this.config.stage2Local.kibanaUrl ?? this.config.kibanaConnector.url;
+    const apiKey = this.config.stage2Local.kibanaApiKey ?? this.config.kibanaConnector.apiKey;
+    if (!url || !apiKey) {
+      return null;
+    }
+
+    return {
+      enabled: true,
+      url,
+      apiKey,
+      connectorNamePrefix: this.config.kibanaConnector.connectorNamePrefix,
+      requestTimeoutMs: this.config.kibanaConnector.requestTimeoutMs,
+    };
   }
 
   private parseOutput(stdout: string): { score?: number; error?: string } {

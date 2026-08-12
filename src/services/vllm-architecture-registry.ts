@@ -41,7 +41,21 @@ export const VLLM_TOOL_CALL_PARSERS: Record<string, string> = {
   qwen3_next: 'hermes',
   // Qwen3.6 generation (multimodal-capable; text/tool-calling served fine by
   // vLLM — verified with Ornith-1.0-35B qwen3_5_moe SUPPORT run).
-  qwen3_5: 'hermes',
+  //
+  // Dense `qwen3_5` emits Qwen3-Coder-style XML tool calls, NOT Hermes JSON:
+  //     <tool_call><function=get_weather><parameter=city>Paris</parameter>...
+  // The `hermes` parser expects JSON inside <tool_call> and silently returns
+  // tool_calls: null, so the model looks broken while actually calling the
+  // tool correctly. Verified live 2026-08-12 on 2xA100 with
+  // bottlecapai/ThinkingCap-Qwen3.6-27B: identical prompt/model, only the
+  // parser differed — `hermes` -> finish_reason "stop", tool_calls NONE,
+  // 0.2 tool-call success rate; `qwen3_coder` -> finish_reason "tool_calls",
+  // get_weather({"city": "Paris"}) parsed cleanly.
+  //
+  // `qwen3_5_moe` is left on `hermes` deliberately: that mapping was verified
+  // by the Ornith-1.0-35B SUPPORT run, and this evidence covers the dense
+  // variant only.
+  qwen3_5: 'qwen3_coder',
   qwen3_5_moe: 'hermes',
   // Mistral-native tool calling
   mistral: 'mistral',

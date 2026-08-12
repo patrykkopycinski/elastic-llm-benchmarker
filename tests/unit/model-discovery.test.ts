@@ -508,6 +508,43 @@ describe('ModelDiscoveryService', () => {
       expect(result.rejectionBreakdown['config-fetch-failed']).toBe(1);
     });
 
+    it('classifies a gated (403) config fetch separately from 404 noise and 429 throttling', async () => {
+      // Regression: a 403 means the repo is gated and the configured HF token
+      // has not accepted its license — a REAL model, unlocked by one click on
+      // huggingface.co. Bucketing it as `config-fetch-failed` alongside 404
+      // adapter/dataset noise made a fixable access problem invisible.
+      // Verified live 2026-08-12: bottlecapai/ThinkingCap-Qwen3.6-27B (the
+      // model benchmarked by explicit user request) returns 403 gated=auto,
+      // so discovery could never have surfaced it on its own.
+      const gatedModel = createMockHFModel({ id: 'org/gated-model' });
+      const missingConfigModel = createMockHFModel({ id: 'org/missing-config-model' });
+      const throttledModel = createMockHFModel({ id: 'org/throttled-model' });
+
+      global.fetch = vi.fn().mockImplementation((url: string) => {
+        const urlStr = typeof url === 'string' ? url : String(url);
+        if (urlStr.includes('/api/models?')) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve([gatedModel, missingConfigModel, throttledModel]),
+          });
+        }
+        if (urlStr.includes('org/gated-model/resolve/main/config.json')) {
+          return Promise.resolve({ ok: false, status: 403 });
+        }
+        if (urlStr.includes('org/throttled-model/resolve/main/config.json')) {
+          return Promise.resolve({ ok: false, status: 429 });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.rejectionBreakdown['config-fetch-gated']).toBe(1);
+      expect(result.rejectionBreakdown['config-fetch-failed']).toBe(1);
+      expect(result.rejectionBreakdown['config-fetch-rate-limited']).toBe(1);
+    });
+
     it('should respect the limit option', async () => {
       const models = [
         createMockHFModel({ id: 'org/model-1', tags: ['text-generation', 'license:apache-2.0'] }),
@@ -916,7 +953,14 @@ describe('ModelDiscoveryService', () => {
       expect(result.models[0]!.quantizations).toContain('int4');
     });
 
-    it('should detect quantization from model file siblings', async () => {
+    it('rejects GGUF models detected from file siblings (vLLM cannot serve GGUF)', async () => {
+      // Previously this asserted a GGUF model was ACCEPTED with
+      // quantizations containing 'gguf'. That encoded the old behaviour where
+      // discovery enqueued formats vLLM cannot load, leaving the deploy-time
+      // format gate to reject them after they had already taken a queue slot
+      // and a scheduler cycle. `fastReject` now applies the same
+      // `checkModelFormatCompatibility` check the scheduler uses, so GGUF is
+      // rejected up front as cuda-incompatible-packaging.
       const mockModel = createMockHFModel({
         id: 'org/gguf-model',
         tags: ['text-generation', 'license:mit'],
@@ -933,7 +977,32 @@ describe('ModelDiscoveryService', () => {
       const service = new ModelDiscoveryService('test-token', [], 'error');
       const result = await service.discover();
 
-      expect(result.models[0]!.quantizations).toContain('gguf');
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['cuda-incompatible-packaging']).toBe(1);
+    });
+
+    it('rejects EXL3/EXL2 at discovery so they never occupy a queue slot', async () => {
+      // Live evidence 2026-08-12: three ExLlamaV2-format models reached the
+      // scheduler and each burned a 30-minute health-check timeout on the
+      // A100s (~90 min total) before the deploy-time gate was added. Even
+      // with that gate, they still consumed queue slots and scheduler cycles
+      // to reach a guaranteed-terminal rejection. Discovery must drop them.
+      const exl3Model = createMockHFModel({
+        id: 'org/some-model-EXL3',
+        tags: ['text-generation', 'license:mit'],
+      });
+      const mockConfig = createMockConfig({ max_position_embeddings: 131072 });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[exl3Model]],
+        configs: new Map([['org/some-model-EXL3', mockConfig]]),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['cuda-incompatible-packaging']).toBe(1);
     });
 
     it('should default to fp16 when no quantization info found', async () => {
@@ -1119,6 +1188,30 @@ describe('ModelDiscoveryService', () => {
   });
 
   describe('pipeline-tag rejection', () => {
+    it('accepts a multimodal chat model tagged image-text-to-text', async () => {
+      // Regression: bottlecapai/ThinkingCap-Qwen3.6-27B is a pure chat finetune
+      // (conversational, 35k downloads) that HF tags `image-text-to-text`
+      // because it accepts image input. The tag describes input modality, not
+      // head type — vLLM serves it as ordinary chat completions. The old
+      // strict `!== 'text-generation'` check rejected it as wrong-pipeline-tag.
+      const mockModel = createMockHFModel({
+        id: 'bottlecapai/ThinkingCap-Qwen3.6-27B',
+        pipeline_tag: 'image-text-to-text',
+        tags: ['transformers', 'safetensors', 'qwen3_5', 'image-text-to-text', 'conversational'],
+        config: { model_type: 'qwen3_5', architectures: ['Qwen3_5ForConditionalGeneration'] },
+      });
+
+      global.fetch = setupFetchMock({
+        searchResults: [[mockModel]],
+        configs: new Map(),
+      }) as typeof global.fetch;
+
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const result = await service.discover();
+
+      expect(result.rejectionBreakdown['wrong-pipeline-tag'] ?? 0).toBe(0);
+    });
+
     it('rejects a text-classification fine-tune sharing a chat-capable model_type', async () => {
       // Regression: hugging-3/results (LlamaForSequenceClassification,
       // pipeline_tag: "text-classification", 36 downloads) shares

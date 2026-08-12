@@ -79,6 +79,45 @@ export class Stage2WorkerImpl implements Stage2Worker {
         return result;
       }
 
+      // 2b. Stage 2 needs a Kibana instance to create the evaluation connector
+      // against. When neither `stage2Local.kibanaUrl` nor `kibanaConnector.url`
+      // is configured, `EvalSuiteRunner.buildConnectorConfig()` returns null,
+      // no connector is created, and every suite exits non-zero within seconds.
+      //
+      // That is an INFRASTRUCTURE gap, not evidence about the model — but it
+      // used to surface as status 'failed' with all suites failed, which
+      // `computeVerdict()` maps to `reject`. Good models were being recorded as
+      // rejected because a URL was missing from config. Report it as `skipped`
+      // (-> verdict `investigate`, confidence `low`) so the run is visibly
+      // inconclusive instead of a false negative.
+      //
+      // This guard lives on BOTH Stage2WorkerImpl (the live `evalTier=local`
+      // path) and createBatchStage2Worker (batch path). Verified 2026-08-12:
+      // config has enableStage2=true / evalTier=local / stage2Local empty, so
+      // only this worker is wired; the batch-only guard never fired live.
+      const stage2KibanaUrl =
+        this.config.stage2Local?.kibanaUrl ?? this.config.kibanaConnector?.url;
+      const stage2KibanaApiKey =
+        this.config.stage2Local?.kibanaApiKey ?? this.config.kibanaConnector?.apiKey;
+      if (!stage2KibanaUrl || !stage2KibanaApiKey) {
+        const missing = [
+          !stage2KibanaUrl ? 'kibanaUrl' : null,
+          !stage2KibanaApiKey ? 'kibanaApiKey' : null,
+        ].filter(Boolean);
+        this.logger?.warn(
+          'Stage 2: no Kibana connector configuration — skipping (infrastructure gap, not a model failure)',
+          { modelId: run.modelId, missing },
+        );
+        return {
+          runId: run.runId,
+          modelId: run.modelId,
+          status: 'skipped',
+          reason: `Stage 2 infrastructure not configured: missing ${missing.join(' + ')}`,
+          startedAt,
+          completedAt: now(),
+        };
+      }
+
       // 3. Clone/pull and bootstrap repo
       this.logger?.info('Stage 2: cloning/pulling Kibana repo', { runId: run.runId });
       const cloneResult = await this.repoService.cloneOrPull();

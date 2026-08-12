@@ -301,6 +301,41 @@ describe('SSHClientPool', () => {
 
       expect(executedCommand).toContain('sudo');
       expect(executedCommand).toContain('whoami');
+      // Password path uses -S (read from stdin), not interactive prompt.
+      expect(executedCommand).toContain('sudo -S');
+    });
+
+    it('uses non-interactive sudo -n when no password is available (key-auth hosts)', async () => {
+      // Regression: bare `sudo` hangs on a password prompt over SSH when the
+      // host is key-auth only. HealthCheckService.isContainerRunning then
+      // treated the inconclusive inspect as "still running" and burned the
+      // full 30-minute health-check timeout against an already-Exited
+      // container (verified live 2026-08-12 on 34.29.5.12: bare docker
+      // inspect = permission denied; `sudo -n docker inspect` = false).
+      const { Client } = await import('ssh2');
+      let executedCommand = '';
+      const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
+      mockClient.setExecHandler((cmd, _opts, callback) => {
+        executedCommand = cmd as string;
+        const stream = new MockStream();
+        (callback as (...args: unknown[]) => unknown)(null, stream);
+        setTimeout(() => {
+          stream.emit('data', Buffer.from('false'));
+          stream.emit('close', 0, null);
+        }, 0);
+      });
+
+      vi.mocked(Client).mockImplementationOnce(() => mockClient as unknown as InstanceType<typeof Client>);
+
+      await pool.close();
+      pool = new SSHClientPool({ maxRetries: 1, retryDelay: 10, connectTimeout: 5000 }, 'error');
+
+      const config = createMockSSHConfig({ password: undefined });
+      await pool.exec(config, 'docker inspect --format={{.State.Running}} ctr', { sudo: true });
+
+      expect(executedCommand).toContain('sudo -n');
+      expect(executedCommand).not.toMatch(/(^|[^-\w])sudo(?! -n)/);
+      expect(executedCommand).toContain('docker inspect');
     });
 
     it('should build command with working directory when cwd is specified', async () => {

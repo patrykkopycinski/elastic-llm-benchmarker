@@ -523,6 +523,53 @@ describe('HealthCheckService', () => {
       expect(result.modelInfo!.maxModelLen).toBe(128000);
     });
 
+    it('emits an info heartbeat while a slow deploy is still loading', async () => {
+      // Regression: a 30-minute health check logged NOTHING at `info` between
+      // "Starting health check" and "Health check TIMED OUT" (observed
+      // 2026-08-12, 1806967ms of silence). The daemon runs at `info`, so a
+      // slow-but-healthy model load was indistinguishable from a wedged
+      // daemon without SSHing to the GPU VM.
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker inspect')) {
+          // Container stays up the whole time — this is the "still loading
+          // weights", non-fatal case that produced the silent window.
+          return Promise.resolve(createCommandResult({ stdout: 'true', success: true }));
+        }
+        // Endpoints never come up within the timeout.
+        return Promise.resolve(createCommandResult({ stdout: '', success: false }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new HealthCheckService(pool, 'error', {
+        // Real (short) sleeps. Scale chosen so elapsed time comfortably
+        // exceeds 1s by the time a heartbeat is due, letting the test assert
+        // the rendered "Ns" value is not the redundant first-poll "0s".
+        timeoutMs: 4_000,
+        intervalMs: 200,
+      });
+
+      const infoSpy = vi
+        .spyOn((service as unknown as { logger: { info: (...a: unknown[]) => void } }).logger, 'info')
+        .mockImplementation(() => undefined);
+      // Heartbeat cadence is 120s of *elapsed* time; scale it down so the
+      // boundary is crossed within this fast test.
+      (service as unknown as { heartbeatIntervalMs: number }).heartbeatIntervalMs = 1_200;
+
+      await service.waitForHealthy(testSSHConfig, 'slow-container', 'org/slow-model').catch(() => {
+        /* times out by design */
+      });
+
+      const heartbeats = infoSpy.mock.calls.filter((c) =>
+        String(c[0]).includes('Health check still waiting'),
+      );
+      expect(heartbeats.length).toBeGreaterThan(0);
+      expect(String(heartbeats[0]![0])).toContain('slow-container');
+      // Must NOT fire on the first poll: elapsedMs ~0 satisfied the naive
+      // floor() boundary comparison and logged a redundant "— 0s" heartbeat
+      // immediately after "Starting health check" (seen 5x in production).
+      expect(heartbeats.some((c) => /— 0s \//.test(String(c[0])))).toBe(false);
+    });
+
     it('throws HealthCheckServiceError on fatal error', async () => {
       mockExec.mockImplementation((_config: SSHConfig, command: string) => {
         if (command.includes('docker inspect')) {
@@ -558,6 +605,53 @@ describe('HealthCheckService', () => {
         expect(hcError.result.healthy).toBe(false);
         expect(hcError.result.pollAttempts).toBe(1);
       }
+    });
+
+    it('fails closed when docker inspect returns permission denied (not assume-running)', async () => {
+      // Regression: bare `docker inspect` without working sudo returned
+      // "permission denied"; isContainerRunning treated that as inconclusive
+      // and assumed still-running, burning the full 30-minute health-check
+      // timeout against an already-Exited container (verified live 2026-08-12
+      // on 34.29.5.12). Auth failures must fail closed as not-running.
+      mockExec.mockImplementation((_config: SSHConfig, command: string) => {
+        if (command.includes('docker inspect')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: '',
+              stderr:
+                'permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock',
+              success: false,
+              exitCode: 1,
+            }),
+          );
+        }
+        if (command.includes('docker logs')) {
+          return Promise.resolve(
+            createCommandResult({
+              stdout: 'Traceback ... File ".../vllm/multimodal/..." ...',
+              success: true,
+            }),
+          );
+        }
+        return Promise.resolve(createCommandResult({ success: true }));
+      });
+
+      const pool = createMockSSHPool(mockExec);
+      service = new HealthCheckService(pool, 'error', {
+        timeoutMs: 5_000,
+        intervalMs: 100,
+        useSudo: true,
+      });
+
+      await expect(
+        service.waitForHealthy(testSSHConfig, 'exited-container', 'org/exited-model'),
+      ).rejects.toBeInstanceOf(HealthCheckServiceError);
+
+      // Must abort on first poll — not burn the timeout assuming still-running.
+      const inspectCalls = mockExec.mock.calls.filter((c) =>
+        String(c[1]).includes('docker inspect'),
+      );
+      expect(inspectCalls.length).toBe(1);
     });
 
     it('throws HealthCheckServiceError on timeout', async () => {

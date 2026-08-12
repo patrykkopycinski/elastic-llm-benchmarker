@@ -93,4 +93,51 @@ describe('checkModelFormatCompatibility', () => {
       expect(result.warning).toBeUndefined();
     });
   });
+
+  describe('NVFP4 on pre-Blackwell GPUs (wasted-GPU-time regression)', () => {
+    it('rejects NVFP4 on A100/Ampere, which lacks native FP4 tensor cores', () => {
+      const r = checkModelFormatCompatibility('RedHatAI/Some-Model-NVFP4', 'nvidia-a100-80gb');
+      expect(r.compatible).toBe(false);
+      expect(r.reason).toMatch(/FP4 tensor cores/i);
+    });
+
+    it('rejects NVFP4 on L4 as well', () => {
+      expect(checkModelFormatCompatibility('x/y-nvfp4', 'nvidia-l4').compatible).toBe(false);
+    });
+
+    it('still allows NVFP4 on Blackwell-class hardware', () => {
+      const r = checkModelFormatCompatibility('x/y-nvfp4', 'nvidia-b200');
+      expect(r.compatible).toBe(true);
+      expect(r.warning).toBeDefined();
+    });
+
+    it('preserves warn-only behaviour when gpuType is unknown', () => {
+      const r = checkModelFormatCompatibility('x/y-nvfp4');
+      expect(r.compatible).toBe(true);
+      expect(r.warning).toBeDefined();
+    });
+
+    it('does not affect AWQ models on A100', () => {
+      expect(checkModelFormatCompatibility('x/y-AWQ', 'nvidia-a100-80gb').compatible).toBe(true);
+    });
+  });
+
+
+  describe('EXL2/EXL3 rejection (vLLM has no ExLlamaV2 loader)', () => {
+    it('rejects the exact EXL3 models that burned 30min each on the A100s', () => {
+      for (const id of [
+        'ekozzer/Mistral-Small-3.2-24B-Instruct-EXL3-4.0bpw-HQ',
+        'ekozzer/Mistral-Small-3.2-24B-Instruct-EXL3-4.5bpw-HQ',
+      ]) {
+        const r = checkModelFormatCompatibility(id, 'nvidia-a100-80gb');
+        expect(r.compatible).toBe(false);
+        expect(r.reason).toMatch(/ExLlamaV2/i);
+      }
+    });
+
+    it('does not reject unrelated models that merely contain similar text', () => {
+      expect(checkModelFormatCompatibility('org/Mistral-Small-24B-AWQ', 'nvidia-a100-80gb').compatible).toBe(true);
+    });
+  });
+
 });
