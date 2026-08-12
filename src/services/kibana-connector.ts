@@ -1,5 +1,6 @@
 import { createLogger } from '../utils/logger.js';
 import type { KibanaConnectorConfig } from '../types/config.js';
+import { buildChatCompletionsUrl } from './buildkite-connector-builder.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -354,15 +355,17 @@ export class KibanaConnectorService {
   ): Promise<KibanaConnectorInfo> {
     const url = `${this.config.url}/api/actions/connector`;
 
-    // Ensure the API URL ends with /v1 for OpenAI compatibility
-    const normalizedApiUrl = apiUrl.endsWith('/v1') ? apiUrl : `${apiUrl}/v1`;
+    // Kibana's `.gen-ai` connector posts to `apiUrl` verbatim, so the
+    // `/v1/chat/completions` suffix must appear exactly once regardless of
+    // whether the caller already gave us a `/v1` endpoint.
+    const normalizedApiUrl = buildChatCompletionsUrl(apiUrl);
 
     const body = {
       connector_type_id: '.gen-ai',
       name: connectorName,
       config: {
         apiProvider: 'Other',
-        apiUrl: `${normalizedApiUrl}/chat/completions`,
+        apiUrl: normalizedApiUrl,
         defaultModel: modelId,
         // Our vLLM containers emit native OpenAI `tool_calls` (--enable-auto-tool-choice), so force
         // native function calling. Without this, `apiProvider: 'Other'` defaults to simulated FC and

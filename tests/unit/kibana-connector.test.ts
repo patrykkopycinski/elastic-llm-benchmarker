@@ -194,7 +194,7 @@ describe('KibanaConnectorService', () => {
       expect(result.connector).not.toBeNull();
       expect(result.connector!.id).toBe('connector-456');
       expect(result.connector!.isNewlyCreated).toBe(true);
-      expect(result.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1');
+      expect(result.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1/chat/completions');
       expect(result.connector!.defaultModel).toBe('meta-llama/Llama-3-70B');
       expect(result.error).toBeNull();
     });
@@ -363,7 +363,7 @@ describe('KibanaConnectorService', () => {
         modelId: 'model-1',
       });
       expect(result1.success).toBe(true);
-      expect(result1.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1');
+      expect(result1.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1/chat/completions');
 
       // Test URL already with /v1
       mockFetch.mockResolvedValueOnce({ ok: true, json: async () => [] });
@@ -377,7 +377,11 @@ describe('KibanaConnectorService', () => {
         modelId: 'model-2',
       });
       expect(result2.success).toBe(true);
-      expect(result2.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1');
+      // Regression: this used to become `/v1/v1/chat/completions`, which vLLM
+      // answers with a route 404 (`{"detail":"Not Found"}`) that Kibana reports
+      // as `API Error: Not Found` — failing every Stage 2 suite.
+      expect(result2.connector!.apiUrl).toBe('https://abc123.ngrok-free.app/v1/chat/completions');
+      expect(result2.connector!.apiUrl).not.toContain('/v1/v1/');
     });
 
     it('supports custom connector name', async () => {

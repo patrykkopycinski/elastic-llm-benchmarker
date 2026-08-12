@@ -45,6 +45,36 @@ export function buildConnectorId(modelId: string, prefix = 'vllm-'): string {
   return `${prefix}${modelId.replace(/\//g, '-').toLowerCase()}`;
 }
 
+/**
+ * Build the OpenAI-compatible chat-completions URL for a vLLM endpoint.
+ *
+ * Kibana's `.gen-ai` connector stores the FULL endpoint path in `apiUrl` and
+ * posts to it verbatim (`streamApi` uses `this.url`), so the suffix must be
+ * present exactly once. Blindly appending `/v1/chat/completions` produced
+ * `.../v1/v1/chat/completions` whenever the caller passed an endpoint that
+ * already carried `/v1` — vLLM answers that route with a bare
+ * `{"detail":"Not Found"}` 404, which Kibana surfaces as the maximally
+ * unhelpful `Error calling connector: Status code: 404. Message: API Error:
+ * Not Found`. That is a ROUTE 404, not a model-not-found 404, and the two are
+ * indistinguishable from the Kibana-side message alone.
+ *
+ * Normalising here (rather than at each call site) keeps the builder
+ * idempotent for every endpoint shape the scheduler can hand us.
+ */
+export function buildChatCompletionsUrl(endpointUrl: string): string {
+  const trimmed = endpointUrl.replace(/\/+$/, '');
+
+  if (/\/v1\/chat\/completions$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/\/v1$/.test(trimmed)) {
+    return `${trimmed}/chat/completions`;
+  }
+
+  return `${trimmed}/v1/chat/completions`;
+}
+
 export function buildConnectorPayload(options: ConnectorBuilderOptions): ConnectorBuildResult {
   const {
     endpointUrl,
@@ -55,7 +85,7 @@ export function buildConnectorPayload(options: ConnectorBuilderOptions): Connect
   } = options;
 
   const id = connectorId ?? buildConnectorId(modelId);
-  const apiUrl = `${endpointUrl.replace(/\/+$/, '')}/v1/chat/completions`;
+  const apiUrl = buildChatCompletionsUrl(endpointUrl);
   const name = connectorName ?? id;
 
   const connector: GenAIConnector = {
