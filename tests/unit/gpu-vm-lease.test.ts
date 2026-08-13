@@ -93,7 +93,12 @@ function createMockClient(initial?: { doc: LeaseDoc; seqNo: number; primaryTerm:
 
 function makeService(
   client: Client,
-  overrides: Partial<{ pid: number; hostnameFn: () => string; now: () => number }> = {},
+  overrides: Partial<{
+    pid: number;
+    hostnameFn: () => string;
+    now: () => number;
+    isProcessAlive: (pid: number) => boolean;
+  }> = {},
 ): GpuVmLeaseService {
   return new GpuVmLeaseService({
     esClient: client,
@@ -103,6 +108,7 @@ function makeService(
     now: overrides.now ?? (() => NOW),
     hostnameFn: overrides.hostnameFn ?? (() => 'host-a'),
     pid: overrides.pid ?? 111,
+    isProcessAlive: overrides.isProcessAlive,
   });
 }
 
@@ -166,6 +172,53 @@ describe('GpuVmLeaseService.acquire', () => {
       expect.objectContaining({ if_seq_no: 7, if_primary_term: 2 }),
     );
     expect(mock.state.doc?.owner_hostname).toBe('host-a');
+  });
+
+  it('takes over a fresh same-host lease when the recorded owner pid is dead', async () => {
+    const isProcessAlive = vi.fn().mockReturnValue(false);
+    const mock = createMockClient({
+      doc: leaseDoc({
+        owner_hostname: 'host-a',
+        owner_pid: 222,
+        heartbeat_at: new Date(NOW - 5_000).toISOString(),
+      }),
+      seqNo: 8,
+      primaryTerm: 2,
+    });
+    const svc = makeService(mock.client, { isProcessAlive });
+
+    const result = await svc.acquire();
+
+    expect(result.success).toBe(true);
+    expect(svc.holdsLease()).toBe(true);
+    expect(isProcessAlive).toHaveBeenCalledWith(222);
+    expect(mock.index).toHaveBeenCalledWith(
+      expect.objectContaining({ if_seq_no: 8, if_primary_term: 2 }),
+    );
+    expect(mock.state.doc?.owner_hostname).toBe('host-a');
+    expect(mock.state.doc?.owner_pid).toBe(111);
+  });
+
+  it('refuses a fresh same-host lease when the recorded owner pid is alive', async () => {
+    const isProcessAlive = vi.fn().mockReturnValue(true);
+    const mock = createMockClient({
+      doc: leaseDoc({
+        owner_hostname: 'host-a',
+        owner_pid: 222,
+        heartbeat_at: new Date(NOW - 5_000).toISOString(),
+      }),
+      seqNo: 8,
+      primaryTerm: 2,
+    });
+    const svc = makeService(mock.client, { isProcessAlive });
+
+    const result = await svc.acquire();
+
+    expect(result.success).toBe(false);
+    expect(result.heldBy?.ownerPid).toBe(222);
+    expect(svc.holdsLease()).toBe(false);
+    expect(isProcessAlive).toHaveBeenCalledWith(222);
+    expect(mock.index).not.toHaveBeenCalled();
   });
 
   it('is idempotent when this process already owns the lease', async () => {

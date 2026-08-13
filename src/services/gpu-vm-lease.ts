@@ -1,4 +1,5 @@
 import { hostname } from 'node:os';
+import process from 'node:process';
 import type { Client } from '@elastic/elasticsearch';
 import { createLogger } from '../utils/logger.js';
 import { INDEX_NAMES } from './es-index-mappings.js';
@@ -41,6 +42,7 @@ export interface GpuVmLeaseOptions {
   now?: () => number;
   hostnameFn?: () => string;
   pid?: number;
+  isProcessAlive?: (pid: number) => boolean;
   logLevel?: string;
 }
 
@@ -81,6 +83,16 @@ function leaseDocId(vmHost: string): string {
   return `vm:${vmHost.trim().toLowerCase()}`;
 }
 
+function defaultIsProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EPERM';
+  }
+}
+
 /**
  * Cross-host mutual-exclusion lease for the shared GPU VM.
  *
@@ -100,6 +112,7 @@ export class GpuVmLeaseService {
   private readonly now: () => number;
   private readonly ownerHostname: string;
   private readonly ownerPid: number;
+  private readonly isProcessAlive: (pid: number) => boolean;
   private readonly logger: ReturnType<typeof createLogger>;
   private owns = false;
 
@@ -111,6 +124,7 @@ export class GpuVmLeaseService {
     this.now = options.now ?? (() => Date.now());
     this.ownerHostname = (options.hostnameFn ?? hostname)();
     this.ownerPid = options.pid ?? process.pid;
+    this.isProcessAlive = options.isProcessAlive ?? defaultIsProcessAlive;
     this.logger = createLogger(options.logLevel ?? 'info');
   }
 
@@ -122,6 +136,18 @@ export class GpuVmLeaseService {
     const heartbeat = Date.parse(holder.heartbeatAt);
     if (Number.isNaN(heartbeat)) return false;
     return this.now() - heartbeat < this.staleAfterMs;
+  }
+
+  private isSameHostDeadOwner(holder: LeaseHolder): boolean {
+    return (
+      holder.ownerHostname === this.ownerHostname &&
+      holder.ownerPid !== this.ownerPid &&
+      !this.isProcessAlive(holder.ownerPid)
+    );
+  }
+
+  private shouldRefuseFreshLease(holder: LeaseHolder): boolean {
+    return this.isFresh(holder) && !this.isMine(holder) && !this.isSameHostDeadOwner(holder);
   }
 
   private buildDoc(acquiredAt: string): EsLease {
@@ -145,7 +171,7 @@ export class GpuVmLeaseService {
 
       if (existing) {
         const holder = toHolder(existing.source);
-        if (this.isFresh(holder) && !this.isMine(holder)) {
+        if (this.shouldRefuseFreshLease(holder)) {
           return {
             success: false,
             heldBy: holder,
@@ -205,7 +231,7 @@ export class GpuVmLeaseService {
     const current = await this.readLease();
     if (current) {
       const holder = toHolder(current.source);
-      if (this.isFresh(holder) && !this.isMine(holder)) {
+      if (this.shouldRefuseFreshLease(holder)) {
         return {
           success: false,
           heldBy: holder,
