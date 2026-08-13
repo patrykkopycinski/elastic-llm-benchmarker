@@ -243,5 +243,44 @@ describe('Scheduler Stage 2 chaining', () => {
         'repo bootstrap failed',
       );
     });
+
+    it('should run stage2 when stage1 fails perf gate but stage2Eligible=true', async () => {
+      queueService.dequeue.mockResolvedValueOnce(createQueueEntry());
+      stage1Worker = createMockStage1Worker({
+        execute: vi.fn().mockResolvedValue({
+          runId: 'run-1',
+          modelId: 'test-model',
+          queueEntryId: 'entry-1',
+          status: 'failed' as const,
+          stage2Eligible: true,
+          error: 'P99 latency at concurrency=16 (611.62ms) exceeds threshold (400ms)',
+          metrics: null,
+          rawOutput: '',
+          startedAt: new Date().toISOString(),
+          completedAt: new Date().toISOString(),
+        }),
+      });
+      scheduler = new Scheduler(
+        queueService,
+        stage1Worker,
+        { pollIntervalMs: 1000, maxConcurrentRuns: 1 },
+        stage2Worker,
+        resultsStore,
+      );
+
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Stage 2 should run despite Stage 1 perf gate failure
+      expect(stage1Worker.execute).toHaveBeenCalledTimes(1);
+      expect(stage2Worker.execute).toHaveBeenCalledTimes(1);
+      expect(resultsStore.saveStage2Result).toHaveBeenCalledTimes(1);
+      // Final verdict stays failed (perf gate failed, model not recommendable)
+      expect(queueService.updateStatus).toHaveBeenLastCalledWith(
+        'entry-1',
+        'failed',
+        'P99 latency at concurrency=16 (611.62ms) exceeds threshold (400ms)',
+      );
+    });
   });
 });

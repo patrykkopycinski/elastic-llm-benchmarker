@@ -729,11 +729,26 @@ export class Scheduler {
         }
 
         if (result.status !== 'success') {
-          if (tunnelPromise) {
-            tunnelPromise.then((r) => r.cleanup()).catch(() => {});
+          // Allow Stage2 when the model is eligible but failed the perf gate.
+          // stage2Eligible is computed from ITL p50 + throughput + TTFT + context
+          // window + tool-call gate — separate from the stricter P99 latency gate
+          // that sets `passed`. A model can be good enough to evaluate (Stage2)
+          // without being fast enough to recommend (Stage1 `passed`).
+          if (result.stage2Eligible === true && this.stage2Worker) {
+            this.logger.info(
+              'Scheduler: Stage 1 failed perf gate but stage2Eligible=true — allowing Stage 2',
+              {
+                modelId: run.modelId,
+                rejectionReasons: result.error,
+              },
+            );
+          } else {
+            if (tunnelPromise) {
+              tunnelPromise.then((r) => r.cleanup()).catch(() => {});
+            }
+            await this.failEntry(entry, result.error ?? 'Stage 1 benchmark failed', leaseToken);
+            return;
           }
-          await this.failEntry(entry, result.error ?? 'Stage 1 benchmark failed', leaseToken);
-          return;
         }
       }
 
@@ -1111,11 +1126,22 @@ export class Scheduler {
 
     const stage2Failed =
       run.stage2Result?.status === 'failed' || run.stage2Result?.status === 'error';
+    const stage1FailedPerf =
+      run.benchmarkResult?.status === 'failed' && run.benchmarkResult?.stage2Eligible === true;
     if (stage2Failed) {
       await this.writeTerminal(
         queueEntryId,
         'failed',
         run.stage2Result?.reason ?? 'Stage 2 Kibana CI eval failed',
+        leaseToken,
+      );
+    } else if (stage1FailedPerf) {
+      // Stage 1 failed the perf gate but Stage 2 ran (stage2Eligible=true).
+      // Verdict stays failed — the model is evaluable but not recommendable.
+      await this.writeTerminal(
+        queueEntryId,
+        'failed',
+        run.benchmarkResult?.error ?? 'Stage 1 perf gate failed',
         leaseToken,
       );
     } else {
