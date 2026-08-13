@@ -93,11 +93,14 @@ class MockClient extends EventEmitter {
 // Mock the ssh2 module
 vi.mock('ssh2', () => ({
   Client: vi.fn().mockImplementation(() => new MockClient()),
-  utils: {
-    // Default: key parses cleanly (not an Error). Individual tests override
-    // with mockReturnValueOnce(new Error(...)) to simulate an encrypted key
-    // that cannot be parsed with the given passphrase.
-    parseKey: vi.fn().mockReturnValue({}),
+  default: {
+    Client: vi.fn().mockImplementation(() => new MockClient()),
+    utils: {
+      // Default: key parses cleanly (not an Error). Individual tests override
+      // with mockReturnValueOnce(new Error(...)) to simulate an encrypted key
+      // that cannot be parsed with the given passphrase.
+      parseKey: vi.fn().mockReturnValue({}),
+    },
   },
 }));
 
@@ -594,7 +597,10 @@ describe('SSHClientPool', () => {
 
       it('plain key + agent present: offers both privateKey and agent', async () => {
         process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
-        const { Client, utils } = await import('ssh2');
+        const { Client } = await import('ssh2');
+        const {
+          default: { utils },
+        } = await import('ssh2');
         vi.mocked(utils.parseKey).mockReturnValueOnce({} as ReturnType<typeof utils.parseKey>);
 
         const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
@@ -615,7 +621,10 @@ describe('SSHClientPool', () => {
       });
 
       it('plain key + no agent: offers privateKey only', async () => {
-        const { Client, utils } = await import('ssh2');
+        const { Client } = await import('ssh2');
+        const {
+          default: { utils },
+        } = await import('ssh2');
         vi.mocked(utils.parseKey).mockReturnValueOnce({} as ReturnType<typeof utils.parseKey>);
 
         const mockClient = new (Client as unknown as typeof MockClient)() as unknown as MockClient;
@@ -637,7 +646,10 @@ describe('SSHClientPool', () => {
 
       it('encrypted key (unparseable) + agent present: falls back to agent-only, does not throw', async () => {
         process.env['SSH_AUTH_SOCK'] = '/private/tmp/com.apple.launchd.test/Listeners';
-        const { Client, utils } = await import('ssh2');
+        const { Client } = await import('ssh2');
+        const {
+          default: { utils },
+        } = await import('ssh2');
         vi.mocked(utils.parseKey).mockReturnValueOnce(
           new Error('Encrypted private OpenSSH key detected, but no passphrase given'),
         );
@@ -660,7 +672,9 @@ describe('SSHClientPool', () => {
       });
 
       it('encrypted key (unparseable) + no agent: rejects with SSHError, does not throw synchronously', async () => {
-        const { utils } = await import('ssh2');
+        const {
+          default: { utils },
+        } = await import('ssh2');
         // mockReturnValue (not Once): the pool retries on failure, so parseKey
         // must return unparseable on every attempt for this assertion to hold.
         vi.mocked(utils.parseKey).mockReturnValue(

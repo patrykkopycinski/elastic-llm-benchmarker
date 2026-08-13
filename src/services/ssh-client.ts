@@ -1,9 +1,20 @@
-import { Client, utils as ssh2Utils, type ConnectConfig, type SFTPWrapper } from 'ssh2';
+// ssh2 is a CommonJS module whose `utils` export is a nested property on the
+// `module.exports` object literal, not a top-level `exports.utils =`
+// assignment — cjs-module-lexer (used by Node's ESM/CJS interop) can only see
+// `Client: require(...)` statically, not `utils: {...}`, so
+// `import { utils } from 'ssh2'` type-checks and builds fine under
+// tsup/vitest's CJS interop but throws `SyntaxError: Named export 'utils' not
+// found` when the built ESM bundle runs under real Node. `Client` is
+// detected fine, so keep it as a named import; reach `utils` through the
+// default (= module.exports) instead.
+import ssh2, { Client, type ConnectConfig, type SFTPWrapper } from 'ssh2';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Readable } from 'node:stream';
 import type { SSHConfig } from '../types/config.js';
 import { createLogger } from '../utils/logger.js';
+
+const ssh2Utils = ssh2.utils;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
