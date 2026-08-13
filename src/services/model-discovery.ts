@@ -885,10 +885,14 @@ export class ModelDiscoveryService {
       }
     }
 
-    // `safetensors.total` is the authoritative weight count, but the HF *list*
-    // endpoint (`/api/models?...`) never returns it — only the per-model detail
-    // endpoint does. When a caller has already hydrated the entry (or when this
-    // runs against detail JSON), prefer it over any name heuristic.
+    // `safetensors.total` is the authoritative PARAMETER count, but not a physical
+    // on-disk/VRAM footprint for quantized repos: packed MXFP4 can be reported as
+    // unpacked U8 element counts, and FP8 index totals can reflect logical BF16
+    // size. Physical served bytes are resolved separately from complete safetensors
+    // shard listings (`hf-served-weight-size.ts`). The HF *list* endpoint
+    // (`/api/models?...`) never returns it — only the per-model detail endpoint
+    // does. When a caller has already hydrated the entry (or when this runs against
+    // detail JSON), prefer it over any name heuristic.
     const safetensors = model.safetensors;
     if (safetensors && typeof safetensors.total === 'number' && safetensors.total > 0) {
       return safetensors.total;

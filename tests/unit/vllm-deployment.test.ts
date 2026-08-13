@@ -975,4 +975,45 @@ describe('VllmDeploymentService', () => {
       expect(calls.some((cmd) => cmd.includes('docker system prune'))).toBe(false);
     });
   });
+
+  describe('physical served-weight sizing', () => {
+    it('uses complete physical shard bytes before falling back to parameter-count math', async () => {
+      const svc = new VllmDeploymentService(createMockSSHPool(), 'error', {
+        modelLoadHeadroomGb: 20,
+        resolveServedWeightSize: async () => ({
+          bytes: 100 * 1024 ** 3,
+          gb: 100,
+          shardCount: 2,
+          expectedShardCount: 2,
+          family: 'model',
+          paths: ['model-00001-of-000002.safetensors', 'model-00002-of-000002.safetensors'],
+          alternateFamilies: [],
+          ignoredPaths: [],
+        }),
+      });
+      const model = createTestModel({ parameterCount: 200_000_000_000, quantizations: ['bf16'] });
+
+      const result = await (
+        svc as unknown as { estimateModelDiskGb(model: ModelInfo): Promise<number | null> }
+      ).estimateModelDiskGb(model);
+
+      expect(result).toBe(120);
+    });
+
+    it('falls back to parameter-count math when physical shard resolution fails', async () => {
+      const svc = new VllmDeploymentService(createMockSSHPool(), 'error', {
+        modelLoadHeadroomGb: 20,
+        resolveServedWeightSize: async () => {
+          throw new Error('HF unavailable');
+        },
+      });
+      const model = createTestModel({ parameterCount: 100 * 1024 ** 3, quantizations: ['fp8'] });
+
+      const result = await (
+        svc as unknown as { estimateModelDiskGb(model: ModelInfo): Promise<number | null> }
+      ).estimateModelDiskGb(model);
+
+      expect(result).toBe(120);
+    });
+  });
 });

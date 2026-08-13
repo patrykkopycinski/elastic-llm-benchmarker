@@ -9,6 +9,7 @@ import {
   UNSLOTH_CHAT_TEMPLATES_URL,
 } from './vllm-model-params.js';
 import { getBytesPerParamForQuantizations } from './model-candidate-filter.js';
+import { fetchServedWeightSize, type ServedWeightSizeResult } from './hf-served-weight-size.js';
 import { createLogger } from '../utils/logger.js';
 
 /** Redact secret-bearing `-e KEY=value` flags before logging shell commands. */
@@ -76,6 +77,12 @@ export interface VllmDeploymentOptions {
    * compilation/CUDA-graph cache. Default 20.
    */
   modelLoadHeadroomGb?: number;
+  /**
+   * Physical served-weight size resolver. Production defaults to the Hugging Face
+   * tree API; tests inject a fixture-backed resolver. The result is used only for
+   * disk reservation before deploy, never as a substitute for behavior checks.
+   */
+  resolveServedWeightSize?: (modelId: string) => Promise<ServedWeightSizeResult | null>;
   /**
    * Model-size-aware health check timeout tiers (see `resolveHealthCheckTimeoutSeconds`
    * in `types/config.ts`). When set, overrides the flat `healthCheckTimeoutMs` for models
@@ -308,6 +315,7 @@ export class VllmDeploymentService {
       | 'huggingfaceToken'
       | 'chatTemplate'
       | 'otlpTracesEndpoint'
+      | 'resolveServedWeightSize'
       | 'healthCheckTimeoutSecondsTiers'
     >
   > & {
@@ -319,6 +327,7 @@ export class VllmDeploymentService {
     otlpTracesEndpoint: string | null;
     minFreeDiskGb: number;
     modelLoadHeadroomGb: number;
+    resolveServedWeightSize?: (modelId: string) => Promise<ServedWeightSizeResult | null>;
     healthCheckTimeoutSecondsTiers: HealthCheckTimeoutTier[];
   };
 
@@ -354,6 +363,7 @@ export class VllmDeploymentService {
       hfCacheVolume: options.hfCacheVolume ?? 'vllm-hf-cache',
       minFreeDiskGb: options.minFreeDiskGb ?? 80,
       modelLoadHeadroomGb: options.modelLoadHeadroomGb ?? 20,
+      resolveServedWeightSize: options.resolveServedWeightSize,
       healthCheckTimeoutSecondsTiers: options.healthCheckTimeoutSecondsTiers ?? [],
     };
 
@@ -442,7 +452,7 @@ export class VllmDeploymentService {
     // hit "no space left on device" mid-deploy. Best-effort: never blocks the
     // deploy — if the disk is genuinely full the docker run fails and the
     // scheduler's classifier retries it after this GC has run once.
-    const estimatedModelGb = this.estimateModelDiskGb(model);
+    const estimatedModelGb = await this.estimateModelDiskGb(model);
     await this.ensureDiskSpace(sshConfig, model.id, estimatedModelGb);
 
     // Step 1: Stop existing vLLM containers
@@ -977,15 +987,39 @@ export class VllmDeploymentService {
   }
 
   /**
-   * Estimates on-disk footprint (GB) for a model's weights, plus a fixed
-   * headroom for the container writable layer / vLLM compile cache. Reuses
-   * the same bytes-per-parameter precision table as candidate filtering
-   * (`getBytesPerParamForQuantizations`) so a quantized model reserves its
-   * real (smaller) footprint rather than a worst-case BF16 estimate. Returns
-   * null when `parameterCount` is unknown — callers fall back to the static
-   * `minFreeDiskGb` floor in that case rather than guessing.
+   * Estimates on-disk footprint (GB) for a model's weights, plus fixed
+   * headroom for the container writable layer / vLLM compile cache.
+   *
+   * Prefer physical served safetensors bytes from the Hugging Face tree API:
+   * packed MXFP4 repos can report unpacked `U8` parameter metadata, FP8 index
+   * totals can report logical BF16 size, and unpaginated tree listings can
+   * return plausible partial shard sets. Parameter-count × bytes/param remains
+   * the fallback only when the physical shard set cannot be fetched.
    */
-  private estimateModelDiskGb(model: ModelInfo): number | null {
+  private async estimateModelDiskGb(model: ModelInfo): Promise<number | null> {
+    const resolver =
+      this.options.resolveServedWeightSize ??
+      ((modelId: string) => fetchServedWeightSize(modelId, undefined, this.options.huggingfaceToken ?? undefined));
+
+    try {
+      const servedWeights = await resolver(model.id);
+      if (servedWeights) {
+        this.logger.info('Resolved physical served-weight footprint', {
+          modelId: model.id,
+          weightsGb: servedWeights.gb.toFixed(1),
+          shardCount: servedWeights.shardCount,
+          expectedShardCount: servedWeights.expectedShardCount,
+          family: servedWeights.family,
+        });
+        return Math.ceil(servedWeights.gb + this.options.modelLoadHeadroomGb);
+      }
+    } catch (error) {
+      this.logger.warn('Physical served-weight resolution failed; falling back to parameter estimate', {
+        modelId: model.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
     if (!model.parameterCount || model.parameterCount <= 0) return null;
     const bytesPerParam = getBytesPerParamForQuantizations(model.quantizations);
     const weightsGb = (model.parameterCount * bytesPerParam) / 1024 ** 3;
