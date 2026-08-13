@@ -437,7 +437,16 @@ export class ModelDiscoveryService {
     const { search, sort, includeGated } = options;
     let page = 0;
 
-    while (page < MAX_PAGES) {
+    // HF's `/api/models` list endpoint is cursor-paginated: it returns a
+    // `Link: <...&cursor=...>; rel="next"` response header rather than
+    // accepting an `offset`/`page` query param. Previously this loop just
+    // re-sent the identical `search`/`sort`/`limit` params every iteration
+    // with no cursor, so every "page" up to MAX_PAGES fetched the exact same
+    // top-`MODELS_PER_PAGE`-by-`sort` slice — discovery was silently capped
+    // at ~100 unique models scanned per run (confirmed live: 10 fetches
+    // collapsed to 3 unique ids). Follow the `Link` header to actually reach
+    // page 2+.
+    let nextUrl: string | undefined = (() => {
       const params = new URLSearchParams({
         search: search || DEFAULT_SEARCH,
         limit: String(MODELS_PER_PAGE),
@@ -445,8 +454,11 @@ export class ModelDiscoveryService {
         config: 'true',
         ...(sort ? { sort } : {}),
       });
+      return `${HF_API_BASE}/api/models?${params}`;
+    })();
 
-      const response = await this.fetchWithAuth(`${HF_API_BASE}/api/models?${params}`);
+    while (page < MAX_PAGES && nextUrl) {
+      const response = await this.fetchWithAuth(nextUrl);
 
       if (!response.ok) {
         this.logger.error(`HF search failed: ${response.status} ${response.statusText}`);
@@ -462,14 +474,21 @@ export class ModelDiscoveryService {
         return true;
       });
 
-      if (visible.length === 0) break;
-      yield visible;
+      if (visible.length > 0) yield visible;
 
       // Stop if we got fewer results than page size — no more pages
       if (data.length < MODELS_PER_PAGE) break;
 
+      nextUrl = this.parseNextLink(response.headers.get('link'));
       page++;
     }
+  }
+
+  /** Parse the next-page URL out of a `Link: <url>; rel="next"` response header. */
+  private parseNextLink(linkHeader: string | null): string | undefined {
+    if (!linkHeader) return undefined;
+    const match = /<([^>]+)>;\s*rel="next"/.exec(linkHeader);
+    return match?.[1];
   }
 
   // ─── Evaluation Pipeline ─────────────────────────────────────────────────
