@@ -37,6 +37,23 @@ describe('summarizeServedWeightSize', () => {
     expect(() => summarizeServedWeightSize(files)).toThrow(/Incomplete safetensors shard set.*2\/3/);
   });
 
+  it('selects one root family and does not double-count mixed root model files', () => {
+    const files = [
+      ...numberedShards('model', 2, 10 * GB),
+      { path: 'model.safetensors', size: 25 * GB, type: 'file' },
+    ];
+
+    const result = summarizeServedWeightSize(files);
+
+    expect(result?.family).toBe('model');
+    expect(result?.bytes).toBe(20 * GB);
+    expect(result?.shardCount).toBe(2);
+    expect(result?.expectedShardCount).toBe(2);
+    expect(result?.alternateFamilies).toEqual([
+      { family: 'model', shardCount: 1, bytes: 25 * GB },
+    ]);
+  });
+
   it('selects one root family and does not double-count consolidated duplicate weights', () => {
     const files = [
       ...numberedShards('model', 2, 10 * GB),
@@ -79,7 +96,7 @@ describe('fetchServedWeightSize', () => {
       { path: 'model-00004-of-000004.safetensors', size: GB, type: 'file' },
     ];
     const requestedUrls: string[] = [];
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (url: string, _init?: { headers?: Record<string, string> }) => {
       requestedUrls.push(url);
       const isSecondPage = url.includes('cursor=');
       return {

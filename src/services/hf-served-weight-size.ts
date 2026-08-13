@@ -41,6 +41,7 @@ interface CandidateShard {
   path: string;
   size: number;
   family: string;
+  groupKey: string;
   index: number | null;
   total: number | null;
 }
@@ -62,6 +63,10 @@ function parseShard(path: string): { family: string; index: number | null; total
   }
   const bare = base.match(/^(.+?)\.safetensors$/i);
   return { family: bare?.[1] ?? base, index: null, total: null };
+}
+
+function shardGroupKey(shard: { family: string; total: number | null }): string {
+  return `${shard.family}:${shard.total ?? 'single'}`;
 }
 
 /**
@@ -88,21 +93,22 @@ export function summarizeServedWeightSize(files: HfTreeFile[]): ServedWeightSize
     }
 
     const shard = parseShard(file.path);
-    candidates.push({ path: file.path, size: file.size, ...shard });
+    candidates.push({ path: file.path, size: file.size, groupKey: shardGroupKey(shard), ...shard });
   }
 
   if (candidates.length === 0) return null;
 
   const families = new Map<string, CandidateShard[]>();
   for (const shard of candidates) {
-    const existing = families.get(shard.family) ?? [];
+    const existing = families.get(shard.groupKey) ?? [];
     existing.push(shard);
-    families.set(shard.family, existing);
+    families.set(shard.groupKey, existing);
   }
 
-  const ranked = Array.from(families.entries())
-    .map(([family, shards]) => ({
-      family,
+  const ranked = Array.from(families.values())
+    .map((shards) => ({
+      family: shards[0]?.family ?? 'unknown',
+      groupKey: shards[0]?.groupKey ?? 'unknown',
       shards: shards.sort((a, b) => a.path.localeCompare(b.path)),
       bytes: shards.reduce((sum, shard) => sum + shard.size, 0),
       expectedShardCount: inferExpectedShardCount(shards),
@@ -113,6 +119,9 @@ export function summarizeServedWeightSize(files: HfTreeFile[]): ServedWeightSize
       if (completenessA !== completenessB) return completenessB - completenessA;
       if (a.family === 'model' && b.family !== 'model') return -1;
       if (b.family === 'model' && a.family !== 'model') return 1;
+      const numberedA = a.expectedShardCount === null ? 0 : 1;
+      const numberedB = b.expectedShardCount === null ? 0 : 1;
+      if (numberedA !== numberedB) return numberedB - numberedA;
       return b.bytes - a.bytes;
     });
 
@@ -136,7 +145,7 @@ export function summarizeServedWeightSize(files: HfTreeFile[]): ServedWeightSize
     family: selected.family,
     paths: selected.shards.map((shard) => shard.path),
     alternateFamilies: ranked
-      .filter((entry) => entry.family !== selected.family)
+      .filter((entry) => entry.groupKey !== selected.groupKey)
       .map((entry) => ({ family: entry.family, shardCount: entry.shards.length, bytes: entry.bytes })),
     ignoredPaths,
   };
