@@ -1,0 +1,16 @@
+# Orca per-workspace environments.
+# Recipe: run elastic-llm-benchmarker workspaces on the i9 host (Orca-server mode).
+#
+# The i9 host is PERSISTENT — there is no base snapshot. `create` checks out the
+# requested ref into an ISOLATED per-workspace directory under
+# ~/Projects/orca-env/<name> so it never disturbs the live
+# ~/Projects/elastic-llm-benchmarker checkout that the benchmarker daemon runs
+# from. It then starts `orca serve` on the host and prints the pairing JSON.
+#
+# Pairing uses Tailscale-only ws:// (not wss://). Destroy is implemented and
+# removes the isolated workspace plus its recipe-owned `orca serve` process.
+environmentRecipes:
+  - id: i9-hermes
+    name: i9 (Hermes)
+    create: ./scripts/orca-vm/i9-create.sh
+    destroy: ./scripts/orca-vm/i9-destroy.sh
