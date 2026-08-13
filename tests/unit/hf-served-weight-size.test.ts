@@ -37,6 +37,37 @@ describe('summarizeServedWeightSize', () => {
     expect(() => summarizeServedWeightSize(files)).toThrow(/Incomplete safetensors shard set.*2\/3/);
   });
 
+  it('accepts a 0-indexed shard set (openai/gpt-oss-20b ships 00000..00002 for of-00002)', () => {
+    const files = [
+      { path: 'model-00000-of-00002.safetensors', size: 4 * GB, type: 'file' },
+      { path: 'model-00001-of-00002.safetensors', size: 4 * GB, type: 'file' },
+      { path: 'model-00002-of-00002.safetensors', size: 4 * GB, type: 'file' },
+      { path: 'original/model.safetensors', size: 13 * GB, type: 'file' },
+    ];
+
+    const result = summarizeServedWeightSize(files);
+
+    expect(result?.family).toBe('model');
+    expect(result?.bytes).toBe(12 * GB);
+    expect(result?.shardCount).toBe(3);
+    expect(result?.ignoredPaths).toEqual(['original/model.safetensors']);
+  });
+
+  it('treats a layer-sharded repo as one set (Qwen3.6-35B-A3B-FP8 ships layers-N.safetensors)', () => {
+    const files = Array.from({ length: 5 }, (_, i) => ({
+      path: `layers-${i}.safetensors`,
+      size: 2 * GB,
+      type: 'file',
+    }));
+
+    const result = summarizeServedWeightSize(files);
+
+    expect(result?.family).toBe('layers');
+    expect(result?.bytes).toBe(10 * GB);
+    expect(result?.shardCount).toBe(5);
+    expect(result?.alternateFamilies).toEqual([]);
+  });
+
   it('selects one root family and does not double-count mixed root model files', () => {
     const files = [
       ...numberedShards('model', 2, 10 * GB),

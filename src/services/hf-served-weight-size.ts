@@ -62,11 +62,48 @@ function parseShard(path: string): { family: string; index: number | null; total
     };
   }
   const bare = base.match(/^(.+?)\.safetensors$/i);
-  return { family: bare?.[1] ?? base, index: null, total: null };
+  const stem = bare?.[1] ?? base;
+  // Repos that shard by layer rather than by `-of-` (e.g. `layers-0.safetensors`)
+  // are one physical set: group on the stem, keep the trailing ordinal as index.
+  const ordinal = stem.match(/^(.+?)[-_.]0*(\d+)$/);
+  if (ordinal?.[1] && ordinal[2]) {
+    return { family: ordinal[1], index: Number.parseInt(ordinal[2], 10), total: null };
+  }
+  return { family: stem, index: null, total: null };
 }
 
 function shardGroupKey(shard: { family: string; total: number | null }): string {
   return `${shard.family}:${shard.total ?? 'single'}`;
+}
+
+/**
+ * A shard set is complete when its indices form one contiguous run.
+ *
+ * `-of-N` is only a hint: some published repos are 0-indexed, so a set declaring
+ * `of-00002` legitimately ships `00000`, `00001`, `00002`. Trusting the declared
+ * total alone rejects those as incomplete (observed on `openai/gpt-oss-20b`), so
+ * the contiguous index run is authoritative and the declared total is advisory.
+ */
+function isCompleteShardSet(shards: CandidateShard[]): boolean {
+  const indices = shards
+    .map((shard) => shard.index)
+    .filter((index): index is number => index !== null)
+    .sort((a, b) => a - b);
+  if (indices.length === 0) return shards.length === 1;
+  if (indices.length !== shards.length) return false;
+  const first = indices[0];
+  if (first === undefined || first > 1) return false;
+  for (let i = 1; i < indices.length; i += 1) {
+    if (indices[i] !== (indices[i - 1] as number) + 1) return false;
+  }
+  // A declared `-of-N` still bounds the set: N shards when 1-indexed, N+1 when
+  // 0-indexed. Anything short of that is a truncated tree page, not a convention.
+  const declared = shards.find((shard) => shard.total !== null)?.total ?? null;
+  if (declared !== null) {
+    const expected = first === 0 ? declared + 1 : declared;
+    if (shards.length !== expected) return false;
+  }
+  return true;
 }
 
 /**
@@ -112,28 +149,29 @@ export function summarizeServedWeightSize(files: HfTreeFile[]): ServedWeightSize
       shards: shards.sort((a, b) => a.path.localeCompare(b.path)),
       bytes: shards.reduce((sum, shard) => sum + shard.size, 0),
       expectedShardCount: inferExpectedShardCount(shards),
+      complete: isCompleteShardSet(shards),
     }))
     .sort((a, b) => {
-      const completenessA = a.expectedShardCount === null || a.expectedShardCount === a.shards.length ? 1 : 0;
-      const completenessB = b.expectedShardCount === null || b.expectedShardCount === b.shards.length ? 1 : 0;
+      const completenessA = a.complete ? 1 : 0;
+      const completenessB = b.complete ? 1 : 0;
       if (completenessA !== completenessB) return completenessB - completenessA;
       if (a.family === 'model' && b.family !== 'model') return -1;
       if (b.family === 'model' && a.family !== 'model') return 1;
-      const numberedA = a.expectedShardCount === null ? 0 : 1;
-      const numberedB = b.expectedShardCount === null ? 0 : 1;
-      if (numberedA !== numberedB) return numberedB - numberedA;
+      // A declared `-of-N` shard set is the served weights; a lone sibling file
+      // (e.g. a merged `model.safetensors`) is alternate packaging even when bigger.
+      const declaredA = a.expectedShardCount === null ? 0 : 1;
+      const declaredB = b.expectedShardCount === null ? 0 : 1;
+      if (declaredA !== declaredB) return declaredB - declaredA;
       return b.bytes - a.bytes;
     });
 
   const selected = ranked[0];
   if (!selected) return null;
 
-  if (
-    selected.expectedShardCount !== null &&
-    selected.expectedShardCount !== selected.shards.length
-  ) {
+  if (!selected.complete) {
+    const expected = selected.expectedShardCount ?? 'contiguous';
     throw new Error(
-      `Incomplete safetensors shard set for ${selected.family}: found ${selected.shards.length}/${selected.expectedShardCount}`,
+      `Incomplete safetensors shard set for ${selected.family}: found ${selected.shards.length}/${expected}`,
     );
   }
 
