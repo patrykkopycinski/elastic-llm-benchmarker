@@ -5,7 +5,7 @@
 set -uo pipefail
 BENCH_DIR="$HOME/Projects/elastic-llm-benchmarker"
 LOG="$BENCH_DIR/.smoke-logs/watchdog.log"
-API_URL="http://localhost:3200"
+API_URL="http://localhost:3456"
 VM_HOST="136.115.231.66"
 VM_SSH_KEY="$HOME/.ssh/benchmarker_ed25519"
 VM_USER="patryk"
@@ -39,7 +39,7 @@ done
 
 # 2. Local API check (dashboard/queue-server, port 3200)
 API_OK=false
-curl -sf --connect-timeout 3 "$API_URL/api/queue" >/dev/null 2>&1 && API_OK=true || add_finding "local API :3200 not responding"
+curl -sf --connect-timeout 3 "$API_URL/api/queue" >/dev/null 2>&1 && API_OK=true || add_finding "local API :3456 not responding"
 
 # 3. Worker process locally (with 30s startup grace period)
 WORKER_ALIVE=$(pgrep -f 'benchmarker-queue start' | head -1 || true)
