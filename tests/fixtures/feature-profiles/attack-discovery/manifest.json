@@ -1,0 +1,122 @@
+{
+  "fetchedAt": "2026-09-29T18:54:21.726371Z",
+  "models": {
+    "qwen3.8-27b": {
+      "repoId": "Qwen/Qwen3.8-27B",
+      "commitSha": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 65012
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 4312
+        },
+        "tokenizer_config.json": {
+          "status": "fetched",
+          "bytes": 17928
+        }
+      },
+      "fetchDate": "2026-09-29"
+    },
+    "gpt-oss-120b": {
+      "repoId": "openai/gpt-oss-120b",
+      "commitSha": "b5c939de8f754692c1647ca79fbf85e8c1e70f8a",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 7111
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 2089
+        },
+        "tokenizer_config.json": {
+          "status": "fetched",
+          "bytes": 4200
+        }
+      },
+      "fetchDate": "2026-09-29"
+    },
+    "gemma-4-26b-a4b": {
+      "repoId": "google/gemma-4-26B-A4B-it",
+      "commitSha": "4d7ae4984b7db7de8f8457170b3f1a419ee76d52",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 27979
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 3815
+        },
+        "tokenizer_config.json": {
+          "status": "fetched",
+          "bytes": 3082
+        }
+      },
+      "fetchDate": "2026-09-29"
+    },
+    "magistral-small-2509": {
+      "repoId": "mistralai/Magistral-Small-2509",
+      "commitSha": "a31cc96ab10cf19bc42c628fedf1e359e0853c49",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 38860
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 1166
+        },
+        "tokenizer_config.json": {
+          "status": "unavailable",
+          "reason": "no tokenizer_config.json in repo (tekken-only tokenizer, mistral_common format) consistent with C2-4 / C2-13 (SGLang/vLLM multimodal path fails on missing preprocessor_config.json; repo ships no HF-style tokenizer/preprocessor config)"
+        }
+      },
+      "fetchDate": "2026-09-29"
+    },
+    "mistral-small-3.2-24b": {
+      "repoId": "mistralai/Mistral-Small-3.2-24B-Instruct-2506",
+      "commitSha": "95a6d26c4bfb886c58daf9d3f7332c857cb27b43",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 25365
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 1172
+        },
+        "tokenizer_config.json": {
+          "status": "unavailable",
+          "reason": "no tokenizer_config.json in repo (tekken-only tokenizer, mistral_common format) consistent with C2-4 / C2-13 (SGLang/vLLM multimodal path fails on missing preprocessor_config.json; repo ships no HF-style tokenizer/preprocessor config)"
+        }
+      },
+      "fetchDate": "2026-09-29"
+    },
+    "glm-4.7-flash": {
+      "repoId": "zai-org/GLM-4.7-Flash",
+      "commitSha": "7dd20894a642a0aa287e9827cb1a1f7f91386b67",
+      "files": {
+        "README.md": {
+          "status": "fetched",
+          "bytes": 8174
+        },
+        "config.json": {
+          "status": "fetched",
+          "bytes": 1070
+        },
+        "tokenizer_config.json": {
+          "status": "fetched",
+          "bytes": 7226
+        }
+      },
+      "fetchDate": "2026-09-29"
+    }
+  },
+  "fetchDate": "2026-09-29",
+  "source": "huggingface.co (live API, fetched at task execution time)",
+  "note": "repo ids resolved via HF search API against names in gate-step2-spec.md item 3 and cross-checked against c2-findings.txt where the model is mentioned there. gemma-4-26B-A4B (google/gemma-4-26B-A4B-it) has NO direct C2 finding: c2-findings.txt's only gemma entry (C2-16) documents gemma-4-31b, a different (dense, non-MoE) model. See expected.json note field for the A4B row."
+}
