@@ -319,4 +319,46 @@ describe('runEnqueue', () => {
     expect(result.success).toBe(false);
     expect(result.message).toMatch(/agent-builder.*baseline/);
   });
+
+  it('should reject an unknown --profile id without enqueueing', async () => {
+    vi.mocked(evaluateProfileBaseline).mockResolvedValueOnce({
+      model: null,
+      filter: null,
+      error: "Unknown profile 'nonexistent'. Valid profiles: agent-builder",
+    });
+
+    const result = await runEnqueue({
+      modelId: 'org/name',
+      config: mockConfig,
+      esClient: mockEsClient as AppConfig,
+      hardwareProfileId: '1xl4',
+      priority: 5,
+      profileId: 'nonexistent',
+    } as EnqueueOptions);
+
+    expect(result.success).toBe(false);
+    expect(result.message).toMatch(/Unknown profile 'nonexistent'/);
+  });
+
+  it('should default profileId to agent-builder when --profile is not passed', async () => {
+    const enqueueMock = vi.fn().mockResolvedValue({ id: 'entry-456' });
+    vi.mocked(QueueService).mockImplementation(() => ({
+      enqueue: enqueueMock,
+      findNonTerminalEntries: vi.fn().mockResolvedValue([]),
+      findRecentTerminalModelIds: vi.fn().mockResolvedValue(new Set()),
+    } as unknown as QueueService));
+
+    await runEnqueue({
+      modelId: 'org/name',
+      config: mockConfig,
+      esClient: mockEsClient as AppConfig,
+      hardwareProfileId: '1xl4',
+      priority: 5,
+    } as EnqueueOptions);
+
+    expect(enqueueMock).toHaveBeenCalled();
+    const callArgs = enqueueMock.mock.calls[0];
+    const metadataArg = callArgs[callArgs.length - 1] as { profileId?: string };
+    expect(metadataArg.profileId).toBe('agent-builder');
+  });
 });
