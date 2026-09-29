@@ -193,11 +193,13 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     if (error) {
       return { success: false, message: error };
     }
+    const baselineLabel =
+      profileId === AGENT_BUILDER_PROFILE_ID ? 'Agent Builder baseline' : `${profileId} profile baseline`;
     if (model && filter && !filter.passed) {
       return {
         success: false,
         message:
-          `Model ${modelId} does not meet '${profileId}' baseline requirements: ${formatBaselineRejections(filter)}. ` +
+          `Model ${modelId} does not meet ${baselineLabel} requirements: ${formatBaselineRejections(filter)}. ` +
           'Use --force to enqueue anyway.',
       };
     }
@@ -206,7 +208,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
       return {
         success: false,
         message:
-          `Could not resolve model metadata for ${modelId} (${profileId} baseline check). Use --force to enqueue anyway.`,
+          `Could not resolve model metadata for ${modelId} (${baselineLabel} check). Use --force to enqueue anyway.`,
       };
     }
     if (filter && filter.warnings.length > 0) {

@@ -317,7 +317,7 @@ describe('runEnqueue', () => {
     } as EnqueueOptions);
 
     expect(result.success).toBe(false);
-    expect(result.message).toMatch(/agent-builder.*baseline/);
+    expect(result.message).toMatch(/Agent Builder baseline/);
   });
 
   it('should reject an unknown --profile id without enqueueing', async () => {
