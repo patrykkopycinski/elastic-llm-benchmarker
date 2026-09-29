@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { runEnqueue, type EnqueueOptions } from '../../src/cli/enqueue-handler.js';
-import { evaluateAgentBuilderBaseline } from '../../src/services/agent-builder-baseline.js';
+import { evaluateProfileBaseline } from '../../src/services/agent-builder-baseline.js';
 import { QueueService } from '../../src/services/queue-service.js';
 import { HardwareEstimator } from '../../src/services/hardware-estimator.js';
 import { HardwareProfileRegistry } from '../../src/services/hardware-profiles.js';
@@ -12,7 +12,7 @@ vi.mock('../../src/services/hardware-estimator.js');
 vi.mock('../../src/services/hardware-profiles.js');
 vi.mock('../../src/services/model-discovery.js');
 vi.mock('../../src/services/agent-builder-baseline.js', () => ({
-  evaluateAgentBuilderBaseline: vi.fn().mockResolvedValue({ model: null, filter: null }),
+  evaluateProfileBaseline: vi.fn().mockResolvedValue({ model: null, filter: null }),
   formatBaselineRejections: vi.fn().mockReturnValue(''),
 }));
 
@@ -283,7 +283,7 @@ describe('runEnqueue', () => {
       agentBuilderBaseline: { enabled: true },
     } as AppConfig;
 
-    vi.mocked(evaluateAgentBuilderBaseline).mockResolvedValueOnce({
+    vi.mocked(evaluateProfileBaseline).mockResolvedValueOnce({
       model: {
         id: 'Qwen/Qwen2.5-1.5B-Instruct',
         name: 'Qwen2.5-1.5B-Instruct',
@@ -317,6 +317,6 @@ describe('runEnqueue', () => {
     } as EnqueueOptions);
 
     expect(result.success).toBe(false);
-    expect(result.message).toMatch(/Agent Builder baseline/);
+    expect(result.message).toMatch(/agent-builder.*baseline/);
   });
 });
