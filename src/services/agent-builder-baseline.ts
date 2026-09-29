@@ -1,5 +1,6 @@
 import type { ModelInfo } from '../types/benchmark.js';
-import type { AppConfig } from '../types/config.js';
+import type { AppConfig, FeatureProfileConfig } from '../types/config.js';
+import { AGENT_BUILDER_PROFILE_ID, resolveFeatureProfiles } from '../types/config.js';
 import { HFCardParser } from './hf-card-parser.js';
 import { extractContextWindowFromConfig, normalizeArchitectureFromConfig } from './hf-config-utils.js';
 import {
@@ -47,17 +48,57 @@ export interface HfConfigJson {
  * Derived from elastic/security-team#15545 Model Evaluation Log, adjusted for
  * Agent Builder reality: single-tool calling via vLLM (not parallel/multi-tool).
  */
-export function createAgentBuilderFilter(config: AppConfig): ModelCandidateFilter {
-  const baseline = config.agentBuilderBaseline;
+function buildCandidateFilterFromProfile(
+  config: AppConfig,
+  profile: FeatureProfileConfig,
+): ModelCandidateFilter {
   return new ModelCandidateFilter(config.logLevel, {
-    minContextWindow: baseline.minContextWindow,
+    minContextWindow: profile.minContextWindow,
     targetHardwareProfile: config.vmHardwareProfile,
-    requireToolCalling: baseline.requireToolCalling,
-    minParameterCountBillions: baseline.minParameterCountBillions,
-    minActiveParametersBillions: baseline.minActiveParametersBillions,
-    requireInstructVariant: baseline.requireInstructVariant,
+    requireToolCalling: profile.requireToolCalling,
+    minParameterCountBillions: profile.minParameterCountBillions,
+    minActiveParametersBillions: profile.minActiveParametersBillions,
+    requireInstructVariant: profile.requireInstructVariant,
     checkKnownFailures: true,
   });
+}
+
+export interface ProfileFilterResult {
+  success: boolean;
+  filter?: ModelCandidateFilter;
+  /** Set when profileId is not a recognized feature profile; names the valid ids. */
+  error?: string;
+  validProfileIds?: string[];
+}
+
+/**
+ * Resolve the candidate filter for an arbitrary feature profile id. Unknown
+ * ids fail loudly (`success: false`) rather than silently falling back to
+ * `agent-builder` — see `evaluateProfileBaseline`'s callers for how this
+ * surfaces as a user-facing error.
+ */
+export function createProfileFilter(config: AppConfig, profileId: string): ProfileFilterResult {
+  const profiles = resolveFeatureProfiles(config);
+  const profile = profiles[profileId];
+  const validProfileIds = Object.keys(profiles).sort();
+  if (!profile) {
+    return {
+      success: false,
+      error: `Unknown profile '${profileId}'. Valid profiles: ${validProfileIds.join(', ')}`,
+      validProfileIds,
+    };
+  }
+  return { success: true, filter: buildCandidateFilterFromProfile(config, profile), validProfileIds };
+}
+
+/** Thin wrapper over `createProfileFilter` for the always-present `agent-builder` profile. */
+export function createAgentBuilderFilter(config: AppConfig): ModelCandidateFilter {
+  const result = createProfileFilter(config, AGENT_BUILDER_PROFILE_ID);
+  // `agent-builder` is always present in `resolveFeatureProfiles`'s output
+  // (derived from `agentBuilderBaseline` when not explicitly overridden), so
+  // this branch is unreachable; the fallback avoids throwing per project
+  // convention while keeping this function's return type non-nullable.
+  return result.filter ?? buildCandidateFilterFromProfile(config, config.agentBuilderBaseline);
 }
 
 export function normalizeParameterCount(raw: number | null): number | null {
@@ -186,12 +227,36 @@ export async function resolveModelInfo(
   }
 }
 
-export async function evaluateAgentBuilderBaseline(
+export interface ProfileBaselineResult {
+  model: ModelInfo | null;
+  filter: FilterResult | null;
+  /** Set when profileId is not a recognized feature profile. */
+  error?: string;
+}
+
+/**
+ * Generalized form of `evaluateAgentBuilderBaseline`: evaluates a model
+ * against an arbitrary named feature profile instead of only `agent-builder`.
+ * `evaluateAgentBuilderBaseline` is kept as a thin wrapper for callers that
+ * only ever gate on the Agent Builder baseline.
+ */
+export async function evaluateProfileBaseline(
   modelId: string,
   config: AppConfig,
+  profileId: string,
   hfConfig?: HfConfigJson | null,
-): Promise<{ model: ModelInfo | null; filter: FilterResult | null }> {
-  if (!config.agentBuilderBaseline.enabled) {
+): Promise<ProfileBaselineResult> {
+  const profiles = resolveFeatureProfiles(config);
+  const profile = profiles[profileId];
+  if (!profile) {
+    const validProfileIds = Object.keys(profiles).sort();
+    return {
+      model: null,
+      filter: null,
+      error: `Unknown profile '${profileId}'. Valid profiles: ${validProfileIds.join(', ')}`,
+    };
+  }
+  if (!profile.enabled) {
     return { model: null, filter: null };
   }
 
@@ -200,8 +265,17 @@ export async function evaluateAgentBuilderBaseline(
     return { model: null, filter: null };
   }
 
-  const candidateFilter = createAgentBuilderFilter(config);
+  const candidateFilter = buildCandidateFilterFromProfile(config, profile);
   return { model, filter: candidateFilter.evaluate(model) };
+}
+
+export async function evaluateAgentBuilderBaseline(
+  modelId: string,
+  config: AppConfig,
+  hfConfig?: HfConfigJson | null,
+): Promise<{ model: ModelInfo | null; filter: FilterResult | null }> {
+  const result = await evaluateProfileBaseline(modelId, config, AGENT_BUILDER_PROFILE_ID, hfConfig);
+  return { model: result.model, filter: result.filter };
 }
 
 export function formatBaselineRejections(filter: FilterResult): string {
