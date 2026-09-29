@@ -71,12 +71,7 @@ export interface ProfileFilterResult {
   validProfileIds?: string[];
 }
 
-/**
- * Resolve the candidate filter for an arbitrary feature profile id. Unknown
- * ids fail loudly (`success: false`) rather than silently falling back to
- * `agent-builder` — see `evaluateProfileBaseline`'s callers for how this
- * surfaces as a user-facing error.
- */
+/** Unknown profile ids fail loudly instead of falling back to `agent-builder`. */
 export function createProfileFilter(config: AppConfig, profileId: string): ProfileFilterResult {
   const profiles = resolveFeatureProfiles(config);
   const profile = profiles[profileId];
@@ -94,10 +89,7 @@ export function createProfileFilter(config: AppConfig, profileId: string): Profi
 /** Thin wrapper over `createProfileFilter` for the always-present `agent-builder` profile. */
 export function createAgentBuilderFilter(config: AppConfig): ModelCandidateFilter {
   const result = createProfileFilter(config, AGENT_BUILDER_PROFILE_ID);
-  // `agent-builder` is always present in `resolveFeatureProfiles`'s output
-  // (derived from `agentBuilderBaseline` when not explicitly overridden), so
-  // this branch is unreachable; the fallback avoids throwing per project
-  // convention while keeping this function's return type non-nullable.
+  // Unreachable: resolveFeatureProfiles always includes agent-builder.
   return result.filter ?? buildCandidateFilterFromProfile(config, config.agentBuilderBaseline);
 }
 
@@ -234,12 +226,7 @@ export interface ProfileBaselineResult {
   error?: string;
 }
 
-/**
- * Generalized form of `evaluateAgentBuilderBaseline`: evaluates a model
- * against an arbitrary named feature profile instead of only `agent-builder`.
- * `evaluateAgentBuilderBaseline` is kept as a thin wrapper for callers that
- * only ever gate on the Agent Builder baseline.
- */
+/** Evaluates a model against a named feature profile. */
 export async function evaluateProfileBaseline(
   modelId: string,
   config: AppConfig,

@@ -79,13 +79,7 @@ export interface QueueEntry {
     skipPassedSuites?: boolean;
     /** Non-blocking Agent Builder baseline warnings (e.g. low MoE active-param count). */
     baselineWarnings?: string[];
-    /**
-     * Feature profile used for baseline gating and candidate filtering
-     * (see `resolveFeatureProfiles` in `types/config.ts`). Absent means the
-     * default `'agent-builder'` profile — callers resolve the default at the
-     * point of use rather than baking it in here, matching how
-     * `AppConfig.featureProfiles` itself is optional.
-     */
+    /** Feature profile to gate against; absent means `'agent-builder'`, resolved by callers. */
     profileId?: string;
   };
 }

@@ -701,13 +701,7 @@ export const agentBuilderBaselineSchema = z.object({
   requireInstructVariant: z.boolean().default(true),
 });
 
-/**
- * Feature-profile candidate filter: a named rule set keyed by profile id.
- * Each profile has the same shape as `agentBuilderBaselineSchema`. When the
- * `'agent-builder'` key is absent, it is derived from `agentBuilderBaseline`
- * (see `resolveFeatureProfiles`) so existing config files behave
- * byte-identically to before this schema existed.
- */
+/** Named candidate-filter rule sets keyed by profile id, same shape as `agentBuilderBaselineSchema`. */
 export const featureProfilesSchema = z.record(z.string(), agentBuilderBaselineSchema);
 
 export type FeatureProfileConfig = z.infer<typeof agentBuilderBaselineSchema>;
@@ -1151,11 +1145,7 @@ export const appConfigSchema = z.object({
   buildkite: buildkiteConfigSchema.default({}),
   /** Pre-deployment gate for Kibana Agent Builder eval eligibility. */
   agentBuilderBaseline: agentBuilderBaselineSchema.default({}),
-  /**
-   * Named candidate-filter rule sets keyed by profile id. `'agent-builder'`
-   * is the only shipped profile; when absent it is derived from
-   * `agentBuilderBaseline` (see `resolveFeatureProfiles`).
-   */
+  /** Per-feature candidate-filter profiles; see `resolveFeatureProfiles`. */
   featureProfiles: featureProfilesSchema.optional(),
   /** LLM configuration for reasoning and evaluation tasks. */
   llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
