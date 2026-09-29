@@ -91,5 +91,15 @@
     "minActiveParametersBillions": 8,
     "requireToolCalling": true,
     "requireInstructVariant": true
+  },
+  "featureProfiles": {
+    "attack-discovery": {
+      "enabled": true,
+      "minContextWindow": 131072,
+      "minParameterCountBillions": 24,
+      "minActiveParametersBillions": 8,
+      "requireToolCalling": false,
+      "requireInstructVariant": true
+    }
   }
 }
