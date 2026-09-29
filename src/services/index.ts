@@ -149,9 +149,15 @@ export type { LlmClient, LlmResponse } from './llm-client.js';
 export { DiscoveryScheduler } from './discovery-scheduler.js';
 export {
   createAgentBuilderFilter,
+  createProfileFilter,
   evaluateAgentBuilderBaseline,
+  evaluateProfileBaseline,
   formatBaselineRejections,
   resolveModelInfo,
+} from './agent-builder-baseline.js';
+export type {
+  ProfileBaselineResult,
+  ProfileFilterResult,
 } from './agent-builder-baseline.js';
 export type {
   ScoredModel,

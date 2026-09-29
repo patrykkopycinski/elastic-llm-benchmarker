@@ -1126,6 +1126,7 @@ if (isQueueCliInvocation()) {
     .option('--endpoint-url <url>', 'vLLM endpoint when using --skip-stage1')
     .option('--deployment-name <name>', 'Deployment name for eval-only teardown')
     .option('--skip-passed-suites', 'Resume: skip suites already passed in batch jsonl/ES')
+    .option('--profile <id>', "Feature profile to gate against (default: 'agent-builder')", undefined)
     .action(async (modelId: string, opts) => {
       const configPath = program.opts()['config'] as string;
       const config = loadAppConfig({ config: configPath, json: false });
@@ -1150,6 +1151,7 @@ if (isQueueCliInvocation()) {
           endpointUrl: opts['endpointUrl'] as string | undefined,
           deploymentName: opts['deploymentName'] as string | undefined,
           skipPassedSuites: Boolean(opts['skipPassedSuites']),
+          profileId: opts['profile'] as string | undefined,
         });
 
         console.log(result.message);

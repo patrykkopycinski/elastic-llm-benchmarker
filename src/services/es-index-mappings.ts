@@ -130,6 +130,12 @@ export const INDEX_MAPPINGS: Record<
         requested_by: { type: 'keyword' },
         lease_token: { type: 'keyword' },
         heartbeat_at: { type: 'date' },
+        metadata: {
+          type: 'object',
+          properties: {
+            profile_id: { type: 'keyword' },
+          },
+        },
       },
     },
     settings: {

@@ -4,7 +4,7 @@ import { HardwareEstimator } from '../services/hardware-estimator.js';
 import { HardwareProfileRegistry } from '../services/hardware-profiles.js';
 import { ModelDiscoveryService } from '../services/model-discovery.js';
 import {
-  evaluateAgentBuilderBaseline,
+  evaluateProfileBaseline,
   formatBaselineRejections,
 } from '../services/agent-builder-baseline.js';
 import { deriveModelFamily } from '../services/discovery-scheduler.js';
@@ -12,6 +12,7 @@ import {
   compileModelExcludeMatchers,
   findMatchingExcludePattern,
 } from '../utils/model-exclude.js';
+import { AGENT_BUILDER_PROFILE_ID, resolveFeatureProfiles } from '../types/config.js';
 import type { AppConfig } from '../types/config.js';
 
 export interface EnqueueOptions {
@@ -30,6 +31,8 @@ export interface EnqueueOptions {
   deploymentName?: string;
   /** Resume evals: skip suites already passed in batch jsonl / ES for this model. */
   skipPassedSuites?: boolean;
+  /** Feature profile to gate/filter against (see `resolveFeatureProfiles`). Defaults to `'agent-builder'`. */
+  profileId?: string;
 }
 
 export interface EnqueueResult {
@@ -86,6 +89,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
   const endpointUrl = options.endpointUrl;
   const deploymentName = options.deploymentName;
   const skipPassedSuites = options.skipPassedSuites ?? skipStage1;
+  const profileId = options.profileId ?? AGENT_BUILDER_PROFILE_ID;
 
   if (skipStage1 && !endpointUrl) {
     return {
@@ -145,6 +149,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
       endpointUrl,
       deploymentName,
       skipPassedSuites,
+      profileId,
     });
     return {
       success: true,
@@ -178,21 +183,32 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
   }
 
   let baselineWarnings: string[] | undefined;
-  if (config.agentBuilderBaseline.enabled && !force) {
-    const { model, filter } = await evaluateAgentBuilderBaseline(modelId, config, modelConfig ?? undefined);
+  if (!force) {
+    const { model, filter, error } = await evaluateProfileBaseline(
+      modelId,
+      config,
+      profileId,
+      modelConfig ?? undefined,
+    );
+    if (error) {
+      return { success: false, message: error };
+    }
+    const baselineLabel =
+      profileId === AGENT_BUILDER_PROFILE_ID ? 'Agent Builder baseline' : `${profileId} profile baseline`;
     if (model && filter && !filter.passed) {
       return {
         success: false,
         message:
-          `Model ${modelId} does not meet Agent Builder baseline requirements: ${formatBaselineRejections(filter)}. ` +
+          `Model ${modelId} does not meet ${baselineLabel} requirements: ${formatBaselineRejections(filter)}. ` +
           'Use --force to enqueue anyway.',
       };
     }
-    if (!model && !force) {
+    const profileEnabled = resolveFeatureProfiles(config)[profileId]?.enabled ?? false;
+    if (!model && profileEnabled) {
       return {
         success: false,
         message:
-          `Could not resolve model metadata for ${modelId} (Agent Builder baseline check). Use --force to enqueue anyway.`,
+          `Could not resolve model metadata for ${modelId} (${baselineLabel} check). Use --force to enqueue anyway.`,
       };
     }
     if (filter && filter.warnings.length > 0) {
@@ -229,6 +245,7 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
       reason ??
       `estimated ${dryRun.estimatedGb.toFixed(2)} GB / available ${dryRun.availableGb.toFixed(2)} GB`,
     skipPassedSuites: options.skipPassedSuites,
+    profileId,
     ...(baselineWarnings ? { baselineWarnings } : {}),
   });
 

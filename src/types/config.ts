@@ -701,6 +701,32 @@ export const agentBuilderBaselineSchema = z.object({
   requireInstructVariant: z.boolean().default(true),
 });
 
+/** Named candidate-filter rule sets keyed by profile id, same shape as `agentBuilderBaselineSchema`. */
+export const featureProfilesSchema = z.record(z.string(), agentBuilderBaselineSchema);
+
+export type FeatureProfileConfig = z.infer<typeof agentBuilderBaselineSchema>;
+export type FeatureProfiles = z.infer<typeof featureProfilesSchema>;
+
+/** Canonical id for the default/backward-compatible profile. */
+export const AGENT_BUILDER_PROFILE_ID = 'agent-builder';
+
+/**
+ * Resolve the effective set of feature profiles for a config: an explicit
+ * `featureProfiles['agent-builder']` overrides the legacy
+ * `agentBuilderBaseline` block; when absent, it is derived from
+ * `agentBuilderBaseline` so old config files keep working unchanged.
+ */
+export function resolveFeatureProfiles(config: {
+  agentBuilderBaseline: FeatureProfileConfig;
+  featureProfiles?: FeatureProfiles;
+}): FeatureProfiles {
+  const explicit = config.featureProfiles ?? {};
+  return {
+    ...explicit,
+    [AGENT_BUILDER_PROFILE_ID]: explicit[AGENT_BUILDER_PROFILE_ID] ?? config.agentBuilderBaseline,
+  };
+}
+
 /**
  * Cost cap / spend guardrail configuration.
  *
@@ -1119,6 +1145,8 @@ export const appConfigSchema = z.object({
   buildkite: buildkiteConfigSchema.default({}),
   /** Pre-deployment gate for Kibana Agent Builder eval eligibility. */
   agentBuilderBaseline: agentBuilderBaselineSchema.default({}),
+  /** Per-feature candidate-filter profiles; see `resolveFeatureProfiles`. */
+  featureProfiles: featureProfilesSchema.optional(),
   /** LLM configuration for reasoning and evaluation tasks. */
   llmApiKey: z.string().optional().describe('API key for reasoning LLM'),
   llmBaseUrl: z.string().url().optional().describe('Base URL for OpenAI-compatible API'),
