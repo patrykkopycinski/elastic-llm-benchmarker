@@ -99,7 +99,13 @@
       "minParameterCountBillions": 24,
       "minActiveParametersBillions": 8,
       "requireToolCalling": false,
-      "requireInstructVariant": true
+      "requireInstructVariant": true,
+      "workload": {
+        "answerField": "content",
+        "maxWallSeconds": 300,
+        "concurrency": 1,
+        "clientSendsChatTemplateKwargs": false
+      }
     }
   }
 }

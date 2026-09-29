@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   resolveFeatureProfiles,
   AGENT_BUILDER_PROFILE_ID,
+  agentBuilderBaselineSchema,
   type FeatureProfileConfig,
 } from '../../src/types/config.js';
 import {
@@ -199,5 +200,70 @@ describe('shipped attack-discovery profile (config/default.json)', () => {
     const filter = requireFilter(config, AGENT_BUILDER_PROFILE_ID);
     const verdicts = sampleModels.map((m) => filter.evaluate(m as never).passed);
     expect(verdicts).toEqual([true, false, false]);
+  });
+});
+
+describe('workload sub-schema (optional output-contract facts)', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {
+      ...originalEnv,
+      SSH_HOST: '10.0.0.1',
+      SSH_USERNAME: 'testuser',
+      SSH_PASSWORD: 'testpass',
+      HUGGINGFACE_TOKEN: 'hf_test_token',
+    };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('accepts a profile with a well-formed workload block', () => {
+    const config = loadConfig(undefined, { skipDotenv: true });
+    const profiles = resolveFeatureProfiles(config);
+    expect(profiles['attack-discovery'].workload).toEqual({
+      answerField: 'content',
+      maxWallSeconds: 300,
+      concurrency: 1,
+      clientSendsChatTemplateKwargs: false,
+    });
+  });
+
+  it('leaves workload undefined when a profile does not declare one (agent-builder)', () => {
+    const config = loadConfig(undefined, { skipDotenv: true });
+    const profiles = resolveFeatureProfiles(config);
+    expect(profiles[AGENT_BUILDER_PROFILE_ID].workload).toBeUndefined();
+  });
+
+  it('is optional: a profile with no workload key still parses', () => {
+    const config = makeConfig({
+      featureProfiles: { 'attack-discovery': { ...baselineConfig } },
+    } as Partial<AppConfig>);
+    const profiles = resolveFeatureProfiles(config);
+    expect(profiles['attack-discovery'].workload).toBeUndefined();
+  });
+
+  it.each([
+    ['bad answerField enum value', { answerField: 'body', maxWallSeconds: 300, concurrency: 1, clientSendsChatTemplateKwargs: false }],
+    ['non-positive maxWallSeconds', { answerField: 'content', maxWallSeconds: 0, concurrency: 1, clientSendsChatTemplateKwargs: false }],
+    ['non-integer maxWallSeconds', { answerField: 'content', maxWallSeconds: 300.5, concurrency: 1, clientSendsChatTemplateKwargs: false }],
+    ['non-positive concurrency', { answerField: 'content', maxWallSeconds: 300, concurrency: 0, clientSendsChatTemplateKwargs: false }],
+    ['clientSendsChatTemplateKwargs not boolean', { answerField: 'content', maxWallSeconds: 300, concurrency: 1, clientSendsChatTemplateKwargs: 'false' }],
+    ['missing maxWallSeconds', { answerField: 'content', concurrency: 1, clientSendsChatTemplateKwargs: false }],
+  ])('rejects a workload block with %s', (_label, badWorkload) => {
+    const result = agentBuilderBaselineSchema.safeParse({ ...baselineConfig, workload: badWorkload });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts each answerField enum value', () => {
+    for (const answerField of ['content', 'reasoning_content', 'either'] as const) {
+      const result = agentBuilderBaselineSchema.safeParse({
+        ...baselineConfig,
+        workload: { answerField, maxWallSeconds: 300, concurrency: 1, clientSendsChatTemplateKwargs: false },
+      });
+      expect(result.success).toBe(true);
+    }
   });
 });
