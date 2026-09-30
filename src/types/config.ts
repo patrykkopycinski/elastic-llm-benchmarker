@@ -699,6 +699,26 @@ export const agentBuilderBaselineSchema = z.object({
   requireToolCalling: z.boolean().default(true),
   /** Require instruct/chat-tuned checkpoint (instruct/chat/-it in model id). */
   requireInstructVariant: z.boolean().default(true),
+  /**
+   * Output-contract facts a feature's workload imposes that the numeric
+   * rules above can't express (e.g. attack-discovery: answer must land in
+   * `content`, a wall-clock cap, concurrency 1, no client-sent
+   * `chat_template_kwargs`). Optional — omitting it leaves agent-builder
+   * unchanged. No rule reads this yet; it is data only until a later step
+   * adds reasoning-control checks that consume it.
+   */
+  workload: z
+    .object({
+      /** Which response field the caller reads the answer from. */
+      answerField: z.enum(['content', 'reasoning_content', 'either']),
+      /** Hard wall-clock cap for one generation, in seconds. */
+      maxWallSeconds: z.number().int().positive(),
+      /** Max concurrent in-flight requests the workload issues. */
+      concurrency: z.number().int().positive(),
+      /** Whether the calling client can send `chat_template_kwargs` (e.g. `enable_thinking`). */
+      clientSendsChatTemplateKwargs: z.boolean(),
+    })
+    .optional(),
 });
 
 /** Named candidate-filter rule sets keyed by profile id, same shape as `agentBuilderBaselineSchema`. */
