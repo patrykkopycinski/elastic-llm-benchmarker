@@ -8,7 +8,7 @@ step 3 (the reasoning rules that close the gap) — this test does not fail on t
 |---|---|---|---|---|---|
 | qwen3.8-27b | pass | pass | yes | C2-16, C2-17, C2-18 | - |
 | gpt-oss-120b | pass | reject | NO | C2-1, C2-16 | vllm_architecture, parameter_count |
-| gemma-4-26b-a4b | investigate | pass | NO | C2-16 | - |
+| gemma-4-26b-a4b | investigate | pass | NO | C2-21 | - |
 | magistral-small-2509 | reject | pass | NO | C2-11, C2-12, C2-13, C2-19 | - |
 | mistral-small-3.2-24b | investigate | pass | NO | C2-2, C2-3, C2-4, C2-5, C2-19 | - |
 | glm-4.7-flash | investigate | reject | NO | C2-15, C2-19 | parameter_count |

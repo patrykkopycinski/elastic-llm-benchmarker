@@ -6,7 +6,11 @@
       "fixtureKey": "qwen3.8-27b",
       "campaignOutcome": "E2E succeeded, 3 discoveries, 120s wall, direct connector to :30001, judged 7/7 Y — best qwen score of the campaign, zero proxy hops",
       "expectedGateVerdict": "pass",
-      "c2FindingIds": ["C2-16", "C2-17", "C2-18"],
+      "c2FindingIds": [
+        "C2-16",
+        "C2-17",
+        "C2-18"
+      ],
       "note": "No-shim serving path (reasoning-parser dropped, think-OFF prefill hardcoded) proven PASS with finish=stop and reasoning_len=0 (C2-16). Confirmed fast on native vLLM MTP (C2-17) and works identically over both .gen-ai and .inference connectors (C2-18)."
     },
     {
@@ -14,7 +18,10 @@
       "fixtureKey": "gpt-oss-120b",
       "campaignOutcome": "KV shortfall at 131K ctx/0.92 util fixed by capping --max-model-len 98304 --gpu-memory-utilization 0.95, which still covers the 55-86K generate prompt with headroom; already zero-config on the reasoning-control axis",
       "expectedGateVerdict": "pass",
-      "c2FindingIds": ["C2-1", "C2-16"],
+      "c2FindingIds": [
+        "C2-1",
+        "C2-16"
+      ],
       "note": "C2-1 is an infra/deploy-flag fix, not a model-capability failure. C2-16 lists gpt-oss-120b as 'already zero-config' among the generalization-boundary comparisons, i.e. it needs no reasoning-promotion shim."
     },
     {
@@ -22,15 +29,22 @@
       "fixtureKey": "gemma-4-26b-a4b",
       "campaignOutcome": "NOT RUN IN THIS CAMPAIGN per c2-findings.txt — no entry in the file matches this repo id",
       "expectedGateVerdict": "investigate",
-      "c2FindingIds": ["C2-16"],
-      "note": "DEVIATION FLAGGED (see gate-step2-report.md): gate-step2-spec.md item 3 names gemma-4-26B-A4B for this fixture, and plan.html line 88/34 describes a 'gemma-A4B (never closes its JSON)' failure — but c2-findings.txt contains NO finding about this exact repo. c2-findings.txt's only gemma entry, C2-16, is about gemma-4-31b, a different (dense, non-MoE) checkpoint, and reports it PASSED directly (enable_thinking defaults false). C2-16 is cited here only as the closest/related gemma finding, not as evidence about the A4B repo itself. Per the rule 'expected verdicts must come ONLY from c2-findings.txt, never from memory', the MoE-active-params/never-closes-JSON claim from plan.html is NOT asserted as fact for this repo — verdict is 'investigate' meaning 'this campaign did not evaluate this checkpoint; do not treat as pass or reject until it is actually run', not a restatement of the plan.html narrative."
+      "c2FindingIds": [
+        "C2-21"
+      ],
+      "note": "DEVIATION FLAGGED (see gate-step2-report.md): gate-step2-spec.md item 3 names gemma-4-26B-A4B for this fixture, and plan.html line 88/34 describes a 'gemma-A4B (never closes its JSON)' failure — but c2-findings.txt contains NO finding about this exact repo. c2-findings.txt's only gemma entry, C2-16, is about gemma-4-31b, a different (dense, non-MoE) checkpoint, and reports it PASSED directly (enable_thinking defaults false). C2-16 is cited here only as the closest/related gemma finding, not as evidence about the A4B repo itself. Per the rule 'expected verdicts must come ONLY from c2-findings.txt, never from memory', the MoE-active-params/never-closes-JSON claim from plan.html is NOT asserted as fact for this repo — verdict is 'investigate' meaning 'this campaign did not evaluate this checkpoint; do not treat as pass or reject until it is actually run', not a restatement of the plan.html narrative. [amended by dispatcher: gemma-A4B failure is documented in the campaign quality report — both runs degenerated to 65,536 output tokens without closing JSON, 0 discoveries; MoE ~3-4B active]"
     },
     {
       "repoId": "mistralai/Magistral-Small-2509",
       "fixtureKey": "magistral-small-2509",
       "campaignOutcome": "FAIL: content_len=0, 22,527/22,528 tokens spent on reasoning — mandatory [THINK]/[/THINK] thinking mode with no documented thinking-off variant, plus tokenizer/loader pin conflicts during deployment",
       "expectedGateVerdict": "reject",
-      "c2FindingIds": ["C2-11", "C2-12", "C2-13", "C2-19"],
+      "c2FindingIds": [
+        "C2-11",
+        "C2-12",
+        "C2-13",
+        "C2-19"
+      ],
       "note": "C2-19: vendor docs confirm --reasoning-parser mistral is the only documented mode, no enable_thinking=false equivalent exists (unlike Qwen/GLM). The AD profile's workload.answerField='content' can structurally never be satisfied: this is a content-vs-reasoning-field problem, not a fixable serving-flag problem (C2-11/C2-12 are pin/format workarounds that got the model loading, not fixes for the content_len=0 failure)."
     },
     {
@@ -38,7 +52,13 @@
       "fixtureKey": "mistral-small-3.2-24b",
       "campaignOutcome": "E2E succeeded once (judged 7/7 Y, C2-19) but the tekken tokenizer is ~2x less dense on this corpus (108,146 prompt tokens vs 55.4K qwen/85.9K gpt-oss/85.4K llama, C2-5); that run only finished because its answer was short (1 insight) — replay otherwise fails to finish the JSON in remaining context",
       "expectedGateVerdict": "investigate",
-      "c2FindingIds": ["C2-2", "C2-3", "C2-4", "C2-5", "C2-19"],
+      "c2FindingIds": [
+        "C2-2",
+        "C2-3",
+        "C2-4",
+        "C2-5",
+        "C2-19"
+      ],
       "note": "Not a clean pass: C2-5 states the token-density gap is 'inherent — caps corpus size' and the one passing E2E run only avoided the ctx wall because the model's answer happened to be short. At the AD profile's minContextWindow floor of 131072 (sized off the qwen tokenizer per item 1), a tekken model needing ~2x the tokens for the same 95-alert corpus is not reliably safe for longer/typical answers — this is a token-budget risk, not a capability failure, hence 'investigate' rather than 'reject'. C2-2/C2-3/C2-4 are serving-config workarounds (JSON limit-mm-per-prompt, transformers pin, no SGLang image-processor) that got it running at all; they do not remove the density risk."
     },
     {
@@ -46,7 +66,10 @@
       "fixtureKey": "glm-4.7-flash",
       "campaignOutcome": "Fix proven and E2E succeeded (2 discoveries, 60s wall, zero retries, judged 6/7 Y — fastest terminal E2E measured) but ONLY behind a mandatory shim (enable_thinking=false + response_format json_schema); thinking-ON and thinking-OFF-alone modes both fail outright, and .gen-ai cannot send either required field itself",
       "expectedGateVerdict": "investigate",
-      "c2FindingIds": ["C2-15", "C2-19"],
+      "c2FindingIds": [
+        "C2-15",
+        "C2-19"
+      ],
       "note": "C2-15: the shim is mandatory (\".gen-ai cannot send either field\") — without harness-side intervention this model fails via retry storms or zero-insight rambling. C2-19: vendor's own tool-call parser/auto-tool-choice is inert for AD (no tools API path) and speculative-decoding perf is left on the table. Passing requires infrastructure the AD profile schema cannot express yet (workload sub-object is descriptive only per item 2, not enforced until item 3), so this is 'investigate', not a clean 'pass'."
     }
   ]
