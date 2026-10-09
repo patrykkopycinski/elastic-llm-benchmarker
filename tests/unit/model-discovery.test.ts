@@ -1744,7 +1744,9 @@ describe('ModelDiscoveryService', () => {
           createdAt: monthsAgo(1),
           tags: ['base_model:quantized:org/ancient-base'],
         }),
-        baseEntries: new Map([['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }]]),
+        baseEntries: new Map([
+          ['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }],
+        ]),
       });
 
       const result = await service.discover({ maxModelAgeMonths: 12 });
@@ -1760,7 +1762,9 @@ describe('ModelDiscoveryService', () => {
           createdAt: monthsAgo(1),
           cardData: { base_model: 'org/ancient-base' },
         }),
-        baseEntries: new Map([['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }]]),
+        baseEntries: new Map([
+          ['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }],
+        ]),
       });
 
       const result = await service.discover({ maxModelAgeMonths: 12 });
@@ -1797,7 +1801,11 @@ describe('ModelDiscoveryService', () => {
         baseEntries: new Map([
           [
             'org/recent-finetune',
-            { id: 'org/recent-finetune', createdAt: monthsAgo(2), tags: ['base_model:finetune:org/old-root'] },
+            {
+              id: 'org/recent-finetune',
+              createdAt: monthsAgo(2),
+              tags: ['base_model:finetune:org/old-root'],
+            },
           ],
           ['org/old-root', { id: 'org/old-root', createdAt: monthsAgo(24) }],
         ]),
@@ -1840,7 +1848,12 @@ describe('ModelDiscoveryService', () => {
         repo: createMockHFModel({
           id: 'org/bare-name-base',
           createdAt: monthsAgo(3),
-          tags: ['text-generation', 'license:apache-2.0', 'transformers', 'base_model:quantized:Llama-3.1-8B'],
+          tags: [
+            'text-generation',
+            'license:apache-2.0',
+            'transformers',
+            'base_model:quantized:Llama-3.1-8B',
+          ],
         }),
       });
 
@@ -1856,7 +1869,9 @@ describe('ModelDiscoveryService', () => {
           createdAt: monthsAgo(1),
           cardData: { base_model: 'org/fresh-base' },
         }),
-        baseEntries: new Map([['org/fresh-base', { id: 'org/fresh-base', createdAt: monthsAgo(4) }]]),
+        baseEntries: new Map([
+          ['org/fresh-base', { id: 'org/fresh-base', createdAt: monthsAgo(4) }],
+        ]),
       });
 
       const result = await service.discover({ maxModelAgeMonths: 12 });
@@ -1867,6 +1882,39 @@ describe('ModelDiscoveryService', () => {
     it('fails closed when the release date is missing', async () => {
       const service = setupRecency({
         repo: createMockHFModel({ id: 'org/undated-model', createdAt: undefined }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('fails closed on a base_model cycle instead of taking a recent date from the loop', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'org/cyclic-quant',
+          createdAt: monthsAgo(1),
+          tags: ['base_model:quantized:org/cyclic-finetune'],
+        }),
+        baseEntries: new Map([
+          [
+            'org/cyclic-finetune',
+            {
+              id: 'org/cyclic-finetune',
+              createdAt: monthsAgo(2),
+              tags: ['base_model:finetune:org/cyclic-quant'],
+            },
+          ],
+          [
+            'org/cyclic-quant',
+            {
+              id: 'org/cyclic-quant',
+              createdAt: monthsAgo(1),
+              tags: ['base_model:quantized:org/cyclic-finetune'],
+            },
+          ],
+        ]),
       });
 
       const result = await service.discover({ maxModelAgeMonths: 12 });
