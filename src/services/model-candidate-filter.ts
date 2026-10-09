@@ -68,6 +68,13 @@ export interface CandidateFilterOptions {
   /** Minimum parameter count in billions (Agent Builder floor). Unknown count → warning only. */
   minParameterCountBillions?: number;
   /**
+   * Maximum model age in months (Agent Builder recency gate), pushed into
+   * discovery alongside the parameter floor. The filter itself does not
+   * enforce it (it has no release date); the carrier exists so the scheduler
+   * reads the configured value from the same object.
+   */
+  maxModelAgeMonths?: number;
+  /**
    * Minimum MoE active (per-token) parameter count in billions. Unknown count
    * (dense model or no `-A{N}B` marker) → no warning. Below floor → warning
    * only, never hard-reject (capability beats count — Ornith-1.0-35B is the
@@ -217,6 +224,7 @@ export class ModelCandidateFilter {
   private readonly minActiveParametersBillions: number | undefined;
   private readonly requireInstructVariant: boolean;
   private readonly checkKnownFailures: boolean;
+  private readonly maxModelAgeMonths: number | undefined;
 
   /**
    * Creates a new ModelCandidateFilter instance.
@@ -230,6 +238,7 @@ export class ModelCandidateFilter {
     this.targetHardware = options.targetHardwareProfile ?? DEFAULT_TARGET_HARDWARE;
     this.requireToolCalling = options.requireToolCalling ?? true;
     this.minParameterCountBillions = options.minParameterCountBillions;
+    this.maxModelAgeMonths = options.maxModelAgeMonths;
     this.minActiveParametersBillions = options.minActiveParametersBillions;
     this.requireInstructVariant = options.requireInstructVariant ?? false;
     this.checkKnownFailures = options.checkKnownFailures ?? true;
@@ -409,6 +418,15 @@ export class ModelCandidateFilter {
    */
   getMinParameterCountBillions(): number | undefined {
     return this.minParameterCountBillions;
+  }
+
+  /**
+   * Maximum model age in months, or `undefined` when unconstrained. Exposed
+   * so discovery can reject too-old models (base-model release date) at the
+   * source.
+   */
+  getMaxModelAgeMonths(): number | undefined {
+    return this.maxModelAgeMonths;
   }
 
   /**

@@ -80,6 +80,7 @@ interface HFModelConfig {
 const HF_API_BASE = 'https://huggingface.co';
 const MAX_PAGES = 10;
 const MODELS_PER_PAGE = 100;
+const MS_PER_MONTH = 1000 * 60 * 60 * 24 * 30.4375;
 const DEFAULT_SEARCH = '';
 
 /**
@@ -105,6 +106,7 @@ const defaultOptions: Required<ModelDiscoveryOptions> = {
   limit: 50,
   minContextWindow: 4096,
   minParameterCount: 0,
+  maxModelAgeMonths: 0,
   includeGated: false,
 };
 
@@ -247,6 +249,7 @@ export type RejectionCategory =
   | 'architecture-not-compatible'
   | 'context-window-too-small'
   | 'parameter-count-below-floor'
+  | 'model-too-old'
   | 'license-not-open-source'
   | 'hardware-fit-failed';
 
@@ -277,6 +280,15 @@ export interface ModelDiscoveryOptions {
    * downstream candidate filter warns on them instead.
    */
   minParameterCount?: number;
+  /**
+   * Maximum model age in months (Agent Builder recency gate). Measured from
+   * the release date: the BASE model's `createdAt` when the repo declares
+   * `cardData.base_model` (quant/fine-tune), else the repo's own `createdAt`.
+   * A recent requant of an old base model is still too old. Missing date
+   * fails closed (rejected) — unknown provenance is not a pass.
+   */
+  maxModelAgeMonths?: number;
+  /** Include gated repos (require HF token with accepted license). */
   includeGated?: boolean;
 }
 
@@ -309,6 +321,7 @@ export class ModelDiscoveryService {
   private readonly typeWhitelist: Set<string>;
   private readonly configCache = new Map<string, HFModelConfig | null>();
   private readonly infoCache = new Map<string, ModelInfo | null>();
+  private readonly modelApiCache = new Map<string, HFModelEntry | null>();
 
   constructor(
     token: string,
@@ -374,6 +387,7 @@ export class ModelDiscoveryService {
       'architecture-not-compatible': 0,
       'context-window-too-small': 0,
       'parameter-count-below-floor': 0,
+      'model-too-old': 0,
       'license-not-open-source': 0,
       'hardware-fit-failed': 0,
     };
@@ -568,6 +582,29 @@ export class ModelDiscoveryService {
       parameterCount < options.minParameterCount
     ) {
       return { reason: 'parameter-count-below-floor' };
+    }
+
+    // Step 3.6: Model-recency gate. Operator rule: never evaluate models
+    // released more than maxModelAgeMonths ago. The release date is the BASE
+    // model's createdAt when the repo declares cardData.base_model (quant /
+    // fine-tune), else the repo's own — so a fresh requant of an old base
+    // (cyankiwi/*, RedHatAI/*) still fails. Missing date fails closed.
+    if (options.maxModelAgeMonths > 0) {
+      const release = await this.resolveReleaseDate(rawModel);
+      if (!release.date) {
+        this.logger.debug(
+          `Rejected ${id}: too_old: no release date (no createdAt, base_model fetch failed or undated)`,
+        );
+        return { reason: 'model-too-old' };
+      }
+      const ageMonths = (Date.now() - release.date.getTime()) / MS_PER_MONTH;
+      if (ageMonths > options.maxModelAgeMonths) {
+        this.logger.debug(
+          `Rejected ${id}: too_old: ${release.date.toISOString()} (${release.origin} ` +
+            `is ${ageMonths.toFixed(1)} months old, max ${options.maxModelAgeMonths})`,
+        );
+        return { reason: 'model-too-old' };
+      }
     }
 
     // Step 4: License check
@@ -1031,6 +1068,78 @@ export class ModelDiscoveryService {
       this.logger.debug(`Error fetching config for ${modelId}: ${error}`);
       this.configCache.set(modelId, null);
       return { config: null, rateLimited: false, gated: false };
+    }
+  }
+
+  /**
+   * Resolve the effective release date for the recency gate. For quants and
+   * fine-tunes (cardData.base_model set) the base model's createdAt is the
+   * release date of the *weights*; the repo's own createdAt only reflects the
+   * upload. Fetch failures and missing dates return `date: null` — callers
+   * fail closed.
+   */
+  private async resolveReleaseDate(model: HFModelEntry): Promise<{
+    date: Date | null;
+    origin: string;
+  }> {
+    const parseEntryDate = (entry: HFModelEntry | null): Date | null => {
+      const raw =
+        entry?.createdAt ??
+        ((entry as unknown as Record<string, unknown> | undefined)?.created_at as
+          | string
+          | undefined);
+      if (!raw) return null;
+      const d = new Date(raw as string);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+
+    const baseModelIds = this.extractBaseModelIds(model);
+    for (const baseId of baseModelIds) {
+      const base = await this.fetchModelApiEntry(baseId);
+      if (!base) continue;
+      const d = parseEntryDate(base);
+      // Only an undated base falls through to the next candidate / own date —
+      // a dated base is authoritative even when old.
+      if (d) return { date: d, origin: `base:${baseId}` };
+    }
+    // Dated base candidates that were fetchable but undated don't exist above
+    // (undated bases are skipped), so reaching here with a base_model declared
+    // but unfetchable means provenance is unknown → fail closed.
+    if (baseModelIds.length > 0) return { date: null, origin: 'base-unresolved' };
+    return { date: parseEntryDate(model), origin: 'repo' };
+  }
+
+  /** Extract candidate base-model repo ids from cardData.base_model. */
+  private extractBaseModelIds(model: HFModelEntry): string[] {
+    const cardData = (model as unknown as Record<string, unknown>).cardData as
+      | Record<string, unknown>
+      | undefined;
+    const raw = cardData?.base_model;
+    const values = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
+    const ids: string[] = [];
+    for (const v of values) {
+      if (typeof v !== 'string' || v.trim() === '') continue;
+      const id = v.trim();
+      ids.push(id.includes('/') ? id : `${model.author ?? model.id.split('/')[0]}/${id}`);
+    }
+    return ids;
+  }
+
+  /** Cached GET /api/models/{id} for fields outside the search payload. */
+  private async fetchModelApiEntry(modelId: string): Promise<HFModelEntry | null> {
+    if (this.modelApiCache.has(modelId)) return this.modelApiCache.get(modelId)!;
+    try {
+      const response = await this.fetchWithAuth(`${HF_API_BASE}/api/models/${modelId}`);
+      if (!response.ok) {
+        this.modelApiCache.set(modelId, null);
+        return null;
+      }
+      const entry = (await response.json()) as HFModelEntry;
+      this.modelApiCache.set(modelId, entry);
+      return entry;
+    } catch {
+      this.modelApiCache.set(modelId, null);
+      return null;
     }
   }
 

@@ -49,8 +49,9 @@ function createMockConfig(overrides: Record<string, unknown> = {}): Record<strin
 function setupFetchMock(responses: {
   searchResults?: Record<string, unknown>[][];
   configs?: Map<string, Record<string, unknown>>;
+  modelEntries?: Map<string, Record<string, unknown> | undefined>;
 }) {
-  const { searchResults = [[]], configs = new Map() } = responses;
+  const { searchResults = [[]], configs = new Map(), modelEntries = new Map() } = responses;
   let searchPage = 0;
 
   return vi.fn().mockImplementation((url: string) => {
@@ -86,6 +87,17 @@ function setupFetchMock(responses: {
 
     // Single model info endpoint
     if (urlStr.includes('/api/models/') && !urlStr.includes('?')) {
+      const modelId = urlStr.replace('https://huggingface.co/api/models/', '');
+      if (modelEntries.has(modelId)) {
+        const entry = modelEntries.get(modelId);
+        if (entry) {
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve(entry),
+          });
+        }
+        return Promise.resolve({ ok: false, status: 404 });
+      }
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(createMockHFModel()),
@@ -1671,6 +1683,137 @@ describe('ModelDiscoveryService', () => {
       expect(result.totalScanned).toBe(1);
 
       vi.restoreAllMocks();
+    });
+  });
+
+  describe('model recency gate (maxModelAgeMonths)', () => {
+    const NOW = new Date('2026-10-08T00:00:00.000Z').getTime();
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    function monthsAgo(n: number): string {
+      return new Date(NOW - n * 30.4375 * 24 * 60 * 60 * 1000).toISOString();
+    }
+
+    function setupRecency(opts: {
+      repo: Record<string, unknown>;
+      baseEntries?: Map<string, Record<string, unknown> | undefined>;
+    }) {
+      const config = createMockConfig();
+      global.fetch = setupFetchMock({
+        searchResults: [[opts.repo]],
+        configs: new Map([[opts.repo.id as string, config]]),
+        modelEntries: opts.baseEntries,
+      }) as typeof global.fetch;
+      return new ModelDiscoveryService('test-token', [], 'error');
+    }
+
+    it('accepts a model released inside the window', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({ id: 'org/fresh-model', createdAt: monthsAgo(3) }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models.map((m) => m.id)).toEqual(['org/fresh-model']);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(0);
+    });
+
+    it('rejects a model released outside the window', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({ id: 'org/stale-model', createdAt: monthsAgo(18) }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('rejects a recent quant of an old base model (cardData.base_model)', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'cyankiwi/old-base-quant',
+          createdAt: monthsAgo(1),
+          cardData: { base_model: 'org/ancient-base' },
+        }),
+        baseEntries: new Map([['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }]]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('accepts a recent quant of a recent base model', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'cyankiwi/new-base-quant',
+          createdAt: monthsAgo(1),
+          cardData: { base_model: 'org/fresh-base' },
+        }),
+        baseEntries: new Map([['org/fresh-base', { id: 'org/fresh-base', createdAt: monthsAgo(4) }]]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models.map((m) => m.id)).toEqual(['cyankiwi/new-base-quant']);
+    });
+
+    it('fails closed when the release date is missing', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({ id: 'org/undated-model', createdAt: undefined }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('fails closed when a declared base model cannot be fetched', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'org/quant-of-missing',
+          createdAt: monthsAgo(1),
+          cardData: { base_model: 'org/deleted-base' },
+        }),
+        baseEntries: new Map([['org/deleted-base', undefined]]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('accepts a model exactly at the age boundary (inclusive)', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({ id: 'org/boundary-model', createdAt: monthsAgo(12) }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models.map((m) => m.id)).toEqual(['org/boundary-model']);
+    });
+
+    it('rejects a model one month past the boundary', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({ id: 'org/just-past', createdAt: monthsAgo(13) }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
     });
   });
 });
