@@ -57,6 +57,7 @@ function buildCandidateFilterFromProfile(
     targetHardwareProfile: config.vmHardwareProfile,
     requireToolCalling: profile.requireToolCalling,
     minParameterCountBillions: profile.minParameterCountBillions,
+    maxModelAgeMonths: profile.maxModelAgeMonths,
     minActiveParametersBillions: profile.minActiveParametersBillions,
     requireInstructVariant: profile.requireInstructVariant,
     checkKnownFailures: true,

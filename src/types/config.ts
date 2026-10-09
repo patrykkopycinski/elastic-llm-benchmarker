@@ -677,6 +677,14 @@ export const agentBuilderBaselineSchema = z.object({
    */
   minParameterCountBillions: z.number().positive().default(24),
   /**
+   * Maximum model age in months, measured from the release date (HF `createdAt`
+   * of the base model when the repo is a quant/fine-tune, else the repo's own).
+   * Operator rule: never evaluate models released more than 12 months ago —
+   * a recent requant of an old base does not reset the clock. Unknown release
+   * dates fail closed (rejected).
+   */
+  maxModelAgeMonths: z.number().positive().default(12),
+  /**
    * Minimum MoE active (per-token) parameter count in billions. WARN-only —
    * never hard-rejects. `minParameterCountBillions` gates on TOTAL params,
    * which over-states the agentic capacity of sparse MoE models by ~10×:

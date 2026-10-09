@@ -138,6 +138,34 @@ export async function runEnqueue(options: EnqueueOptions): Promise<EnqueueResult
     config.logLevel ?? 'info',
   );
 
+  // Recency gate (maxModelAgeMonths), mirroring the excludeModelPatterns
+  // check above: reject up-front instead of letting the scheduler cancel the
+  // entry later, honouring the same `--force` override.
+  const featureProfile = resolveFeatureProfiles(config)[profileId];
+  const maxModelAgeMonths =
+    featureProfile?.enabled === true ? featureProfile.maxModelAgeMonths : undefined;
+  if (maxModelAgeMonths && maxModelAgeMonths > 0 && !force) {
+    const MS_PER_MONTH = 30.4375 * 24 * 60 * 60 * 1000;
+    const release = await modelDiscovery.resolveModelReleaseDate(modelId);
+    if (!release) {
+      return {
+        success: false,
+        message:
+          `Model ${modelId} is too_old: unknown release date (no createdAt or base_model ` +
+          'unresolved). Use --force to enqueue anyway.',
+      };
+    }
+    if (Date.now() - release.getTime() > maxModelAgeMonths * MS_PER_MONTH) {
+      return {
+        success: false,
+        message:
+          `Model ${modelId} is too_old: ${release.toISOString()} (older than ` +
+          `${maxModelAgeMonths} months, measured from the root base model). ` +
+          'Use --force to enqueue anyway.',
+      };
+    }
+  }
+
   if (skipStage1) {
     const entry = await queueService.enqueue(modelId, 'user', priority, undefined, {
       hardwareProfileId,

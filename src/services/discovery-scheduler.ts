@@ -711,12 +711,14 @@ export class DiscoveryScheduler {
       // the downstream filter would only reject.
       const filter = this.deps.candidateFilter;
       const minParamBillions = filter?.getMinParameterCountBillions();
+      const maxModelAgeMonths = filter?.getMaxModelAgeMonths();
       const result = await this.deps.discoveryService.discover({
         limit: this.deps.config.maxModelsPerRun * 3,
         search: searchOverride ?? this.deps.config.search,
         sort: sortOverride ?? this.deps.config.sort,
         ...(filter ? { minContextWindow: filter.getMinContextWindow() } : {}),
         ...(minParamBillions ? { minParameterCount: minParamBillions * 1_000_000_000 } : {}),
+        ...(maxModelAgeMonths ? { maxModelAgeMonths } : {}),
       });
       return result;
     } catch (err) {
