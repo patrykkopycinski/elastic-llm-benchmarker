@@ -585,10 +585,11 @@ export class ModelDiscoveryService {
     }
 
     // Step 3.6: Model-recency gate. Operator rule: never evaluate models
-    // released more than maxModelAgeMonths ago. The release date is the BASE
-    // model's createdAt when the repo declares cardData.base_model (quant /
-    // fine-tune), else the repo's own — so a fresh requant of an old base
-    // (cyankiwi/*, RedHatAI/*) still fails. Missing date fails closed.
+    // released more than maxModelAgeMonths ago. The release date is the root
+    // BASE model's createdAt when the repo declares base_model (quant /
+    // fine-tune, via tags or cardData), else the repo's own — so a fresh
+    // requant of an old base (cyankiwi/*, RedHatAI/*) still fails. Missing
+    // date fails closed.
     if (options.maxModelAgeMonths > 0) {
       const release = await this.resolveReleaseDate(rawModel);
       if (!release.date) {
@@ -1073,10 +1074,11 @@ export class ModelDiscoveryService {
 
   /**
    * Resolve the effective release date for the recency gate. For quants and
-   * fine-tunes (cardData.base_model set) the base model's createdAt is the
-   * release date of the *weights*; the repo's own createdAt only reflects the
-   * upload. Fetch failures and missing dates return `date: null` — callers
-   * fail closed.
+   * fine-tunes (base_model declared via tags or cardData) the root base
+   * model's createdAt is the release date of the *weights*; the repo's own
+   * createdAt only reflects the upload. The chain is followed to its root
+   * (max 5 hops, cycle-guarded). Fetch failures and missing dates return
+   * `date: null` — callers fail closed.
    */
   private async resolveReleaseDate(model: HFModelEntry): Promise<{
     date: Date | null;
@@ -1093,34 +1095,85 @@ export class ModelDiscoveryService {
       return Number.isNaN(d.getTime()) ? null : d;
     };
 
-    const baseModelIds = this.extractBaseModelIds(model);
-    for (const baseId of baseModelIds) {
-      const base = await this.fetchModelApiEntry(baseId);
-      if (!base) continue;
-      const d = parseEntryDate(base);
-      // Only an undated base falls through to the next candidate / own date —
-      // a dated base is authoritative even when old.
-      if (d) return { date: d, origin: `base:${baseId}` };
+    // Walk the base_model chain to its ROOT: a quant of a fine-tune of an old
+    // base must resolve to the base's date, not the fine-tune's. Max 5 hops,
+    // cycle-guarded; the root is the first entry declaring no base of its own.
+    const seen = new Set<string>([model.id]);
+    let current: HFModelEntry = model;
+    let moved = false;
+    for (let hop = 0; hop < 5; hop++) {
+      const baseIds = this.extractBaseModelIds(current);
+      if (baseIds.length === 0) break; // current is the root
+      let next: HFModelEntry | null = null;
+      for (const baseId of baseIds) {
+        if (seen.has(baseId)) continue; // cycle guard
+        const base = await this.fetchModelApiEntry(baseId);
+        if (!base) continue;
+        seen.add(baseId);
+        next = base;
+        break;
+      }
+      if (!next) {
+        // Base(s) declared but none fetchable (or only cyclic refs) →
+        // provenance unknown → fail closed.
+        return { date: null, origin: 'base-unresolved' };
+      }
+      current = next;
+      moved = true;
     }
-    // Dated base candidates that were fetchable but undated don't exist above
-    // (undated bases are skipped), so reaching here with a base_model declared
-    // but unfetchable means provenance is unknown → fail closed.
-    if (baseModelIds.length > 0) return { date: null, origin: 'base-unresolved' };
-    return { date: parseEntryDate(model), origin: 'repo' };
+    const d = parseEntryDate(current);
+    return { date: d, origin: moved ? `base:${current.id}` : 'repo' };
   }
 
-  /** Extract candidate base-model repo ids from cardData.base_model. */
+  /**
+   * Public wrapper for enqueue-time recency checks: resolves the effective
+   * release date (root base model's createdAt, chain-followed) for a repo id,
+   * or null when it cannot be resolved.
+   */
+  async resolveModelReleaseDate(modelId: string): Promise<Date | null> {
+    const entry = await this.fetchModelApiEntry(modelId);
+    if (!entry) return null;
+    return (await this.resolveReleaseDate(entry)).date;
+  }
+
+  /**
+   * Extract candidate base-model repo ids. The list endpoint
+   * (/api/models?full=true&config=true) ships no cardData, so the primary
+   * source is `tags` entries of the form `base_model:<relation>:<id>`
+   * (e.g. `base_model:quantized:Qwen/Qwen3-30B-A3B-Instruct-2507`) and the
+   * bare `base_model:<id>`; cardData.base_model (single or list) is the
+   * fallback for payloads that carry it.
+   */
   private extractBaseModelIds(model: HFModelEntry): string[] {
-    const cardData = (model as unknown as Record<string, unknown>).cardData as
-      | Record<string, unknown>
-      | undefined;
-    const raw = cardData?.base_model;
-    const values = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
     const ids: string[] = [];
-    for (const v of values) {
-      if (typeof v !== 'string' || v.trim() === '') continue;
-      const id = v.trim();
-      ids.push(id.includes('/') ? id : `${model.author ?? model.id.split('/')[0]}/${id}`);
+    const push = (raw: unknown) => {
+      if (typeof raw !== 'string') return;
+      const id = raw.trim();
+      if (id === '' || !id.includes('/')) return; // no slash → not a repo id
+      ids.push(id);
+    };
+
+    for (const tag of model.tags ?? []) {
+      if (typeof tag !== 'string' || !tag.startsWith('base_model:')) continue;
+      const rest = tag.slice('base_model:'.length);
+      // `base_model:quantized:org/id` → relation + id; `base_model:org/id` → id.
+      const lastColon = rest.lastIndexOf(':');
+      // A colon in the remainder may also belong to an id like `org/id` only if
+      // the segment after it contains a '/', which no relation word does.
+      if (lastColon > 0 && rest.slice(lastColon + 1).includes('/')) {
+        push(rest.slice(lastColon + 1));
+      } else {
+        push(rest);
+      }
+    }
+
+    if (ids.length === 0) {
+      const cardData = (model as unknown as Record<string, unknown>).cardData as
+        | Record<string, unknown>
+        | undefined;
+      const raw = cardData?.base_model;
+      const values = Array.isArray(raw) ? raw : raw !== undefined ? [raw] : [];
+      values.forEach(push);
     }
     return ids;
   }
@@ -1131,14 +1184,18 @@ export class ModelDiscoveryService {
     try {
       const response = await this.fetchWithAuth(`${HF_API_BASE}/api/models/${modelId}`);
       if (!response.ok) {
-        this.modelApiCache.set(modelId, null);
+        // Cache only definitive "does not exist": a transient 5xx/429 must not
+        // poison the cache — a fail-closed gate would then reject models whose
+        // base metadata is merely temporarily unavailable.
+        if (response.status === 404 || response.status === 410) {
+          this.modelApiCache.set(modelId, null);
+        }
         return null;
       }
       const entry = (await response.json()) as HFModelEntry;
       this.modelApiCache.set(modelId, entry);
       return entry;
     } catch {
-      this.modelApiCache.set(modelId, null);
       return null;
     }
   }

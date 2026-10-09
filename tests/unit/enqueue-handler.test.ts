@@ -361,4 +361,113 @@ describe('runEnqueue', () => {
     const metadataArg = callArgs[callArgs.length - 1] as { profileId?: string };
     expect(metadataArg.profileId).toBe('agent-builder');
   });
+
+  describe('recency gate (maxModelAgeMonths)', () => {
+    const NOW = new Date('2026-10-08T00:00:00.000Z').getTime();
+    const monthsAgo = (n: number) =>
+      new Date(NOW - n * 30.4375 * 24 * 60 * 60 * 1000).toISOString();
+
+    const recencyConfig = (overrides: Record<string, unknown> = {}): AppConfig =>
+      ({
+        ...mockConfig,
+        agentBuilderBaseline: {
+          enabled: true,
+          maxModelAgeMonths: 12,
+          ...overrides,
+        },
+      }) as unknown as AppConfig;
+
+    function mockReleaseDate(date: string | null) {
+      vi.mocked(ModelDiscoveryService).mockImplementation(
+        () =>
+          ({
+            fetchModelConfig: vi.fn().mockResolvedValue({
+              quantization_config: { bits: 8 },
+              max_position_embeddings: 4096,
+            }),
+            resolveModelReleaseDate: vi.fn().mockResolvedValue(date ? new Date(date) : null),
+          }) as unknown as ModelDiscoveryService,
+      );
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(NOW);
+      mockReleaseDate(monthsAgo(3));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('rejects a model older than maxModelAgeMonths with a too_old message', async () => {
+      mockReleaseDate(monthsAgo(18));
+
+      const result = await runEnqueue({
+        modelId: 'org/stale-model',
+        config: recencyConfig(),
+        esClient: mockEsClient,
+      } as EnqueueOptions);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/too_old: \d{4}-\d{2}-\d{2}T/);
+      expect(result.message).toMatch(/--force/);
+    });
+
+    it('rejects when the release date cannot be resolved (fail closed)', async () => {
+      mockReleaseDate(null);
+
+      const result = await runEnqueue({
+        modelId: 'org/undated-model',
+        config: recencyConfig(),
+        esClient: mockEsClient,
+      } as EnqueueOptions);
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/too_old: unknown release date/);
+    });
+
+    it('enqueues a model inside the window', async () => {
+      vi.mocked(evaluateProfileBaseline).mockResolvedValueOnce({
+        model: { id: 'org/fresh-model' },
+        filter: { passed: true, warnings: [] },
+      } as never);
+
+      const result = await runEnqueue({
+        modelId: 'org/fresh-model',
+        config: recencyConfig(),
+        esClient: mockEsClient,
+        hardwareProfileId: '1xl4',
+      } as EnqueueOptions);
+
+      expect(result.success).toBe(true);
+      expect(result.entryId).toBe('entry-123');
+    });
+
+    it('bypasses the gate with --force', async () => {
+      mockReleaseDate(monthsAgo(18));
+
+      const result = await runEnqueue({
+        modelId: 'org/stale-model',
+        config: recencyConfig(),
+        esClient: mockEsClient,
+        force: true,
+      } as EnqueueOptions);
+
+      expect(result.success).toBe(true);
+      expect(result.entryId).toBe('entry-123');
+    });
+
+    it('skips the gate when the profile is disabled', async () => {
+      mockReleaseDate(monthsAgo(18));
+
+      const result = await runEnqueue({
+        modelId: 'org/stale-model',
+        config: recencyConfig({ enabled: false }),
+        esClient: mockEsClient,
+      } as EnqueueOptions);
+
+      expect(result.success).toBe(true);
+    });
+  });
 });

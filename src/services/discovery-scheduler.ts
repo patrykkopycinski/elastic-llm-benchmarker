@@ -42,6 +42,7 @@ export interface ScoredModel extends ModelInfo {
  */
 export const SECURITY_DOMAIN_SCORE_BOOST = 20;
 
+
 /**
  * A same-family sibling must be at least this much newer to supersede a model.
  * Separates a genuinely older generation (months apart) from same-generation
@@ -415,6 +416,7 @@ export class DiscoveryScheduler {
     );
   }
 
+
   private async scoreModels(
     models: ModelInfo[],
     profile: HardwareProfileDefinition | undefined,
@@ -512,8 +514,7 @@ export class DiscoveryScheduler {
         }
 
         const rawTotal = trendingScore * 0.6 + (fits ? 40 : 0);
-        const securityDomain =
-          findMatchingExcludePattern(model.id, securityDomainMatchers) !== null;
+        const securityDomain = findMatchingExcludePattern(model.id, securityDomainMatchers) !== null;
         const boostedTotal = rawTotal + (securityDomain ? SECURITY_DOMAIN_SCORE_BOOST : 0);
         const totalScore = Math.min(100, Math.max(0, boostedTotal));
 

@@ -2,11 +2,11 @@ import type { ModelInfo } from '../types/benchmark.js';
 import type { AppConfig, FeatureProfileConfig } from '../types/config.js';
 import { AGENT_BUILDER_PROFILE_ID, resolveFeatureProfiles } from '../types/config.js';
 import { HFCardParser } from './hf-card-parser.js';
+import { extractContextWindowFromConfig, normalizeArchitectureFromConfig } from './hf-config-utils.js';
 import {
-  extractContextWindowFromConfig,
-  normalizeArchitectureFromConfig,
-} from './hf-config-utils.js';
-import { ModelCandidateFilter, type FilterResult } from './model-candidate-filter.js';
+  ModelCandidateFilter,
+  type FilterResult,
+} from './model-candidate-filter.js';
 import { getVllmParamsForModel } from './vllm-model-params.js';
 
 /** Minimal config.json shape used to enrich HF card metadata for baseline checks. */
@@ -84,11 +84,7 @@ export function createProfileFilter(config: AppConfig, profileId: string): Profi
       validProfileIds,
     };
   }
-  return {
-    success: true,
-    filter: buildCandidateFilterFromProfile(config, profile),
-    validProfileIds,
-  };
+  return { success: true, filter: buildCandidateFilterFromProfile(config, profile), validProfileIds };
 }
 
 /** Thin wrapper over `createProfileFilter` for the always-present `agent-builder` profile. */
@@ -124,11 +120,15 @@ export function estimateParameterCountFromHfConfig(
     return np >= 1_000_000_000 ? np : np * 1_000_000_000;
   }
 
-  if (typeof config.hidden_size === 'number' && typeof config.num_hidden_layers === 'number') {
+  if (
+    typeof config.hidden_size === 'number' &&
+    typeof config.num_hidden_layers === 'number'
+  ) {
     const h = config.hidden_size;
     const l = config.num_hidden_layers;
     const v = typeof config.vocab_size === 'number' ? config.vocab_size : 0;
-    const i = typeof config.intermediate_size === 'number' ? config.intermediate_size : h * 4;
+    const i =
+      typeof config.intermediate_size === 'number' ? config.intermediate_size : h * 4;
     return v * h + l * (4 * h * h + 3 * h * i);
   }
 
@@ -160,7 +160,10 @@ export function inferToolCallingSupport(model: ModelInfo): boolean {
 }
 
 /** Merge config.json fields into card-derived ModelInfo (card alone is often incomplete). */
-export function enrichModelInfoFromHfConfig(model: ModelInfo, hfConfig: HfConfigJson): ModelInfo {
+export function enrichModelInfoFromHfConfig(
+  model: ModelInfo,
+  hfConfig: HfConfigJson,
+): ModelInfo {
   const contextFromConfig = extractContextWindowFromHfConfig(hfConfig);
   const archFromConfig = normalizeArchitectureFromHfConfig(hfConfig);
   const paramsFromConfig = estimateParameterCountFromHfConfig(model.id, hfConfig);

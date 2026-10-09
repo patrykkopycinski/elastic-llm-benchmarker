@@ -1737,10 +1737,26 @@ describe('ModelDiscoveryService', () => {
       expect(result.rejectionBreakdown['model-too-old']).toBe(1);
     });
 
-    it('rejects a recent quant of an old base model (cardData.base_model)', async () => {
+    it('rejects a recent quant of an old base model (tags base_model:quantized:)', async () => {
       const service = setupRecency({
         repo: createMockHFModel({
           id: 'cyankiwi/old-base-quant',
+          createdAt: monthsAgo(1),
+          tags: ['base_model:quantized:org/ancient-base'],
+        }),
+        baseEntries: new Map([['org/ancient-base', { id: 'org/ancient-base', createdAt: monthsAgo(30) }]]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('rejects a recent quant of an old base model (cardData.base_model fallback)', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'cyankiwi/old-base-quant-card',
           createdAt: monthsAgo(1),
           cardData: { base_model: 'org/ancient-base' },
         }),
@@ -1751,6 +1767,86 @@ describe('ModelDiscoveryService', () => {
 
       expect(result.models).toHaveLength(0);
       expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('supports cardData.base_model given as a list', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'org/multi-base-quant',
+          createdAt: monthsAgo(1),
+          cardData: { base_model: ['org/nope-missing', 'org/fresh-base'] },
+        }),
+        baseEntries: new Map([
+          ['org/nope-missing', undefined],
+          ['org/fresh-base', { id: 'org/fresh-base', createdAt: monthsAgo(4) }],
+        ]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models.map((m) => m.id)).toEqual(['org/multi-base-quant']);
+    });
+
+    it('follows the base_model chain: quant → recent fine-tune → old base is rejected', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'cyankiwi/quant-of-finetune',
+          createdAt: monthsAgo(1),
+          tags: ['base_model:quantized:org/recent-finetune'],
+        }),
+        baseEntries: new Map([
+          [
+            'org/recent-finetune',
+            { id: 'org/recent-finetune', createdAt: monthsAgo(2), tags: ['base_model:finetune:org/old-root'] },
+          ],
+          ['org/old-root', { id: 'org/old-root', createdAt: monthsAgo(24) }],
+        ]),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models).toHaveLength(0);
+      expect(result.rejectionBreakdown['model-too-old']).toBe(1);
+    });
+
+    it('does not cache transient (non-404) base fetch failures but caches 404s', async () => {
+      const statuses: number[] = [503, 404];
+      const calls: string[] = [];
+      global.fetch = (async (url: string) => {
+        calls.push(String(url));
+        const status = statuses.shift() ?? 200;
+        return {
+          ok: status === 200,
+          status,
+          json: async () => ({ id: 'org/base', createdAt: monthsAgo(24) }),
+        };
+      }) as unknown as typeof global.fetch;
+      const service = new ModelDiscoveryService('test-token', [], 'error');
+      const fetchEntry = (id: string) =>
+        (
+          service as unknown as {
+            fetchModelApiEntry(id: string): Promise<{ id: string } | null>;
+          }
+        ).fetchModelApiEntry(id);
+
+      expect(await fetchEntry('org/base')).toBeNull(); // 503: not cached
+      expect(await fetchEntry('org/base')).toBeNull(); // refetched -> 404: cached
+      expect(await fetchEntry('org/base')).toBeNull(); // served from cache
+      expect(calls).toHaveLength(2);
+    });
+
+    it('ignores base_model tags without a slash and uses the repo date', async () => {
+      const service = setupRecency({
+        repo: createMockHFModel({
+          id: 'org/bare-name-base',
+          createdAt: monthsAgo(3),
+          tags: ['text-generation', 'license:apache-2.0', 'transformers', 'base_model:quantized:Llama-3.1-8B'],
+        }),
+      });
+
+      const result = await service.discover({ maxModelAgeMonths: 12 });
+
+      expect(result.models.map((m) => m.id)).toEqual(['org/bare-name-base']);
     });
 
     it('accepts a recent quant of a recent base model', async () => {
